@@ -1,0 +1,55 @@
+{
+  "benchmark": "LoCoMo",
+  "scope": {
+    "conversation": "conv-26",
+    "messages": 419,
+    "sessions": 35,
+    "categories": [1, 2, 3, 4],
+    "questions": 152
+  },
+  "model_stack": {
+    "extraction": "gpt-4o-mini",
+    "answer": "gpt-4o",
+    "judge": "gpt-4o"
+  },
+  "warning": "Development slice only. Not a full LoCoMo score or a cross-project leaderboard result.",
+  "runs": [
+    {
+      "iteration": 1,
+      "correct": 67,
+      "total": 152,
+      "accuracy_percent": 44.08,
+      "change": "Initial 12-turn blocks, event cards, and on-demand expansion"
+    },
+    {
+      "iteration": 2,
+      "correct": 77,
+      "total": 152,
+      "accuracy_percent": 50.66,
+      "change": "Multiple event cards per block and explicit event occurrence time"
+    },
+    {
+      "iteration": 3,
+      "correct": 116,
+      "strict_correct": 115,
+      "total": 152,
+      "accuracy_percent": 76.32,
+      "strict_accuracy_percent": 75.66,
+      "change": "Finer extraction, new read tools, and per-batch evidence assessment"
+    },
+    {
+      "iteration": 4,
+      "correct": 118,
+      "total": 152,
+      "accuracy_percent": 77.63,
+      "change": "Bounded assessment context and fixed budget-end adoption"
+    },
+    {
+      "iteration": 5,
+      "correct": 97,
+      "total": 152,
+      "accuracy_percent": 63.82,
+      "change": "Larger structured retrieval scratchpad"
+    }
+  ]
+}

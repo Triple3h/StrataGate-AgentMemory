@@ -1,0 +1,47 @@
+import { describe, expect, it } from 'vitest';
+import {
+  condenseTranscript,
+  deterministicBlockLayers,
+  getBlockWeight,
+  getDecayedBlockLevel,
+  normalizeBlockLevel,
+  type RawMessage,
+} from '../src/index.js';
+
+describe('progressive conversation blocks', () => {
+  it('keeps raw messages while removing only bounded redundancy from L3', () => {
+    const paste = 'This is a deliberately long pasted paragraph that must remain available in the raw evidence layer even when its second identical occurrence is condensed from the smaller context layer.';
+    const messages: RawMessage[] = [
+      { id: 'u1', role: 'user', content: 'Okay.\nThe source must remain available.', createdAt: '2026-01-01T00:00:00Z' },
+      { id: 'a1', role: 'assistant', content: `${paste}\n\n${paste}`, createdAt: '2026-01-01T00:00:01Z' },
+      {
+        id: 'a2',
+        role: 'assistant',
+        content: 'Done.',
+        createdAt: '2026-01-01T00:00:02Z',
+        toolCalls: [{ name: 'search_events', arguments: { privateQuery: 'hidden' }, result: { ok: true, events: [{ id: 'evt-1' }] } }],
+      },
+    ];
+
+    const condensed = condenseTranscript(messages);
+    const layers = deterministicBlockLayers(messages);
+
+    expect(condensed).toContain('The source must remain available.');
+    expect(condensed).toContain('Tool call: search_events');
+    expect(condensed).not.toContain('privateQuery');
+    expect((condensed.match(/deliberately long pasted paragraph/g) ?? [])).toHaveLength(1);
+    expect(layers.l5Raw[1]?.content).toContain(paste);
+  });
+
+  it('decays through six levels and expands only to the requested level', () => {
+    expect(getDecayedBlockLevel(5, 0, 0)).toBe(5);
+    expect(getDecayedBlockLevel(5, 0, 12)).toBe(4);
+    expect(getDecayedBlockLevel(5, 0, 24)).toBe(3);
+    expect(getDecayedBlockLevel(5, 0, 36)).toBe(2);
+    expect(getDecayedBlockLevel(5, 0, 48)).toBe(1);
+    expect(getDecayedBlockLevel(5, 0, 60)).toBe(0);
+    expect(normalizeBlockLevel('next', 2)).toBe(3);
+    expect(normalizeBlockLevel('raw', 2)).toBe(5);
+    expect(getBlockWeight(0, 12)).toBeCloseTo(Math.exp(-0.6), 8);
+  });
+});
