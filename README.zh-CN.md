@@ -4,275 +4,169 @@
 
 ### 近处保留原话，远处只看索引；证据够了才回答。
 
+面向长期 AI Agent 的分层记忆与证据检索系统。
+
 [![CI](https://github.com/diqierjia/StrataGate/actions/workflows/ci.yml/badge.svg)](https://github.com/diqierjia/StrataGate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6.svg)](https://www.typescriptlang.org/)
 
-[English](README.md) · [架构说明](docs/ARCHITECTURE.md) · [评测记录](docs/EVALUATION.md)
+[English](README.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
+
+**LoCoMo `conv-26`：StrataGate 73.03% · Mem0 base 63.16%**
+
+**时间类问题：61.35% · 34.59%（+26.76 个百分点）**
 
 </div>
 
-StrataGate 是一个给长期运行 AI Agent 使用的 TypeScript 记忆内核。
+## 结果
 
-它主要解决两个问题：
+在 LoCoMo `conv-26` 的 152 道 category 1–4 问题上，StrataGate 多数票正确 **111 / 152**，Mem0 base 为 **96 / 152**。
 
-- 对话越来越长以后，怎样缩短日常上下文，同时保留日期、纠正和原始措辞；
-- 从历史中搜到相关内容以后，怎样避免 Agent 把“看起来相关”直接说成事实。
+| 指标 | StrataGate | Mem0 base | 差值 |
+| --- | ---: | ---: | ---: |
+| 多数票准确率 | **73.03%** | 63.16% | **+9.87** |
+| 十次 Judge 平均准确率 | **71.97%** | 63.22% | **+8.75** |
+| Single-hop | **79.29%** | 75.14% | +4.14 |
+| Multi-hop | **63.44%** | 61.56% | +1.88 |
+| Temporal | **61.35%** | 34.59% | **+26.76** |
+| Open-domain | 83.85% | **84.62%** | -0.77 |
 
-StrataGate 的做法是把历史对话保存为可逐层展开的记忆块，并在回答前加一道证据门。
+最大的差距出现在时间类问题。StrataGate 将事件发生时间与对话提及时间分开保存，并在事件卡缺少细节时回查原始消息。
 
-> [!NOTE]
-> 当前仓库提供核心规则和内存参考实现，需要 Node.js 20 或更高版本。
-> npm 包尚未正式发布，也还没有生产级数据库适配器或内置模型服务。
+这次对照使用相同的问题集合与顺序、GPT-5.6 Sol 回答模型与 Judge、相同 Judge prompt，以及每题十次独立判断。StrataGate 复用既有 memory state，Mem0 在本轮重新写入记忆；完整协议矩阵见[评测说明](docs/EVALUATION.md)。
 
-## 一分钟理解 StrataGate
+### 更有效的检索，不等于更多检索
 
-```mermaid
-flowchart LR
-    A["连续对话"] --> B["记忆块"]
-    B --> C["L5 原始消息"]
-    C --> D["L2 关键点"]
-    D --> E["L0 标题与索引"]
-    E -->|"需要核对"| C
+在同一份 StrataGate memory state 上：
 
-    Q["用户问题"] --> S["搜索记忆"]
-    S --> G{"证据够吗？"}
-    G -->|"够"| R["回答"]
-    G -->|"不够"| X["继续搜索或展开来源"]
-    X --> G
-```
-
-一条用户消息和一条助手回复算一轮。默认每 12 轮形成一个记忆块，这个值可以配置。
-
-同一个块同时保留多个详细程度。旧块平时只占用很少的上下文；遇到日期、原话、条件或纠正问题时，再单独展开相关块。较短的视图不会覆盖完整来源。
-
-检索也不是“一搜就答”。每批新结果都必须经过一次受限的证据检查。证据不完整时，下一步只能继续搜索、展开事件、回查原始消息，或者明确表达不确定。
-
-## 快速开始
-
-由于 npm 包尚未正式发布，目前先从源码运行：
-
-```bash
-git clone https://github.com/diqierjia/StrataGate.git
-cd StrataGate
-npm install
-npm test
-npm run build
-```
-
-下面的示例完成一条最小流程：
-
-1. 保存两段对话；
-2. 从第一段中提取一个技术决定；
-3. 搜索这个决定；
-4. 检查证据；
-5. 只有证据充分时才登记使用并输出答案。
-
-将代码保存为仓库根目录下的 `demo.mjs`：
-
-```js
-import { StrataGate } from './dist/index.js';
-
-const memory = new StrataGate({
-  // 为了让示例立即形成记忆块，这里设为 1。
-  // 实际默认值是 12。
-  blockTurnSize: 1,
-
-  summarizer: async (messages) => ({
-    l0Title: 'API 分页方案',
-    l0Tags: ['api', 'decision'],
-    l1Summary: '团队决定公开 API 使用游标分页。',
-    l2Keypoints: messages.map((message) => message.content),
-    shouldExtract: true,
-  }),
-
-  extractor: async ({ target }) => ({
-    shouldExtract: true,
-    reason: '目标块中包含一个以后还会用到的技术决定。',
-    events: [{
-      title: '公开 API 使用游标分页',
-      summary: '公开 API 应使用游标分页，而不是页码分页。',
-      sourceBlockId: target.id,
-      sourceMessageIds: [target.l5Raw[0].id],
-      tags: ['api', 'pagination'],
-      temporal: {
-        eventType: 'decision',
-        status: 'occurred',
-      },
-    }],
-  }),
-});
-
-await memory.appendTurn({
-  user: '公开 API 使用游标分页。',
-  assistant: '好，我会把它作为当前的 API 设计决定。',
-});
-
-// 事件提取会等到后一个块出现后再处理前一个块。
-await memory.appendTurn({
-  user: '接下来定义响应结构。',
-  assistant: '继续。',
-});
-
-const results = memory.searchEvents('API 应该怎么分页？');
-const latestEvidence = new Set(
-  results.map(({ event }) => event.id),
-);
-
-const assessment = memory.assessRetrieval({
-  verdict: 'sufficient',
-  evidence_refs: [...latestEvidence],
-  fit: '找到的事件卡直接记录了分页方案。',
-  missing: '',
-  next_strategy: 'answer',
-}, latestEvidence);
-
-if (assessment.verdict === 'sufficient') {
-  memory.recordMemoryUse(assessment.evidenceRefs);
-  console.log(results[0]?.event.summary);
-} else {
-  console.log('当前证据不足，暂时不能确定回答。');
-}
-```
-
-运行：
-
-```bash
-node demo.mjs
-```
-
-示例里的 `summarizer` 和 `extractor` 是硬编码回调。实际接入时，可以在这两个接口里调用任意模型或服务商。
-
-仓库中的完整 TypeScript 示例见 [`examples/basic.ts`](examples/basic.ts)。
-
-## 对话块：原文不被摘要覆盖
-
-每个记忆块有六个视图：
-
-| 层级 | 内容 | 生成方式 |
-| --- | --- | --- |
-| L0 | 标题和标签 | `BlockSummarizer` |
-| L1 | 简短摘要 | `BlockSummarizer` |
-| L2 | 关键点 | `BlockSummarizer` |
-| L3 | 规则精简后的对话 | 确定性代码 |
-| L4 | 接近原文的可读对话 | 确定性代码 |
-| L5 | 完整消息和工具记录 | 直接保留 |
-
-L3 不允许模型自由改写。它只会删除范围明确的内容，例如独立寒暄、纯确认、原始工具参数和完全相同的长段重复粘贴。
-
-L5 始终是最终来源。这里的“保留”指较短视图不会覆盖原始消息；是否跨进程持久化，取决于接入方使用的存储实现。当前仓库只提供内存参考实现。
-
-默认块大小是 12 轮，但它只是当前实现和实验所使用的默认值，并不代表已经证明 12 轮在所有场景下最优。
-
-## 事件卡：让值得记住的内容可以搜索
-
-对话块负责保存来源，事件卡负责让重要信息更容易被找到。
-
-事件卡适合表示：
-
-- 决定；
-- 偏好；
-- 计划；
-- 纠正；
-- 带时间信息的事件。
-
-每张事件卡都会记录来源块和来源消息。事件发生的时间与它在对话中被提到的时间分开保存，因此系统不会把“聊天发生在什么时候”误认为“事情发生在什么时候”。
-
-事件提取默认延迟一个块执行。提取第 `N` 个块时，可以参考相邻块理解上下文，但新事件的事实和引用只能来自第 `N` 个块本身。
-
-## 证据门：相关不等于充分
-
-每批搜索结果都会生成五个字段：
-
-| 字段 | 含义 |
-| --- | --- |
-| `verdict` | 证据充分、只有一部分，或者找错了 |
-| `evidence_refs` | 最新一批结果中，哪些内容真正支持答案 |
-| `fit` | 这些证据为什么能回答当前问题 |
-| `missing` | 还缺少什么 |
-| `next_strategy` | 回答、继续搜索，或者展开更多来源 |
-
-只有同时满足下面三个条件，`sufficient` 才会被接受：
-
-1. 至少引用一条最新检索批次中的证据；
-2. 下一步明确选择 `answer`；
-3. 检查内容符合受限字段结构。
-
-否则，核心会把结果降级为 `partial` 或 `wrong`。
-
-StrataGate 提供证据门和状态规则；具体的工具调用循环与最终模型回答仍由接入方负责。
-
-## 搜索命中不会自动强化记忆
-
-一次搜索命中只说明这条记忆被找到了，不代表回答真的采用了它。
-
-只有调用 `recordMemoryUse()` 登记实际使用后，事件的长期权重才会更新。这样可以避免某条记忆因为经常出现在搜索结果里，就不断强化自己并长期占据排名。
-
-纠正也不会直接覆盖历史。新事件可以取代旧事件，但旧事件和它的来源仍然保留。遗忘会让事件退出搜索，不会默认删除原始对话。
-
-## 评测记录
-
-当前公开实验主要用于记录研发迭代和发现回归，不作为排行榜成绩。
-
-五轮开发实验使用 LoCoMo 的同一个 conversation（`conv-26`），共 419 条消息、35 个 sessions 和 152 道 category 1–4 问题。
-
-其中两个对当前设计影响最大的结果是：
-
-| 配置 | 正确题数 | 准确率 |
+| 下游模型协议 | 多数票 | 平均检索轮数 |
 | --- | ---: | ---: |
-| 五字段证据门与受限检查上下文 | 118 / 152 | 77.63% |
-| 换成更复杂的检索便签 | 97 / 152 | 63.82% |
+| GPT-4o-mini | 74 / 152（48.68%） | 2.7039 |
+| GPT-5.6 Sol | **111 / 152（73.03%）** | **1.7961** |
 
-更复杂的内部检索状态带来了明显回归，因此当前实现保留了较短、可以强制执行的五字段合同。
+Sol 运行以更少的检索轮数恢复了第六轮 51 道退步题中的 40 道。策略选择比单纯增加搜索次数更重要。
 
-这只是固定开发切片，不是完整 LoCoMo 评测，也不能直接与其他项目的全量成绩比较。完整实验过程、模型配置和 Judge 敏感性见 [`docs/EVALUATION.md`](docs/EVALUATION.md)。
+### 更复杂的内部状态，反而更差
 
-## 当前范围
+| 检索控制方式 | 正确题数 | 准确率 |
+| --- | ---: | ---: |
+| 五字段证据门 | **118 / 152** | **77.63%** |
+| 更复杂的结构化检索便签 | 97 / 152 | 63.82% |
 
-已经提供：
+这次回归决定了当前证据门的形态：字段少、长度受限、下一步动作明确，并且可以由代码检查。
 
-- L0–L5 分层对话块；
-- 确定性的 L3–L5 来源视图；
-- 按需展开单个历史块；
-- 延迟事件提取接口；
-- 带来源和时间信息的事件卡；
-- 事件搜索与原始消息回查；
-- 三分类证据门；
-- 实际采用后的权重更新；
-- 置顶、遗忘、恢复和事件取代；
-- 核心行为测试。
+## 核心优势
 
-目前尚未提供：
+| 分层记忆 | 时间记忆 | 证据门 |
+| --- | --- | --- |
+| 同一段对话保留 L0–L5 六种详细程度；越旧显示越浅，需要时回到原文。 | 事件发生时间与提及时间分开保存，支持计划、取消、范围和纠正。 | 搜到相关内容后先判断证据是否充分；不足就继续搜索、展开事件或回查原文。 |
 
-- 生产级数据库适配器；
-- 正式发布的 npm 包；
-- 内置模型服务；
-- embedding、rerank 或图检索；
-- 完整 LoCoMo 数据集上的统一端到端结果；
-- 关于 12 轮块大小优于其他配置的结论。
+StrataGate 还将“搜索命中”和“回答实际采用”分开。只有真正用于回答的记忆才会被强化，避免检索结果不断强化自身。
 
-因此，StrataGate 当前更适合：
+## 工作流程
 
-- 研究或搭建可追溯的 Agent 记忆系统；
-- 验证分层上下文和证据门设计；
-- 作为已有 Agent 框架中的记忆内核。
+![StrataGate 工作流程：分层记忆、事件卡与证据门](docs/assets/stratagate-how-it-works.zh-CN.png)
 
-它暂时不是一个安装后即可直接用于生产的托管记忆服务。
+对话先封存为分层记忆；值得长期查找的信息进入事件卡。问题到来后先搜索，证据不足就换策略或回查原文，直到通过证据门。
+
+> **记忆有深浅，回答有门槛。**
+
+## 一次真实的检索
+
+在一道关于 Caroline 学校演讲时间的问题中：
+
+```text
+事件卡命中“学校演讲”
+        ↓
+事件相关，但缺少日期
+verdict = partial
+        ↓
+搜索原始消息
+        ↓
+找到 2023-06-09 消息中的 “last week”
+        ↓
+verdict = sufficient
+        ↓
+回答
+```
+
+事件卡负责快速定位，原始消息负责最终核对，证据门负责阻止不完整证据进入回答。
+
+## 核心设计
+
+### 分层记忆块
+
+默认每 12 轮完整对话封存为一个记忆块。
+
+| 层级 | 内容 | 作用 |
+| --- | --- | --- |
+| L0 | 标题和标签 | 旧记忆索引 |
+| L1 | 简短摘要 | 快速了解主题 |
+| L2 | 关键点 | 紧凑事实 |
+| L3 | 规则精简后的对话 | 去除范围明确的冗余 |
+| L4 | 接近原文的可读对话 | 核对自然语言上下文 |
+| L5 | 完整消息和工具记录 | 最终来源 |
+
+新块从 L5 开始，随着会话推进逐渐显示更浅的层级。L0–L4 是同一来源的不同视图，L5 原始记录始终保留。
+
+### 事件卡
+
+决定、偏好、计划、纠正和时间事件会被整理为可搜索的事件卡。每张卡都保留来源块和来源消息，并分别记录：
+
+- `mentionedAt`：什么时候在对话中被提到；
+- `happenedStart` / `happenedEnd`：事情实际发生的时间；
+- 参与者、事件类型、状态、纠正与冲突关系。
+
+### 证据门
+
+每批新检索结果都会生成五个短字段：
+
+```text
+verdict · evidence_refs · fit · missing · next_strategy
+```
+
+只有证据来自最新检索结果、`verdict=sufficient` 且 `next_strategy=answer` 时，系统才进入回答。`partial` 和 `wrong` 会触发下一轮搜索、事件展开或原文回查。
+
+### 实际采用后再强化
+
+搜索只更新检索记录。回答真正采用某张事件卡以后，才调用 `recordMemoryUse()` 更新其长期权重。
+
+新事件可以取代旧事件，但旧来源仍然可追溯；遗忘会让事件退出搜索，同时保留来源链路。
+
+## 评测
+
+评测文档包含：
+
+- R1–R5 的设计迭代；
+- GPT-4o-mini 与 GPT-5.6 Sol 的模型敏感性实验；
+- StrataGate 与 Mem0 base 的配对结果；
+- 分类成绩、逐题差异与真实检索路径；
+- Judge 设置、模型审计、重试、Token、成本和产物哈希。
+
+详见 [`docs/EVALUATION.md`](docs/EVALUATION.md)。
+
+## 接下来
+
+- 在完整 LoCoMo 数据集上冻结端到端协议；
+- 使用 GPT-5.6 Sol 重新构建 StrataGate memory state；
+- 对时间字段、事件卡和原文回查做消融实验；
+- 完成可复现的 Mem0 clean run；
+- 扩展存储适配器与检索实现。
 
 ## 项目结构
 
 ```text
 src/
-  blocks.ts       对话块的分层与衰减
-  retrieval.ts    证据检查合同
+  blocks.ts       对话块分层与衰减
+  retrieval.ts    证据门合同
   store.ts        内存参考实现
-  types.ts        数据结构与适配接口
-  weights.ts      记忆权重规则
+  types.ts        数据结构与模型适配接口
+  weights.ts      记忆采用与权重规则
 
 tests/            核心规则测试
 examples/         最小接入示例
 docs/             架构与评测文档
-benchmarks/       可由程序读取的实验记录
+benchmarks/       实验记录与机器可读结果
 ```
 
 ## 许可证
