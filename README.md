@@ -4,277 +4,171 @@
 
 # StrataGate
 
-### Keep nearby conversations verbatim and distant ones as an index. Answer only when the evidence is sufficient.
+### Recent conversations stay verbatim. Older ones become an index. Answers wait for enough evidence.
+
+A layered memory and evidence retrieval system for long-running AI agents.
 
 [![CI](https://github.com/diqierjia/StrataGate/actions/workflows/ci.yml/badge.svg)](https://github.com/diqierjia/StrataGate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6.svg)](https://www.typescriptlang.org/)
 
-[中文说明](README.zh-CN.md) · [Architecture](docs/ARCHITECTURE.md) · [Evaluation](docs/EVALUATION.md)
+[中文说明](README.zh-CN.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
+
+**LoCoMo `conv-26`: StrataGate 73.03% · Mem0 base 63.16%**
+
+**Temporal questions: 61.35% · 34.59% (+26.76 percentage points)**
 
 </div>
 
-StrataGate is a TypeScript memory kernel for long-running AI agents.
+## Results
 
-It primarily addresses two problems:
+On the 152 category 1–4 questions from LoCoMo `conv-26`, StrataGate answered **111 / 152** correctly by majority vote, compared with **96 / 152** for Mem0 base.
 
-- As a conversation grows, how can everyday context stay small without losing dates, corrections, or original wording?
-- After relevant history is found, how can an agent avoid presenting something that merely looks relevant as fact?
+| Metric | StrataGate | Mem0 base | Difference |
+| --- | ---: | ---: | ---: |
+| Majority-vote accuracy | **73.03%** | 63.16% | **+9.87** |
+| Ten-Judge mean accuracy | **71.97%** | 63.22% | **+8.75** |
+| Single-hop | **79.29%** | 75.14% | +4.14 |
+| Multi-hop | **63.44%** | 61.56% | +1.88 |
+| Temporal | **61.35%** | 34.59% | **+26.76** |
+| Open-domain | 83.85% | **84.62%** | -0.77 |
 
-StrataGate stores conversation history as memory blocks that can be expanded one layer at a time, then places an evidence gate before every answer.
+The largest gap appears in temporal questions. StrataGate stores when an event happened separately from when it was mentioned, and falls back to the raw messages when an event card lacks the necessary detail.
 
-> [!NOTE]
-> This repository currently provides the core rules and an in-memory reference implementation. Node.js 20 or later is required.
-> The npm package has not been officially published, and there is no production database adapter or built-in model service yet.
+This comparison uses the same question set and order, GPT-5.6 Sol as the answer model and Judge, the same Judge prompt, and ten independent judgments per question. StrataGate reused an existing memory state, while Mem0 rebuilt its memory in this run. See the [evaluation record](docs/EVALUATION.md) for the complete protocol matrix.
 
-## Understand StrataGate in one minute
+### 🎯 Better retrieval does not mean more retrieval
 
-```mermaid
-flowchart LR
-    A["Ongoing conversation"] --> B["Memory blocks"]
-    B --> C["L5 raw messages"]
-    C --> D["L2 key points"]
-    D --> E["L0 title and index"]
-    E -->|"need to verify"| C
+On the same StrataGate memory state:
 
-    Q["User question"] --> S["Search memory"]
-    S --> G{"Enough evidence?"}
-    G -->|"yes"| R["Answer"]
-    G -->|"no"| X["Keep searching or expand the source"]
-    X --> G
-```
-
-One user message and one assistant response count as a turn. By default, every 12 turns form a memory block. This value is configurable.
-
-Each block preserves several levels of detail at the same time. Old blocks normally use very little context. When a question depends on a date, exact wording, a condition, or a correction, only the relevant block is expanded. Shorter views never overwrite the complete source.
-
-Retrieval is not “search once, then answer.” Every new batch of results must pass a constrained evidence check. When the evidence is incomplete, the next step can only be to continue searching, expand an event, inspect the raw messages, or state the uncertainty clearly.
-
-## Quick start
-
-Because the npm package has not been officially published, run StrataGate from source for now:
-
-```bash
-git clone https://github.com/diqierjia/StrataGate.git
-cd StrataGate
-npm install
-npm test
-npm run build
-```
-
-The example below runs a minimal workflow:
-
-1. Store two pieces of conversation.
-2. Extract a technical decision from the first one.
-3. Search for that decision.
-4. Assess the evidence.
-5. Record its use and output the answer only when the evidence is sufficient.
-
-Save the code as `demo.mjs` in the repository root:
-
-```js
-import { StrataGate } from './dist/index.js';
-
-const memory = new StrataGate({
-  // Use one turn here so the example creates a block immediately.
-  // The actual default is 12.
-  blockTurnSize: 1,
-
-  summarizer: async (messages) => ({
-    l0Title: 'API pagination approach',
-    l0Tags: ['api', 'decision'],
-    l1Summary: 'The team decided to use cursor pagination for the public API.',
-    l2Keypoints: messages.map((message) => message.content),
-    shouldExtract: true,
-  }),
-
-  extractor: async ({ target }) => ({
-    shouldExtract: true,
-    reason: 'The target block contains a technical decision that will matter later.',
-    events: [{
-      title: 'Use cursor pagination for the public API',
-      summary: 'The public API should use cursor pagination instead of page-number pagination.',
-      sourceBlockId: target.id,
-      sourceMessageIds: [target.l5Raw[0].id],
-      tags: ['api', 'pagination'],
-      temporal: {
-        eventType: 'decision',
-        status: 'occurred',
-      },
-    }],
-  }),
-});
-
-await memory.appendTurn({
-  user: 'Use cursor pagination for the public API.',
-  assistant: 'Understood. I will treat it as the current API design decision.',
-});
-
-// Event extraction processes the previous block only after a later block appears.
-await memory.appendTurn({
-  user: 'Next, define the response structure.',
-  assistant: 'Let us continue.',
-});
-
-const results = memory.searchEvents('How should the API paginate?');
-const latestEvidence = new Set(
-  results.map(({ event }) => event.id),
-);
-
-const assessment = memory.assessRetrieval({
-  verdict: 'sufficient',
-  evidence_refs: [...latestEvidence],
-  fit: 'The retrieved event card directly records the pagination approach.',
-  missing: '',
-  next_strategy: 'answer',
-}, latestEvidence);
-
-if (assessment.verdict === 'sufficient') {
-  memory.recordMemoryUse(assessment.evidenceRefs);
-  console.log(results[0]?.event.summary);
-} else {
-  console.log('The current evidence is insufficient, so no definitive answer can be given yet.');
-}
-```
-
-Run it:
-
-```bash
-node demo.mjs
-```
-
-The `summarizer` and `extractor` in this example are hard-coded callbacks. In a real integration, these interfaces can call any model or provider.
-
-See [`examples/basic.ts`](examples/basic.ts) for the complete TypeScript example in this repository.
-
-## Conversation blocks: summaries never overwrite the source
-
-Each memory block has six views:
-
-| Level | Contents | How it is produced |
-| --- | --- | --- |
-| L0 | Title and tags | `BlockSummarizer` |
-| L1 | Short summary | `BlockSummarizer` |
-| L2 | Key points | `BlockSummarizer` |
-| L3 | Rule-pruned conversation | Deterministic code |
-| L4 | Readable near-verbatim conversation | Deterministic code |
-| L5 | Complete messages and tool records | Preserved directly |
-
-L3 does not allow a model to rewrite freely. It removes only narrowly defined content, such as standalone greetings, pure acknowledgements, raw tool arguments, and identical repeated long passages.
-
-L5 is always the final source of truth. Here, “preserved” means that shorter views never overwrite the original messages. Persistence across processes depends on the storage implementation supplied by the integrator. This repository currently provides only an in-memory reference implementation.
-
-The default block size is 12 turns, but that is only the default used by the current implementation and experiments. It is not a claim that 12 turns are optimal for every setting.
-
-## Event cards: make important memories searchable
-
-Conversation blocks preserve the source. Event cards make important information easier to find.
-
-Event cards are suitable for representing:
-
-- decisions;
-- preferences;
-- plans;
-- corrections;
-- time-related events.
-
-Every event card records its source block and source messages. The time when an event happened is stored separately from the time when it was mentioned, so the system does not mistake “when the conversation happened” for “when the event happened.”
-
-Event extraction is delayed by one block by default. When extracting block `N`, adjacent blocks may provide context, but the facts and citations of a new event can come only from block `N` itself.
-
-## Evidence gate: relevant does not mean sufficient
-
-Each batch of search results produces five fields:
-
-| Field | Meaning |
-| --- | --- |
-| `verdict` | The evidence is sufficient, only partial, or wrong |
-| `evidence_refs` | Which items in the latest result batch actually support the answer |
-| `fit` | Why this evidence answers the current question |
-| `missing` | What is still missing |
-| `next_strategy` | Answer, search again, or expand more source material |
-
-A `sufficient` verdict is accepted only when all three conditions below are met:
-
-1. At least one cited piece of evidence comes from the latest retrieval batch.
-2. The next step explicitly selects `answer`.
-3. The assessment conforms to the constrained field structure.
-
-Otherwise, the core downgrades the result to `partial` or `wrong`.
-
-StrataGate provides the evidence gate and state rules. The integration is still responsible for the tool-calling loop and the model that produces the final answer.
-
-## Search hits do not reinforce memory automatically
-
-A search hit only means that a memory was found. It does not mean the answer actually used it.
-
-An event's long-term weight is updated only after `recordMemoryUse()` records that it was actually used. This prevents a memory from reinforcing itself and dominating future rankings simply because it appears frequently in search results.
-
-Corrections do not overwrite history directly. A new event can supersede an old one, while the old event and its source remain available. Forgetting removes an event from search; it does not delete the original conversation by default.
-
-## Evaluation record
-
-The current public experiments document development iterations and help identify regressions. They are not presented as leaderboard scores.
-
-Five development runs used the same LoCoMo conversation (`conv-26`), containing 419 messages, 35 sessions, and 152 category 1–4 questions.
-
-The two results that most directly shaped the current design are:
-
-| Configuration | Correct | Accuracy |
+| Downstream model protocol | Majority vote | Average retrieval rounds |
 | --- | ---: | ---: |
-| Five-field evidence gate with constrained assessment context | 118 / 152 | 77.63% |
-| Replaced it with a more complex retrieval note | 97 / 152 | 63.82% |
+| GPT-4o-mini | 74 / 152 (48.68%) | 2.7039 |
+| GPT-5.6 Sol | **111 / 152 (73.03%)** | **1.7961** |
 
-The more complex internal retrieval state caused a clear regression, so the current implementation keeps the shorter, enforceable five-field contract.
+With fewer retrieval rounds, the Sol run recovered 40 of the 51 questions that had regressed in round six. Choosing the right strategy matters more than simply searching more often.
 
-This is a fixed development slice, not a complete LoCoMo evaluation, and it cannot be compared directly with full-dataset results from other projects. See [`docs/EVALUATION.md`](docs/EVALUATION.md) for the complete experiment history, model configuration, and Judge sensitivity.
+### 🪶 More complex internal state performed worse
 
-## Current scope
+| Retrieval control | Correct | Accuracy |
+| --- | ---: | ---: |
+| Five-field evidence gate | **118 / 152** | **77.63%** |
+| More complex structured retrieval note | 97 / 152 | 63.82% |
 
-Available today:
+This regression shaped the current evidence gate: few fields, bounded length, an explicit next action, and a structure that code can enforce.
 
-- L0–L5 layered conversation blocks;
-- deterministic L3–L5 source views;
-- on-demand expansion of individual historical blocks;
-- a delayed event extraction interface;
-- event cards with source and time information;
-- event search and raw-message lookup;
-- a three-way evidence gate;
-- weight updates after actual use;
-- pinning, forgetting, restoring, and event supersession;
-- tests for core behavior.
+## Core strengths
 
-Not yet provided:
+| Layered memory | Temporal memory | Evidence gate |
+| --- | --- | --- |
+| Each conversation block keeps six levels of detail from L0 to L5. Older blocks are shown at a shallower level, with the original available on demand. | Event time is stored separately from mention time, with support for plans, cancellations, ranges, and corrections. | Relevant results are checked for sufficiency before answering. If evidence is incomplete, the system searches again, expands an event, or returns to the raw source. |
 
-- a production database adapter;
-- an officially published npm package;
-- a built-in model service;
-- embeddings, reranking, or graph retrieval;
-- a unified end-to-end result on the complete LoCoMo dataset;
-- evidence that a 12-turn block size is better than other configurations.
+StrataGate also separates a search hit from actual use in an answer. Only memories that genuinely support the answer are reinforced, preventing retrieval results from repeatedly reinforcing themselves.
 
-StrataGate is therefore currently best suited for:
+## Workflow
 
-- researching or building traceable agent memory systems;
-- validating layered context and evidence-gate designs;
-- serving as the memory kernel inside an existing agent framework.
+![StrataGate workflow: layered memory, event cards, and the evidence gate](docs/assets/stratagate-how-it-works.en.png)
 
-It is not yet a hosted memory service that can be installed and used directly in production.
+Conversations are first sealed into layered memory blocks. Information worth finding later becomes an event card. When a question arrives, StrataGate searches first; if the evidence is incomplete, it changes strategy or returns to the raw source until the evidence gate passes.
+
+> **Memory has depth. Answers have a threshold.**
+
+## A real retrieval path
+
+In a question about the date of Caroline's school speech:
+
+```text
+Event card matches "school speech"
+        ↓
+The event is relevant, but the date is missing
+verdict = partial
+        ↓
+Search the raw messages
+        ↓
+Find "last week" in the message dated 2023-06-09
+        ↓
+verdict = sufficient
+        ↓
+Answer
+```
+
+The event card provides fast location, the raw message provides final verification, and the evidence gate prevents incomplete evidence from reaching the answer.
+
+## Core design
+
+### 🪜 Layered memory blocks
+
+By default, each set of 12 complete conversation turns is sealed into one memory block.
+
+| Level | Contents | Purpose |
+| --- | --- | --- |
+| L0 | Title and tags | Index for older memories |
+| L1 | Short summary | Quick overview of the topic |
+| L2 | Key points | Compact facts |
+| L3 | Rule-pruned conversation | Remove narrowly defined redundancy |
+| L4 | Readable near-verbatim conversation | Verify natural-language context |
+| L5 | Complete messages and tool records | Final source |
+
+New blocks start at L5 and display progressively shallower layers as the conversation advances. L0–L4 are different views of the same source; the complete L5 record is always preserved.
+
+### 🗓️ Event cards
+
+Decisions, preferences, plans, corrections, and temporal events are organized into searchable event cards. Every card retains its source block and source messages, and records:
+
+- `mentionedAt`: when the event was mentioned in the conversation;
+- `happenedStart` / `happenedEnd`: when the event actually occurred;
+- participants, event type, status, corrections, and conflict relationships.
+
+### 🚦 Evidence gate
+
+Every new batch of retrieval results produces five short fields:
+
+```text
+verdict · evidence_refs · fit · missing · next_strategy
+```
+
+The system proceeds to an answer only when the evidence comes from the latest retrieval results, `verdict=sufficient`, and `next_strategy=answer`. A `partial` or `wrong` verdict triggers another search, event expansion, or a return to the raw messages.
+
+### 🌱 Reinforce only after actual use
+
+Search updates only the retrieval record. The system calls `recordMemoryUse()` to update long-term weight only after an event card is genuinely used in an answer.
+
+A new event may supersede an old one, but the old source remains traceable. Forgetting removes an event from search while preserving the source chain.
+
+## Evaluation
+
+The evaluation document includes:
+
+- the R1–R5 design iterations;
+- GPT-4o-mini and GPT-5.6 Sol model-sensitivity experiments;
+- the paired StrataGate and Mem0 base result;
+- category scores, question-level differences, and real retrieval paths;
+- Judge settings, model audits, retries, tokens, costs, and artifact hashes.
+
+See [`docs/EVALUATION.md`](docs/EVALUATION.md).
+
+## Next steps
+
+- freeze an end-to-end protocol for the full LoCoMo dataset;
+- rebuild the StrataGate memory state with GPT-5.6 Sol;
+- run ablations on temporal fields, event cards, and raw-message fallback;
+- complete a reproducible clean Mem0 run;
+- expand storage adapters and retrieval implementations.
 
 ## Repository layout
 
 ```text
 src/
-  blocks.ts       conversation block layering and decay
-  retrieval.ts    evidence assessment contract
-  store.ts        in-memory reference implementation
-  types.ts        data structures and adapter interfaces
-  weights.ts      memory weight rules
+  blocks.ts       Conversation-block layering and decay
+  retrieval.ts    Evidence-gate contract
+  store.ts        In-memory reference implementation
+  types.ts        Data structures and model-adapter interfaces
+  weights.ts      Memory adoption and weighting rules
 
-tests/            tests for core rules
-examples/         minimal integration example
-docs/             architecture and evaluation documentation
-benchmarks/       machine-readable experiment records
+tests/            Core rule tests
+examples/         Minimal integration example
+docs/             Architecture and evaluation documents
+benchmarks/       Experiment records and machine-readable results
 ```
 
 ## License
