@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/stratagate-avatar.png" alt="StrataGate 吉祥物" width="200" />
+
 # StrataGate
 
 ### 近处保留原话，远处只看索引；证据够了才回答。
