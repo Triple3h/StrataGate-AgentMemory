@@ -1,0 +1,131 @@
+{
+  "benchmark": "LoCoMo",
+  "scope": {
+    "conversation": "conv-26",
+    "messages": 419,
+    "sessions": 35,
+    "categories": [1, 2, 3, 4],
+    "questions": 152,
+    "warning": "Single-conversation directional comparison. Not a full LoCoMo score or a cross-project leaderboard."
+  },
+  "shared_protocol": {
+    "question_ids_equal": true,
+    "question_order_exact": true,
+    "question_text_gold_and_category_mismatches": 0,
+    "answer_model": "gpt-5.6-sol",
+    "judge_model": "gpt-5.6-sol",
+    "reasoning_effort": "low",
+    "judge_repeats": 10,
+    "judge_prompt_sha256": "44fb3d8f7a1f37b2430772cf90518a32172e4056b7a0dec085402763fd179b9f"
+  },
+  "stratagate_round_seven": {
+    "run_id": "locomo-conv0-r4-gpt56sol-20260809-recovery3-conv0",
+    "memory_state_provenance": "reused state extracted with gpt-4o-mini",
+    "retrieval_assessment_answer_and_judge_model": "gpt-5.6-sol",
+    "completed_questions": 152,
+    "judge_decisions": 1520,
+    "mean_accuracy_percent": 71.9737,
+    "standard_deviation_percent": 0.5263,
+    "range_percent": [71.0526, 73.0263],
+    "majority_correct": 111,
+    "majority_accuracy_percent": 73.03,
+    "retrieval_rounds": 273,
+    "average_retrieval_rounds_per_question": 1.7961,
+    "by_category_mean_accuracy_percent": {
+      "multi-hop": 63.4375,
+      "temporal": 61.3514,
+      "open-domain": 83.8462,
+      "single-hop": 79.2857
+    },
+    "request_accounting": {
+      "completed_calls": 2305,
+      "failed_attempt_traces": 15,
+      "incomplete_calls": 0,
+      "total_tokens": 4469367,
+      "official_equivalent_cost_usd": 21.779499
+    }
+  },
+  "mem0_base": {
+    "run_id": "locomo-conv0-mem0-base-gpt56sol-20260809",
+    "implementation": {
+      "type": "local Mem0 base SDK",
+      "version": "0.1.97",
+      "commit": "2b58775c17eb1c1b7532242b7154af6744102280",
+      "graph": false,
+      "cloud": false,
+      "platform_v3": false
+    },
+    "memory_state_provenance": "fresh build with gpt-5.6-sol",
+    "extraction_update_answer_and_judge_model": "gpt-5.6-sol",
+    "embedding": {
+      "model": "text-embedding-3-small",
+      "dimensions": 1536
+    },
+    "retrieval": {
+      "top_k_per_speaker": 30,
+      "speaker_searches_per_question": 2
+    },
+    "ingestion": {
+      "source_messages": 419,
+      "submitted_messages_across_speaker_views": 838,
+      "write_units_completed": 428,
+      "write_units_total": 428,
+      "final_memories": 173
+    },
+    "completed_questions": 152,
+    "judge_decisions": 1520,
+    "mean_accuracy_percent": 63.2237,
+    "standard_deviation_percent": 0.9045,
+    "range_percent": [61.8421, 65.1316],
+    "majority_correct": 96,
+    "majority_accuracy_percent": 63.1579,
+    "by_category_mean_accuracy_percent": {
+      "multi-hop": 61.5625,
+      "temporal": 34.5946,
+      "open-domain": 84.6154,
+      "single-hop": 75.1429
+    },
+    "request_accounting": {
+      "completed_calls": 3575,
+      "historical_failed_attempt_traces": 187,
+      "unrecovered_failed_calls": 0,
+      "total_tokens": 3009448,
+      "official_equivalent_cost_usd": 20.89670904
+    },
+    "audit": {
+      "standalone_structural_protocol_audit_passed": true,
+      "standalone_structural_protocol_violations": 0,
+      "generated_summary_passed": false,
+      "generated_summary_note": "The summary counts recovered bodyless failed attempts as response.model=None; successful responses returned the expected models."
+    }
+  },
+  "difference_stratagate_minus_mem0": {
+    "mean_accuracy_percentage_points": 8.75,
+    "majority_correct_questions": 15,
+    "majority_accuracy_percentage_points": 9.8721,
+    "by_category_percentage_points": {
+      "multi-hop": 1.875,
+      "temporal": 26.7568,
+      "open-domain": -0.7692,
+      "single-hop": 4.1428
+    }
+  },
+  "paired_majority_outcomes": {
+    "both_correct": 76,
+    "stratagate_correct_mem0_wrong": 35,
+    "stratagate_wrong_mem0_correct": 20,
+    "both_wrong": 21
+  },
+  "non_shared_protocol_fields": [
+    "memory construction and extraction provenance",
+    "retrieval implementation",
+    "answer context and answer prompt",
+    "embedding stack"
+  ],
+  "source_artifact_sha256": {
+    "stratagate_round_seven_summary_json": "fe6ae48ca3d1c8fcc8bf65f11058e2253f64927db9b5b69af5fd1d8b91dcaa8e",
+    "mem0_summary_json": "88f39b729546c6f343e51a11ad8f80bc1eea06ba831f33008fad779b04962927",
+    "mem0_paired_comparison_json": "27b604692364f24600d9513d8d2b91da9b52245a4574f581afb0afc6f00ee7fc",
+    "mem0_protocol_audit_json": "c1e39714eb08a775f9cbe12d0a43de6d825c142991840eab329398d1b9d744eb"
+  }
+}
