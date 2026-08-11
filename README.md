@@ -67,7 +67,7 @@ StrataGate also separates a search hit from actual use in an answer. Only memori
 
 ## Workflow
 
-![StrataGate workflow: layered memory, event cards, and the evidence gate](docs/assets/stratagate-how-it-works.zh-CN.png)
+![StrataGate workflow: layered memory, event cards, and the evidence gate](docs/assets/stratagate-how-it-works.en.png)
 
 Conversations are first sealed into layered memory blocks. Information worth finding later becomes an event card. When a question arrives, StrataGate searches first; if the evidence is incomplete, it changes strategy or returns to the raw source until the evidence gate passes.
 
