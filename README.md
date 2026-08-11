@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/stratagate-avatar.png" alt="StrataGate mascot" width="200" />
+
 # StrataGate
 
 ### Keep nearby conversations verbatim and distant ones as an index. Answer only when the evidence is sufficient.
