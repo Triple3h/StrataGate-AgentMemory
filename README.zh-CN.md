@@ -135,6 +135,42 @@ verdict · evidence_refs · fit · missing · next_strategy
 
 新事件可以取代旧事件，但旧来源仍然可追溯；遗忘会让事件退出搜索，同时保留来源链路。
 
+## SQLite 持久化存储
+
+默认构造函数仍然提供内存参考实现。如需让记忆在进程重启后恢复，安装可选的 SQLite 驱动：
+
+```bash
+npm install @diqier/stratagate better-sqlite3
+```
+
+```ts
+import { StrataGate } from '@diqier/stratagate';
+import { SqliteStorage } from '@diqier/stratagate/sqlite';
+
+const memory = await StrataGate.open({
+  storage: new SqliteStorage({ filename: './data/stratagate.db' }),
+  namespace: 'user:alice',
+  summarizer,
+  extractor,
+});
+
+await memory.appendTurn({ user, assistant });
+const results = await memory.searchEvents(question);
+
+await memory.recordMemoryUse(
+  results.map(({ event }) => event.id),
+  { receiptId: `answer:${answerMessageId}` },
+);
+
+await memory.close();
+```
+
+SQLite 会保存未封块的原始消息、已封存的 L0-L5、事件来源、抽取任务、指针锚点和采用回执。所有写入使用事务和 namespace revision；旧进程继续写入时会得到冲突错误，不会静默覆盖新记忆。
+
+原始 turn 会在摘要和抽取模型调用前提交。任一模型调用失败后，重启进程并调用 `resumePendingWork()`，只会继续未完成的 block。持久化模式下采用记忆必须传入稳定的 `receiptId`，同一个回答即使重试也不会重复强化事件。
+
+适配器会启用 WAL 和外键检查。StrataGate 本身不加密数据库文件；保存敏感对话时，应用必须在文件系统或数据库层提供保护。
+
 ## 评测
 
 评测文档包含：
@@ -153,7 +189,7 @@ verdict · evidence_refs · fit · missing · next_strategy
 - 使用 GPT-5.6 Sol 重新构建 StrataGate memory state；
 - 对时间字段、事件卡和原文回查做消融实验；
 - 完成可复现的 Mem0 clean run；
-- 扩展存储适配器与检索实现。
+- 增加一个真实框架 adapter 和数据库原生检索索引。
 
 ## 项目结构
 
@@ -161,7 +197,9 @@ verdict · evidence_refs · fit · missing · next_strategy
 src/
   blocks.ts       对话块分层与衰减
   retrieval.ts    证据门合同
-  store.ts        内存参考实现
+  storage.ts      持久化快照与 adapter 合同
+  sqlite.ts       事务式 SQLite adapter
+  store.ts        内存与持久化生命周期
   types.ts        数据结构与模型适配接口
   weights.ts      记忆采用与权重规则
 

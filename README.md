@@ -135,6 +135,42 @@ Search updates only the retrieval record. The system calls `recordMemoryUse()` t
 
 A new event may supersede an old one, but the old source remains traceable. Forgetting removes an event from search while preserving the source chain.
 
+## Persistent SQLite storage
+
+The default constructor remains an in-memory reference implementation. For restart-safe memory, install the optional SQLite driver:
+
+```bash
+npm install @diqier/stratagate better-sqlite3
+```
+
+```ts
+import { StrataGate } from '@diqier/stratagate';
+import { SqliteStorage } from '@diqier/stratagate/sqlite';
+
+const memory = await StrataGate.open({
+  storage: new SqliteStorage({ filename: './data/stratagate.db' }),
+  namespace: 'user:alice',
+  summarizer,
+  extractor,
+});
+
+await memory.appendTurn({ user, assistant });
+const results = await memory.searchEvents(question);
+
+await memory.recordMemoryUse(
+  results.map(({ event }) => event.id),
+  { receiptId: `answer:${answerMessageId}` },
+);
+
+await memory.close();
+```
+
+SQLite stores open-tail messages, sealed L0-L5 blocks, event provenance, extraction jobs, pointer anchors, and adoption receipts. Writes use transactions and per-namespace revisions. A stale writer is rejected instead of silently overwriting newer memory.
+
+Raw turns are committed before summarization or extraction calls. If either model call fails, `resumePendingWork()` continues only the unfinished block after restart. Persistent adoption requires a stable `receiptId`, so retrying one answer does not strengthen the same event twice.
+
+The adapter enables WAL and foreign-key enforcement. The database file is not encrypted by StrataGate; applications that store sensitive conversations must secure it at the filesystem or database layer.
+
 ## Evaluation
 
 The evaluation document includes:
@@ -153,7 +189,7 @@ See [`docs/EVALUATION.md`](docs/EVALUATION.md).
 - rebuild the StrataGate memory state with GPT-5.6 Sol;
 - run ablations on temporal fields, event cards, and raw-message fallback;
 - complete a reproducible clean Mem0 run;
-- expand storage adapters and retrieval implementations.
+- add a real framework adapter and database-native retrieval indexes.
 
 ## Repository layout
 
@@ -161,7 +197,9 @@ See [`docs/EVALUATION.md`](docs/EVALUATION.md).
 src/
   blocks.ts       Conversation-block layering and decay
   retrieval.ts    Evidence-gate contract
-  store.ts        In-memory reference implementation
+  storage.ts      Persistence snapshot and adapter contracts
+  sqlite.ts       Transactional SQLite adapter
+  store.ts        In-memory and persistent lifecycle
   types.ts        Data structures and model-adapter interfaces
   weights.ts      Memory adoption and weighting rules
 

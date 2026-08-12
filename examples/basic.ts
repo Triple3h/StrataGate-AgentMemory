@@ -35,7 +35,7 @@ await memory.appendTurn({
   assistant: 'I will keep the pagination decision in mind.',
 });
 
-const results = memory.searchEvents('How should the API paginate?');
+const results = await memory.searchEvents('How should the API paginate?');
 const evidence = new Set(results.map(({ event }) => event.id));
 const assessment = memory.assessRetrieval({
   verdict: 'sufficient',
@@ -46,6 +46,6 @@ const assessment = memory.assessRetrieval({
 }, evidence);
 
 if (assessment.verdict === 'sufficient') {
-  memory.recordMemoryUse(assessment.evidenceRefs);
+  await memory.recordMemoryUse(assessment.evidenceRefs);
   console.log(results[0]?.event.summary);
 }

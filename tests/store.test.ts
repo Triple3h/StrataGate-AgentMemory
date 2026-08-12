@@ -38,16 +38,16 @@ describe('StrataGate lifecycle', () => {
 
     const second = await memory.appendTurn({ user: 'What did I ask?', assistant: 'Let me check.' });
     expect(second.extractedEvents).toHaveLength(1);
-    const result = memory.searchEvents('concise writing preference');
+    const result = await memory.searchEvents('concise writing preference');
     expect(result[0]?.event.title).toBe('Prefers concise answers');
 
     const event = result[0]?.event;
     expect(event).toBeDefined();
     if (!event) return;
     const before = event.weight.mentionCount;
-    memory.searchEvents('concise');
+    await memory.searchEvents('concise');
     expect(event.weight.mentionCount).toBe(before);
-    memory.recordMemoryUse([event.id]);
+    await memory.recordMemoryUse([event.id]);
     expect(event.weight.mentionCount).toBe(before + 1);
     expect(memoryWeightAt(event, memory.turn)).toBe(1);
   });
@@ -59,8 +59,8 @@ describe('StrataGate lifecycle', () => {
     const event = memory.listEvents()[0];
     expect(event).toBeDefined();
     if (!event) return;
-    memory.forgetEvent(event.id);
-    expect(memory.searchEvents('concise')).toHaveLength(0);
+    await memory.forgetEvent(event.id);
+    expect(await memory.searchEvents('concise')).toHaveLength(0);
     expect(memory.listEvents()[0]?.sourceMessageIds.length).toBeGreaterThan(0);
   });
 });
