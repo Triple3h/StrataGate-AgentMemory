@@ -169,13 +169,24 @@ If the retrieval budget ends without sufficient evidence, the caller should pass
 
 ## Storage adapters
 
-The current repository contains an in-memory reference store. A production adapter should preserve these invariants:
+The default constructor is an in-memory reference store. `StrataGate.open()` can instead hydrate the same state machine from a `StorageAdapter`. The bundled `SqliteStorage` adapter persists normalized rows for memory spaces, messages, blocks, events, event sources, extraction jobs, and usage receipts.
+
+Every namespace has a monotonically increasing revision. A write supplies the revision it loaded; SQLite commits the new revision and all related rows in one immediate transaction. A stale process receives `StorageConflictError` rather than overwriting newer state.
+
+External model calls are never made inside a database transaction:
+
+1. a completed raw turn is committed immediately;
+2. summarization runs outside the transaction, then sealing commits atomically;
+3. extraction first commits a running job, calls the extractor, then atomically commits either the event cards or a failed/skipped job state;
+4. `resumePendingWork()` retries only failed or interrupted work after restart.
+
+The adapter preserves these invariants:
 
 - blocks and L5 messages are append-only;
 - card provenance references an existing source block and message set;
 - search hits do not increment adoption state;
 - supersession retains the old event;
 - forget is reversible unless an application explicitly implements irreversible deletion;
-- usage receipts are idempotent for one answer turn.
+- usage receipts are idempotent for one answer turn through a unique `receiptId`.
 
-SQLite and Postgres adapters are planned, but are not claimed as complete in the initial open-source release.
+SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.
