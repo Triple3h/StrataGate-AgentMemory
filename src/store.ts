@@ -77,6 +77,7 @@ export interface TurnInput {
   user: string;
   assistant: string;
   createdAt?: string;
+  threadId?: string;
   userToolCalls?: ToolTrace[];
   assistantToolCalls?: ToolTrace[];
   receiptId?: string;
@@ -93,6 +94,7 @@ export interface AppendTurnOptions {
 
 export interface BlockContextEntry {
   id: string;
+  threadId?: string;
   turnRange: [number, number];
   level: BlockLevel;
   label: string;
@@ -319,8 +321,9 @@ export class StrataGate {
     return this.elements;
   }
 
-  listOpenTail(): readonly RawMessage[] {
-    return this.openTail;
+  listOpenTail(threadId?: string): readonly RawMessage[] {
+    if (threadId === undefined) return this.openTail;
+    return this.openTail.filter((message) => message.threadId === threadId);
   }
 
   listExtractionJobs(): readonly ExtractionJob[] {
@@ -378,12 +381,17 @@ export class StrataGate {
     if (input.receiptId !== undefined && !receiptId) {
       throw new TypeError('Turn receiptId must not be empty');
     }
+    const threadId = input.threadId?.trim();
+    if (input.threadId !== undefined && !threadId) {
+      throw new TypeError('Turn threadId must not be empty');
+    }
     const createdAt = toUtc8Iso(input.createdAt ?? this.now());
     const userMessage: RawMessage = {
       id: this.idFactory('msg'),
       role: 'user',
       content: input.user,
       createdAt,
+      ...(threadId ? { threadId } : {}),
       ...(input.userToolCalls ? { toolCalls: input.userToolCalls } : {}),
     };
     const assistantMessage: RawMessage = {
@@ -391,6 +399,7 @@ export class StrataGate {
       role: 'assistant',
       content: input.assistant,
       createdAt,
+      ...(threadId ? { threadId } : {}),
       ...(input.assistantToolCalls ? { toolCalls: input.assistantToolCalls } : {}),
     };
     const appended = await this.commitMutation(() => {
@@ -405,12 +414,12 @@ export class StrataGate {
       return { sealedBlock: null, extractedEvents: [], projectedElements: [] };
     }
 
-    if (this.openTail.filter((message) => message.role === 'user').length < this.blockTurnSize) {
+    if (this.threadOpenTail(threadId).filter((message) => message.role === 'user').length < this.blockTurnSize) {
       const projectedElements = await this.projectEligibleElements() ?? [];
       return { sealedBlock: null, extractedEvents: [], projectedElements };
     }
 
-    const sealedBlock = await this.sealOpenTail();
+    const sealedBlock = await this.sealOpenTail(threadId);
     const extractedEvents = await this.extractEligibleBlock() ?? [];
     const projectedElements = await this.projectEligibleElements() ?? [];
     return { sealedBlock, extractedEvents, projectedElements };
@@ -420,8 +429,10 @@ export class StrataGate {
     const sealedBlocks: MemoryBlock[] = [];
     const extractedEvents: EventCard[] = [];
     const projectedElements: ElementCard[] = [];
-    while (this.openTail.filter((message) => message.role === 'user').length >= this.blockTurnSize) {
-      sealedBlocks.push(await this.sealOpenTail());
+    while (true) {
+      const sealable = this.nextSealableThread();
+      if (sealable === null) break;
+      sealedBlocks.push(await this.sealOpenTail(sealable.threadId));
       extractedEvents.push(...(await this.extractEligibleBlock() ?? []));
       projectedElements.push(...(await this.projectEligibleElements() ?? []));
     }
@@ -433,7 +444,7 @@ export class StrataGate {
     }
     if (options.retrySkipped === true) {
       const skippedBlockIds = this.blocks
-        .filter((block, index) => index < this.blocks.length - 1
+        .filter((block) => this.nextBlockInThread(block) !== null
           && block.shouldExtract
           && this.extractionJobs.get(block.id)?.status === 'skipped')
         .map((block) => block.id);
@@ -683,12 +694,17 @@ export class StrataGate {
     return hits;
   }
 
-  getBlockContext(): BlockContextEntry[] {
-    return this.blocks.map((block) => {
-      const level = getDecayedBlockLevel(block.pointerAnchorLevel, block.pointerAnchorTurn, this.currentTurn);
+  getBlockContext(threadId?: string): BlockContextEntry[] {
+    const blocks = threadId === undefined
+      ? this.blocks
+      : this.blocks.filter((block) => block.threadId === threadId);
+    return blocks.map((block) => {
+      const currentTurn = block.threadId === undefined ? this.currentTurn : this.threadTurn(block.threadId);
+      const level = getDecayedBlockLevel(block.pointerAnchorLevel, block.pointerAnchorTurn, currentTurn);
       block.pointerCurrentLevel = level;
       return {
         id: block.id,
+        ...(block.threadId ? { threadId: block.threadId } : {}),
         turnRange: [block.startTurn, block.endTurn],
         level,
         label: blockLevelLabel(level),
@@ -701,14 +717,16 @@ export class StrataGate {
     return this.commitMutation(() => {
       const block = this.blocks.find((candidate) => candidate.id === id);
       if (!block) throw new Error(`Unknown block: ${id}`);
-      const current = getDecayedBlockLevel(block.pointerAnchorLevel, block.pointerAnchorTurn, this.currentTurn);
+      const currentTurn = block.threadId === undefined ? this.currentTurn : this.threadTurn(block.threadId);
+      const current = getDecayedBlockLevel(block.pointerAnchorLevel, block.pointerAnchorTurn, currentTurn);
       const level = normalizeBlockLevel(target, current);
       block.pointerCurrentLevel = level;
       block.pointerAnchorLevel = level;
-      block.pointerAnchorTurn = this.currentTurn;
+      block.pointerAnchorTurn = currentTurn;
       block.lastLiftedAt = toUtc8Iso(this.now());
       return {
         id: block.id,
+        ...(block.threadId ? { threadId: block.threadId } : {}),
         turnRange: [block.startTurn, block.endTurn] as [number, number],
         level,
         label: blockLevelLabel(level),
@@ -875,37 +893,74 @@ export class StrataGate {
     return job;
   }
 
-  private pendingBlockMessages(): RawMessage[] {
+  private threadOpenTail(threadId: string | undefined): RawMessage[] {
+    return this.openTail.filter((message) => message.threadId === threadId);
+  }
+
+  private threadBlocks(threadId: string | undefined): MemoryBlock[] {
+    return this.blocks.filter((block) => block.threadId === threadId);
+  }
+
+  private threadTurn(threadId: string): number {
+    const sealedTurns = this.threadBlocks(threadId)
+      .reduce((total, block) => total + block.l5Raw.filter((message) => message.role === 'user').length, 0);
+    return sealedTurns + this.threadOpenTail(threadId).filter((message) => message.role === 'user').length;
+  }
+
+  private nextSealableThread(): { threadId: string | undefined } | null {
+    const counts: Array<{ threadId: string | undefined; users: number }> = [];
+    for (const message of this.openTail) {
+      if (message.role !== 'user') continue;
+      let entry = counts.find((candidate) => candidate.threadId === message.threadId);
+      if (!entry) {
+        entry = { threadId: message.threadId, users: 0 };
+        counts.push(entry);
+      }
+      entry.users += 1;
+      if (entry.users >= this.blockTurnSize) return { threadId: entry.threadId };
+    }
+    return null;
+  }
+
+  private nextBlockInThread(block: MemoryBlock): MemoryBlock | null {
+    const index = this.blocks.indexOf(block);
+    return this.blocks.slice(index + 1).find((candidate) => candidate.threadId === block.threadId) ?? null;
+  }
+
+  private pendingBlockMessages(threadId: string | undefined): RawMessage[] {
+    const messages = this.threadOpenTail(threadId);
     let users = 0;
-    let end = this.openTail.length;
-    for (const [index, message] of this.openTail.entries()) {
+    let end = messages.length;
+    for (const [index, message] of messages.entries()) {
       if (message.role !== 'user') continue;
       users += 1;
       if (users !== this.blockTurnSize) continue;
-      const nextUserOffset = this.openTail.slice(index + 1).findIndex((candidate) => candidate.role === 'user');
-      end = nextUserOffset === -1 ? this.openTail.length : index + 1 + nextUserOffset;
+      const nextUserOffset = messages.slice(index + 1).findIndex((candidate) => candidate.role === 'user');
+      end = nextUserOffset === -1 ? messages.length : index + 1 + nextUserOffset;
       break;
     }
-    return this.openTail.slice(0, end);
+    return messages.slice(0, end);
   }
 
-  private async sealOpenTail(): Promise<MemoryBlock> {
-    const raw = this.pendingBlockMessages();
+  private async sealOpenTail(threadId: string | undefined): Promise<MemoryBlock> {
+    const raw = this.pendingBlockMessages(threadId);
     if (raw.filter((message) => message.role === 'user').length < this.blockTurnSize) {
       throw new Error('Open tail does not contain enough turns to seal a block');
     }
     const generated = this.summarizer ? await this.summarizer(raw) : defaultSummary(raw);
     const deterministic = deterministicBlockLayers(raw);
     const sequence = this.blocks.length + 1;
-    const startTurn = this.blocks.at(-1)?.endTurn !== undefined ? (this.blocks.at(-1)?.endTurn ?? 0) + 1 : 1;
+    const previous = this.threadBlocks(threadId).at(-1);
+    const startTurn = previous ? previous.endTurn + 1 : 1;
     const endTurn = startTurn + this.blockTurnSize - 1;
     return this.commitMutation(() => {
-      const currentRaw = this.pendingBlockMessages();
+      const currentRaw = this.pendingBlockMessages(threadId);
       if (!sameIds(currentRaw.map((message) => message.id), raw.map((message) => message.id))) {
         throw new Error('Open tail changed while the block summary was being prepared');
       }
       const block: MemoryBlock = {
         id: this.idFactory('blk'),
+        ...(threadId ? { threadId } : {}),
         sequence,
         startTurn,
         endTurn,
@@ -921,7 +976,9 @@ export class StrataGate {
         pointerAnchorTurn: endTurn,
         lastLiftedAt: null,
       };
-      this.openTail.splice(0, raw.length);
+      const sealedIds = new Set(raw.map((message) => message.id));
+      const remaining = this.openTail.filter((message) => !sealedIds.has(message.id));
+      this.openTail.splice(0, this.openTail.length, ...remaining);
       this.blocks.push(block);
       return block;
     });
@@ -929,16 +986,17 @@ export class StrataGate {
 
   private async extractEligibleBlock(options: { blockId?: string; includeSkipped?: boolean } = {}): Promise<EventCard[] | null> {
     if (!this.extractor || this.blocks.length < 2) return null;
-    const targetIndex = this.blocks.findIndex((block, index) => {
-      if (index >= this.blocks.length - 1 || !block.shouldExtract) return false;
+    const target = this.blocks.find((block) => {
+      if (this.nextBlockInThread(block) === null || !block.shouldExtract) return false;
       if (options.blockId !== undefined && block.id !== options.blockId) return false;
       const status = this.extractionJobs.get(block.id)?.status;
       return status === undefined || status === 'failed' || (options.includeSkipped === true && status === 'skipped');
     });
-    if (targetIndex < 0) return null;
-    const target = this.blocks[targetIndex];
-    const next = this.blocks[targetIndex + 1];
-    if (!target || !next) return null;
+    if (!target) return null;
+    const threadBlocks = this.threadBlocks(target.threadId);
+    const targetIndex = threadBlocks.indexOf(target);
+    const next = threadBlocks[targetIndex + 1];
+    if (!next) return null;
     const existing = this.extractionJobs.get(target.id);
     await this.commitMutation(() => {
       const currentStatus = this.extractionJobs.get(target.id)?.status;
@@ -958,7 +1016,7 @@ export class StrataGate {
     let result: Awaited<ReturnType<EventExtractor>>;
     try {
       result = await this.extractor({
-        previous: this.blocks[targetIndex - 1] ?? null,
+        previous: threadBlocks[targetIndex - 1] ?? null,
         target,
         next,
         timeline: this.events.map((event) => ({ id: event.id, title: event.title, temporal: event.temporal })),

@@ -116,4 +116,40 @@ describe('StrataGate lifecycle', () => {
     expect(memory.listExtractionJobs()[0]?.status).toBe('succeeded');
     expect(attempts).toBe(2);
   });
+
+  it('keeps open tails, blocks, and extraction neighbors isolated by thread', async () => {
+    const extractionPairs: string[][] = [];
+    const memory = StrataGate.inMemory({
+      blockTurnSize: 2,
+      summarizer,
+      extractor: async ({ target, next }) => {
+        extractionPairs.push([target.threadId ?? '', next.threadId ?? '']);
+        return { shouldExtract: false, reason: 'test only', events: [] };
+      },
+      idFactory: ids(),
+    });
+
+    await memory.appendTurn({ user: 'A1', assistant: 'A1 reply', threadId: 'session-a' });
+    await memory.appendTurn({ user: 'B1', assistant: 'B1 reply', threadId: 'session-b' });
+    await memory.appendTurn({ user: 'A2', assistant: 'A2 reply', threadId: 'session-a' });
+
+    expect(memory.listOpenTail('session-a')).toHaveLength(0);
+    expect(memory.listOpenTail('session-b').map(({ content }) => content)).toEqual(['B1', 'B1 reply']);
+    expect(memory.listBlocks()[0]).toMatchObject({
+      threadId: 'session-a',
+      startTurn: 1,
+      endTurn: 2,
+    });
+    expect(memory.listBlocks()[0]?.l5Raw.map(({ content }) => content)).toEqual(['A1', 'A1 reply', 'A2', 'A2 reply']);
+
+    await memory.appendTurn({ user: 'B2', assistant: 'B2 reply', threadId: 'session-b' });
+    await memory.appendTurn({ user: 'A3', assistant: 'A3 reply', threadId: 'session-a' });
+    await memory.appendTurn({ user: 'A4', assistant: 'A4 reply', threadId: 'session-a' });
+
+    expect(memory.getBlockContext('session-a')).toHaveLength(2);
+    expect(memory.getBlockContext('session-b')).toHaveLength(1);
+    expect(extractionPairs).toContainEqual(['session-a', 'session-a']);
+    expect(extractionPairs).not.toContainEqual(['session-a', 'session-b']);
+    expect(extractionPairs).not.toContainEqual(['session-b', 'session-a']);
+  });
 });

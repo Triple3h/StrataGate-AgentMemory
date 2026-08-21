@@ -1,6 +1,6 @@
 import type { ElementCard, EventCard, MemoryBlock, RawMessage } from './types.js';
 
-export const STRATAGATE_STORAGE_SCHEMA_VERSION = 4;
+export const STRATAGATE_STORAGE_SCHEMA_VERSION = 5;
 
 export type ExtractionJobStatus = 'running' | 'succeeded' | 'skipped' | 'failed';
 
@@ -114,6 +114,10 @@ interface LegacySnapshotV3 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'u
   usageReceipts: Array<Omit<UsageReceipt, 'audit'>>;
 }
 
+interface LegacySnapshotV4 extends Omit<StrataGateSnapshot, 'schemaVersion'> {
+  schemaVersion: 4;
+}
+
 export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   if (!value || typeof value !== 'object') throw new TypeError('Invalid StrataGate snapshot: expected an object');
   const schemaVersion = (value as { schemaVersion?: unknown }).schemaVersion;
@@ -139,6 +143,11 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   } else if (schemaVersion === 3) {
     snapshot = {
       ...structuredClone(value as LegacySnapshotV3),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+    };
+  } else if (schemaVersion === 4) {
+    snapshot = {
+      ...structuredClone(value as LegacySnapshotV4),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
     };
   } else if (schemaVersion === STRATAGATE_STORAGE_SCHEMA_VERSION) {

@@ -11,6 +11,7 @@ export interface RawMessage {
   role: MessageRole;
   content: string;
   createdAt: string;
+  threadId?: string;
   toolCalls?: ToolTrace[];
 }
 
@@ -28,6 +29,7 @@ export interface BlockLayers {
 
 export interface MemoryBlock extends BlockLayers {
   id: string;
+  threadId?: string;
   sequence: number;
   startTurn: number;
   endTurn: number;

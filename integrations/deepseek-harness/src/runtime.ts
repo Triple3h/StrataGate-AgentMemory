@@ -115,7 +115,7 @@ export class StrataGateRuntime {
 
   async blocks(session: Session): Promise<unknown> {
     await this.flush()
-    const results = (await this.space(session)).getBlockContext()
+    const results = (await this.space(session)).getBlockContext(String(session.id))
     return this.batch(session, results.map((result) => ({
       ref: `block:${result.id}:level:${result.level}`,
       target: { eventIds: [], elementIds: [] },
@@ -246,7 +246,8 @@ export class StrataGateRuntime {
   async buildAutoContext(session: Session): Promise<string> {
     await this.flush()
     const memory = await this.space(session)
-    const openTail = memory.listOpenTail()
+    const threadId = String(session.id)
+    const openTail = memory.listOpenTail(threadId)
     const activationQuery = [currentUserMessage(session), renderMessages(recentTurns(openTail, 2))]
       .filter(Boolean)
       .join('\n\n')
@@ -265,7 +266,7 @@ export class StrataGateRuntime {
       openTail.length > 0 ? renderMessages(openTail) : '(open tail is empty)',
       '',
       '[Decayed memory blocks]',
-      renderBlocks(memory.getBlockContext()),
+      renderBlocks(memory.getBlockContext(threadId)),
       '',
       renderActivatedMemory(events, elements),
     ].join('\n')

@@ -68,8 +68,8 @@ describe('DSH runtime ingestion', () => {
     try {
       const memory = await (runtime as unknown as { space: (session: Session) => Promise<StrataGate> })
         .space(activeSession)
-      await memory.appendTurn({ user: 'Initial setup.', assistant: 'Ready.' })
-      await memory.appendTurn({ user: 'Seal this block.', assistant: 'Sealed.' })
+      await memory.appendTurn({ user: 'Initial setup.', assistant: 'Ready.', threadId: String(activeSession.id) })
+      await memory.appendTurn({ user: 'Seal this block.', assistant: 'Sealed.', threadId: String(activeSession.id) })
       const block = memory.listBlocks()[0]
       expect(block).toBeDefined()
 
@@ -120,7 +120,11 @@ describe('DSH runtime ingestion', () => {
         sourceBlockId: block!.id,
         criticality: 'safety',
       })
-      await memory.appendTurn({ user: 'We chose pnpm earlier.', assistant: 'I will keep that in mind.' })
+      await memory.appendTurn({
+        user: 'We chose pnpm earlier.',
+        assistant: 'I will keep that in mind.',
+        threadId: String(activeSession.id),
+      })
 
       const before = new Map(memory.listEvents().map((event) => [
         event.id,
@@ -150,6 +154,68 @@ describe('DSH runtime ingestion', () => {
       for (const event of memory.listEvents()) {
         expect([event.weight.mentionCount, event.weight.lastAdoptedTurn]).toEqual(before.get(event.id))
       }
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps short-term blocks session-local while activating project long-term memory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-session-scope-'))
+    const database = join(directory, 'memory.db')
+    const sessionA = {
+      ...session,
+      id: 'session-a',
+      header: { ...session.header, id: 'session-a' },
+      events: [],
+      deriveMessages: () => [],
+    } as unknown as Session
+    const sessionB = {
+      ...session,
+      id: 'session-b',
+      header: { ...session.header, id: 'session-b' },
+      events: [],
+      deriveMessages: () => [{
+        id: 'session-b-user',
+        role: 'user',
+        content: [{ type: 'text', text: 'Which package manager does this project use?' }],
+        source: { kind: 'user' },
+      }],
+    } as unknown as Session
+    const runtime = new StrataGateRuntime({
+      database,
+      namespaceMode: 'project',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 2,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, fakeModels)
+    try {
+      expect(runtime.namespaceFor(sessionA)).toBe(runtime.namespaceFor(sessionB))
+      const memory = await (runtime as unknown as { space: (active: Session) => Promise<StrataGate> }).space(sessionA)
+      await memory.appendTurn({ user: 'A-only setup.', assistant: 'A reply.', threadId: 'session-a' })
+      await memory.appendTurn({ user: 'A-only sealed turn.', assistant: 'A sealed reply.', threadId: 'session-a' })
+      const blockA = memory.listBlocks()[0]!
+      const event = await memory.addEvent({
+        title: 'Project package manager',
+        summary: 'The project package manager is pnpm.',
+        sourceMessageIds: [blockA.l5Raw[0]!.id],
+        sourceBlockId: blockA.id,
+      })
+      await memory.appendTurn({ user: 'A-only open tail.', assistant: 'A tail reply.', threadId: 'session-a' })
+      await memory.appendTurn({ user: 'B-only open tail.', assistant: 'B tail reply.', threadId: 'session-b' })
+
+      const context = await runtime.buildAutoContext(sessionB)
+      expect(context).toContain('[Current conversation]\nuser: B-only open tail.')
+      expect(context).toContain('[Decayed memory blocks]\n(no sealed blocks)')
+      expect(context).not.toContain(blockA.id)
+      expect(context).not.toContain('A-only')
+      expect(context).toContain(event.id)
+
+      const blockBatch = await runtime.blocks(sessionB) as { results: unknown[] }
+      expect(blockBatch.results).toEqual([])
+      await runtime.recordUse(sessionB, 'session-local-blocks', [])
     } finally {
       await runtime.close()
       await rm(directory, { recursive: true, force: true })

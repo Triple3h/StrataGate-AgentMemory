@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.16 - 2026-08-21
+
+- Isolate open tails, Block sealing, decay, and automatic Block context by DSH session while keeping Events and Elements project-scoped for cross-session recall.
+- Migrate SQLite storage to schema v5 with optional thread ownership on raw messages and Blocks; pre-v5 Blocks remain unowned archival provenance instead of being injected into new sessions.
+
 ## 0.2.15 - 2026-08-21
 
 - Disable reasoning for internal structured memory workers because the current DSH adapters do not map `tool_choice` to the provider request.

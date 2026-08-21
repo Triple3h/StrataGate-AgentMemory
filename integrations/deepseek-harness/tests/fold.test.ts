@@ -60,6 +60,7 @@ describe('DSH turn folding', () => {
     expect(folded).toMatchObject({
       user: 'Fix login',
       assistant: 'I will inspect it.\n\nFixed and tested.',
+      threadId: 'session-1',
       receiptId: 'dsh:session-1:turn:7',
       assistantToolCalls: [{ name: 'read_file', arguments: { path: 'src/login.ts' }, result: 'file contents' }],
     })

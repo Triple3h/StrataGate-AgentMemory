@@ -1,6 +1,6 @@
 # StrataGate for DeepSeek Harness
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[English](../README.md) · [简体中文](README.zh-CN.md)
 
 面向 DeepSeek Harness 的自动、本地优先跨会话记忆。StrataGate 能够记住用户偏好、项目决策、已完成的对话和工具结果；Agent 回答前会检查找回的证据，并可将其展开追溯到原始消息。无需单独部署记忆服务器。
 
@@ -70,9 +70,9 @@ DSH_HOME/stratagate/memory.db
 - 默认不保存子 Agent 的对话轮次；同一项目中的子 Agent 仍然可以读取项目记忆。
 - 每个 DSH 对话轮次都有持久化的写入回执，因此重放或重试不会导致重复保存。
 - StrataGate 会执行现有的 Block 摘要、Event 提取、Element 投影、搜索、Evidence Gate（证据门控）以及仅在使用后触发的强化。
-- 每次主模型调用前，插件都会注入完整 open tail、每个已封 Block 当前衰减指针所指向的层级，以及最多 4 条激活 Event 和 4 条 active ElementFact。
+- 每次主模型调用前，插件只会注入当前会话的 open tail 与已封 Block，并额外注入最多 4 条项目级激活 Event 和 4 条 active ElementFact。Block 仍会作为来源证据持久化，但绝不会自动带入其他会话。
 
-激活查询由当前人类消息和 open tail 最近两个 turn 组成。现有 BM25 搜索继续作为词面相关性门槛，只有 pinned 和 safety 记忆可以例外进入候选；现有记忆权重提供第二路排序，再由 RRF 融合相关性与权重排序。激活区固定使用约 900 tokens 的预算，不会随数据库增大而增长。
+激活查询由当前人类消息和当前会话 open tail 的最近两个 turn 组成。现有 BM25 搜索继续作为词面相关性门槛，只有 pinned 和 safety 记忆可以例外进入候选；现有记忆权重提供第二路排序，再由 RRF 融合相关性与权重排序。激活区固定使用约 900 tokens 的预算，不会随数据库增大而增长。
 
 自动上下文只包含精简的 Event 与 fact 字段，并明确标注为历史背景而非指令。构建自动上下文不会调用 `recordMemoryUse`，不会增加 `mentionCount`，也不会更新 `lastAdoptedTurn`。现有 `memory_*` 工具仍用于更深入、经过 Evidence Gate 的主动检索，也是触发采用强化的唯一入口。
 

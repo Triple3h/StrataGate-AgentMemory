@@ -76,17 +76,17 @@ describe('SQLite persistence', () => {
     expect(ephemeral.storageRevision).toBe(0);
   });
 
-  it('creates schema version four and rejects a newer database schema', async () => {
+  it('creates schema version five and rejects a newer database schema', async () => {
     const initializedFilename = await databasePath();
     const initialized = new SqliteStorage({ filename: initializedFilename });
     await initialized.close();
     const initializedDatabase = new Database(initializedFilename, { readonly: true });
-    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(4);
+    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(5);
     initializedDatabase.close();
 
     const newerFilename = await databasePath();
     const newerDatabase = new Database(newerFilename);
-    newerDatabase.pragma('user_version = 5');
+    newerDatabase.pragma('user_version = 6');
     newerDatabase.close();
     expect(() => new SqliteStorage({ filename: newerFilename })).toThrow('newer than supported');
   });
@@ -102,8 +102,8 @@ describe('SQLite persistence', () => {
       idFactory,
       now: fixedNow,
     });
-    await first.appendTurn({ user: 'turn one', assistant: 'answer one' });
-    expect(first.listOpenTail()).toHaveLength(2);
+    await first.appendTurn({ user: 'turn one', assistant: 'answer one', threadId: 'session-a' });
+    expect(first.listOpenTail('session-a')).toHaveLength(2);
     await first.close();
 
     const second = await StrataGate.open({
@@ -114,8 +114,9 @@ describe('SQLite persistence', () => {
       now: fixedNow,
     });
     expect(second.turn).toBe(1);
-    expect(second.listOpenTail().map((message) => message.content)).toEqual(['turn one', 'answer one']);
-    const result = await second.appendTurn({ user: 'turn two', assistant: 'answer two' });
+    expect(second.listOpenTail('session-a').map((message) => message.content)).toEqual(['turn one', 'answer one']);
+    const result = await second.appendTurn({ user: 'turn two', assistant: 'answer two', threadId: 'session-a' });
+    expect(result.sealedBlock?.threadId).toBe('session-a');
     expect(result.sealedBlock?.startTurn).toBe(1);
     expect(result.sealedBlock?.endTurn).toBe(2);
     expect(second.listOpenTail()).toHaveLength(0);
@@ -359,7 +360,7 @@ describe('SQLite persistence', () => {
     const loaded = await storage.load('legacy:user');
     expect(loaded?.revision).toBe(7);
     expect(loaded?.snapshot).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       elements: [],
       elementProjectionJobs: [],
       ingestionReceipts: [],
@@ -367,7 +368,7 @@ describe('SQLite persistence', () => {
     await storage.close();
 
     const migrated = new Database(filename, { readonly: true });
-    expect(migrated.pragma('user_version', { simple: true })).toBe(4);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(5);
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
       .map(({ name }) => name)).toContain('element_ids_json');
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
@@ -376,6 +377,56 @@ describe('SQLite persistence', () => {
       .pluck().get()).toBe('elements');
     expect(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ingestion_receipts'")
       .pluck().get()).toBe('ingestion_receipts');
+    migrated.close();
+  });
+
+  it('adds nullable thread ownership when migrating a schema-v4 database', async () => {
+    const filename = await databasePath();
+    const legacy = new Database(filename);
+    legacy.exec(`
+      CREATE TABLE memory_spaces (
+        namespace TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, revision INTEGER NOT NULL,
+        current_turn INTEGER NOT NULL, block_turn_size INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE blocks (
+        namespace TEXT NOT NULL, id TEXT NOT NULL, sequence INTEGER NOT NULL,
+        start_turn INTEGER NOT NULL, end_turn INTEGER NOT NULL, created_at TEXT NOT NULL,
+        should_extract INTEGER NOT NULL, l0_title TEXT NOT NULL, l0_tags_json TEXT NOT NULL,
+        l1_summary TEXT NOT NULL, l2_keypoints_json TEXT NOT NULL, l3_condensed TEXT NOT NULL,
+        l4_readable TEXT NOT NULL, pointer_current_level INTEGER NOT NULL,
+        pointer_anchor_level INTEGER NOT NULL, pointer_anchor_turn INTEGER NOT NULL,
+        last_lifted_at TEXT, PRIMARY KEY (namespace, id), UNIQUE (namespace, sequence),
+        FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
+      ) STRICT;
+      CREATE TABLE messages (
+        namespace TEXT NOT NULL, id TEXT NOT NULL, block_id TEXT, position INTEGER NOT NULL,
+        role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, tool_calls_json TEXT,
+        PRIMARY KEY (namespace, id),
+        FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE,
+        FOREIGN KEY (namespace, block_id) REFERENCES blocks(namespace, id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE TABLE usage_receipts (
+        namespace TEXT NOT NULL, receipt_id TEXT NOT NULL, event_ids_json TEXT NOT NULL,
+        element_ids_json TEXT NOT NULL DEFAULT '[]', audit_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL, PRIMARY KEY (namespace, receipt_id),
+        FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
+      ) STRICT;
+      INSERT INTO memory_spaces VALUES ('legacy:v4', 4, 3, 0, 6, '2026-01-01', '2026-01-01');
+      PRAGMA user_version = 4;
+    `);
+    legacy.close();
+
+    const storage = new SqliteStorage({ filename });
+    const loaded = await storage.load('legacy:v4');
+    expect(loaded?.snapshot.schemaVersion).toBe(5);
+    await storage.close();
+
+    const migrated = new Database(filename, { readonly: true });
+    expect((migrated.pragma('table_info(blocks)') as Array<{ name: string }>).map(({ name }) => name))
+      .toContain('thread_id');
+    expect((migrated.pragma('table_info(messages)') as Array<{ name: string }>).map(({ name }) => name))
+      .toContain('thread_id');
     migrated.close();
   });
 
