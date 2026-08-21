@@ -46,6 +46,8 @@ The data flow from blocks to event cards and from events to element cards is one
 
 A completed user/assistant pair is one turn. The default block boundary is 12 completed turns. Messages that have not reached the boundary remain in the open tail and are not condensed or extracted.
 
+Hosts may attach a `threadId` to each turn. Open tails, Block boundaries, neighboring extraction context, turn ranges, and decay pointers are then isolated by thread. Persisted Blocks remain available as provenance for long-term cards, while host integrations must inject only the active thread's short-term Block context.
+
 When the boundary is reached:
 
 1. L5 stores the raw messages and tool traces.
@@ -224,4 +226,4 @@ The adapter preserves these invariants:
 - forget is reversible unless an application explicitly implements irreversible deletion;
 - usage receipts are idempotent for one answer turn through a unique `receiptId`.
 
-SQLite schema v4 includes normalized element, fact, provenance, projection-job, ingestion-receipt, and usage-audit data. Usage receipts can carry the DSH session, turn, retrieval batch, assessment, and exact evidence references that led to an answer. Opening a schema-v1, v2, or v3 database migrates it in one transaction and preserves existing namespaces, blocks, events, jobs, and receipts. SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.
+SQLite schema v5 includes normalized element, fact, provenance, projection-job, ingestion-receipt, usage-audit, and optional thread ownership for messages and Blocks. Usage receipts can carry the DSH session, turn, retrieval batch, assessment, and exact evidence references that led to an answer. Opening a schema-v1 through v4 database migrates it in one transaction and preserves existing namespaces, blocks, events, jobs, and receipts. Pre-v5 Blocks retain no inferred thread ownership, so they remain archival provenance without being attached to a new session. SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.

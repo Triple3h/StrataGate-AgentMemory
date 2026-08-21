@@ -70,9 +70,9 @@ Removing the plugin does not delete that database.
 - Subagent turns are not ingested by default; subagents in the same project can still read project memory.
 - Each DSH turn has a durable ingestion receipt, so replay or retry cannot store it twice.
 - StrataGate performs the existing Block summarization, Event extraction, Element projection, search, Evidence Gate, and use-only reinforcement.
-- Before every main-model call, the plugin injects the complete open tail, each sealed Block at its current decay-pointer level, and up to four activated Events plus four active Element facts.
+- Before every main-model call, the plugin injects only the current session's open tail and sealed Blocks, plus up to four project-scoped activated Events and four active Element facts. Blocks remain persisted as source evidence, but they are never automatically carried into another session.
 
-Activated memory uses the current human message plus the latest two open-tail turns as its query. Existing BM25 search remains the lexical relevance gate; pinned and safety memory are the only exceptions. Existing memory weights provide a second ranking, and RRF fuses the relevance and weight rankings. The activated section has a fixed budget of about 900 tokens, so it does not grow with the database.
+Activated memory uses the current human message plus the latest two open-tail turns from the current session as its query. Existing BM25 search remains the lexical relevance gate; pinned and safety memory are the only exceptions. Existing memory weights provide a second ranking, and RRF fuses the relevance and weight rankings. The activated section has a fixed budget of about 900 tokens, so it does not grow with the database.
 
 Automatic context contains only compact Event and fact fields and is explicitly marked as historical background rather than instructions. Building it never calls `recordMemoryUse`, increments `mentionCount`, or changes `lastAdoptedTurn`. The existing `memory_*` tools remain available for deeper, evidence-gated retrieval and are the only path to adoption reinforcement.
 

@@ -111,6 +111,7 @@ export class TurnFolder {
         return {
           user: pending.user.join('\n\n'),
           assistant: pending.assistant.join('\n\n') || reasonLabel(event.data.reason),
+          threadId: sessionId,
           assistantToolCalls: [...pending.tools.values()],
           createdAt: toUtc8Iso(event.time),
           receiptId: `dsh:${sessionId}:turn:${event.data.turn}`,

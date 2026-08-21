@@ -48,6 +48,7 @@ interface SpaceRow {
 interface MessageRow {
   id: string;
   block_id: string | null;
+  thread_id: string | null;
   position: number;
   role: RawMessage['role'];
   content: string;
@@ -57,6 +58,7 @@ interface MessageRow {
 
 interface BlockRow {
   id: string;
+  thread_id: string | null;
   sequence: number;
   start_turn: number;
   end_turn: number;
@@ -203,6 +205,7 @@ CREATE TABLE IF NOT EXISTS memory_spaces (
 CREATE TABLE IF NOT EXISTS blocks (
   namespace TEXT NOT NULL,
   id TEXT NOT NULL,
+  thread_id TEXT,
   sequence INTEGER NOT NULL,
   start_turn INTEGER NOT NULL,
   end_turn INTEGER NOT NULL,
@@ -227,6 +230,7 @@ CREATE TABLE IF NOT EXISTS messages (
   namespace TEXT NOT NULL,
   id TEXT NOT NULL,
   block_id TEXT,
+  thread_id TEXT,
   position INTEGER NOT NULL,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -391,6 +395,11 @@ CREATE TABLE IF NOT EXISTS ingestion_receipts (
 ) STRICT;
 `;
 
+const THREAD_INDEXES = `
+CREATE INDEX IF NOT EXISTS messages_thread_idx ON messages(namespace, thread_id, position);
+CREATE INDEX IF NOT EXISTS blocks_thread_idx ON blocks(namespace, thread_id, sequence);
+`;
+
 function parseJson<T>(value: string, label: string): T {
   try {
     return JSON.parse(value) as T;
@@ -443,7 +452,7 @@ export class SqliteStorage implements StorageAdapter {
     }
 
     const messageRows = this.database.prepare(`
-      SELECT id, block_id, position, role, content, created_at, tool_calls_json
+      SELECT id, block_id, thread_id, position, role, content, created_at, tool_calls_json
       FROM messages WHERE namespace = ? ORDER BY block_id, position
     `).all(key) as unknown as MessageRow[];
     const openTail: RawMessage[] = [];
@@ -454,6 +463,7 @@ export class SqliteStorage implements StorageAdapter {
         role: row.role,
         content: row.content,
         createdAt: row.created_at,
+        ...(row.thread_id ? { threadId: row.thread_id } : {}),
         ...(row.tool_calls_json ? { toolCalls: parseJson<ToolTrace[]>(row.tool_calls_json, 'messages.tool_calls_json') } : {}),
       };
       if (row.block_id === null) openTail.push(message);
@@ -469,6 +479,7 @@ export class SqliteStorage implements StorageAdapter {
     `).all(key) as unknown as BlockRow[];
     const blocks: MemoryBlock[] = blockRows.map((row) => ({
       id: row.id,
+      ...(row.thread_id ? { threadId: row.thread_id } : {}),
       sequence: row.sequence,
       startTurn: row.start_turn,
       endTurn: row.end_turn,
@@ -733,11 +744,12 @@ export class SqliteStorage implements StorageAdapter {
 
     const insertBlock = this.database.prepare(`
       INSERT INTO blocks (
-        namespace, id, sequence, start_turn, end_turn, created_at, should_extract,
+        namespace, id, thread_id, sequence, start_turn, end_turn, created_at, should_extract,
         l0_title, l0_tags_json, l1_summary, l2_keypoints_json, l3_condensed, l4_readable,
         pointer_current_level, pointer_anchor_level, pointer_anchor_turn, last_lifted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
+        thread_id = excluded.thread_id,
         sequence = excluded.sequence,
         start_turn = excluded.start_turn,
         end_turn = excluded.end_turn,
@@ -758,6 +770,7 @@ export class SqliteStorage implements StorageAdapter {
       insertBlock.run(
         namespace,
         block.id,
+        block.threadId ?? null,
         block.sequence,
         block.startTurn,
         block.endTurn,
@@ -778,10 +791,11 @@ export class SqliteStorage implements StorageAdapter {
 
     const insertMessage = this.database.prepare(`
       INSERT INTO messages (
-        namespace, id, block_id, position, role, content, created_at, tool_calls_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        namespace, id, block_id, thread_id, position, role, content, created_at, tool_calls_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
         block_id = excluded.block_id,
+        thread_id = excluded.thread_id,
         position = excluded.position,
         role = excluded.role,
         content = excluded.content,
@@ -794,6 +808,7 @@ export class SqliteStorage implements StorageAdapter {
           namespace,
           message.id,
           blockId,
+          message.threadId ?? null,
           position,
           message.role,
           message.content,
@@ -1046,9 +1061,10 @@ export class SqliteStorage implements StorageAdapter {
     if (version === 0) {
       this.immediateTransaction(() => {
         this.database.exec(SCHEMA);
+        this.database.exec(THREAD_INDEXES);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
-    } else if (version === 1 || version === 2 || version === 3) {
+    } else if (version === 1 || version === 2 || version === 3 || version === 4) {
       this.immediateTransaction(() => {
         if (version === 1) {
           const receiptColumns = this.database.prepare("PRAGMA table_info('usage_receipts')").all() as unknown as Array<{ name: string }>;
@@ -1061,12 +1077,22 @@ export class SqliteStorage implements StorageAdapter {
           this.database.exec("ALTER TABLE usage_receipts ADD COLUMN audit_json TEXT NOT NULL DEFAULT '{}'");
         }
         this.database.exec(SCHEMA);
+        const blockColumns = this.database.prepare("PRAGMA table_info('blocks')").all() as unknown as Array<{ name: string }>;
+        if (!blockColumns.some(({ name }) => name === 'thread_id')) {
+          this.database.exec('ALTER TABLE blocks ADD COLUMN thread_id TEXT');
+        }
+        const messageColumns = this.database.prepare("PRAGMA table_info('messages')").all() as unknown as Array<{ name: string }>;
+        if (!messageColumns.some(({ name }) => name === 'thread_id')) {
+          this.database.exec('ALTER TABLE messages ADD COLUMN thread_id TEXT');
+        }
+        this.database.exec(THREAD_INDEXES);
         this.database.prepare('UPDATE memory_spaces SET schema_version = ? WHERE schema_version < ?')
           .run(STRATAGATE_STORAGE_SCHEMA_VERSION, STRATAGATE_STORAGE_SCHEMA_VERSION);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
     } else if (version === STRATAGATE_STORAGE_SCHEMA_VERSION) {
       this.database.exec(SCHEMA);
+      this.database.exec(THREAD_INDEXES);
     }
     this.assertSchemaVersion();
   }

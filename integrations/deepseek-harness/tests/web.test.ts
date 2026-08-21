@@ -6,7 +6,7 @@ import { handleAdminRequest, type WebResponse } from '../src/web.js'
 const fullFailure = 'StrataGate model response was not valid JSON\nRaw response (full):\n' + 'x'.repeat(600)
 
 const snapshot: StrataGateSnapshot = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   currentTurn: 8,
   blockTurnSize: 4,
   openTail: [],
