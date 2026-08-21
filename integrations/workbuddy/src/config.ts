@@ -84,7 +84,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string
     baseUrl,
     model: modelName,
     ...(apiKey ? { apiKey } : {}),
-    maxOutputTokens: integer(env.STRATAGATE_MODEL_MAX_OUTPUT_TOKENS, 2_048, 256, 16_384),
+    maxOutputTokens: integer(env.STRATAGATE_MODEL_MAX_OUTPUT_TOKENS, 10_000, 256, 16_384),
   } : undefined
   const workBuddyModel = disabled(env.STRATAGATE_DISABLE_WORKBUDDY_MODEL) ? undefined : {
     ...workBuddyCommand(env),

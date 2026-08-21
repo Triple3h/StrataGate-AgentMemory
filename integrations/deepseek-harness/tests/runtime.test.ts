@@ -43,6 +43,173 @@ function turnEvents(): SessionEvent[] {
 }
 
 describe('DSH runtime ingestion', () => {
+  it('builds compact automatic context without reinforcing retrieved memories', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-auto-context-'))
+    const database = join(directory, 'memory.db')
+    const activeSession = {
+      ...session,
+      events: [],
+      deriveMessages: () => [{
+        id: 'current-user',
+        role: 'user',
+        content: [{ type: 'text', text: 'Continue with that plan.' }],
+        source: { kind: 'user' },
+      }],
+    } as unknown as Session
+    const runtime = new StrataGateRuntime({
+      database,
+      namespaceMode: 'project',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 2,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, fakeModels)
+    try {
+      const memory = await (runtime as unknown as { space: (session: Session) => Promise<StrataGate> })
+        .space(activeSession)
+      await memory.appendTurn({ user: 'Initial setup.', assistant: 'Ready.' })
+      await memory.appendTurn({ user: 'Seal this block.', assistant: 'Sealed.' })
+      const block = memory.listBlocks()[0]
+      expect(block).toBeDefined()
+
+      const relevant = await memory.addEvent({
+        title: 'Use pnpm',
+        summary: 'The project package manager is pnpm.',
+        narrative: 'PRIVATE NARRATIVE',
+        quotes: ['PRIVATE QUOTE'],
+        sourceMessageIds: [block!.l5Raw[0]!.id],
+        sourceBlockId: block!.id,
+        temporal: {
+          happenedStart: '2026-08-20T10:00:00+08:00',
+          happenedEnd: '2026-08-20T11:00:00+08:00',
+          status: 'ongoing',
+        },
+      })
+      const projection = await memory.claimNextElementProjection()
+      expect(projection).not.toBeNull()
+      await memory.completeElementProjection(projection!.jobId, {
+        reason: 'project tool',
+        changes: [{
+          element: { name: 'StrataGate', type: 'project' },
+          operation: 'set_state',
+          key: 'packageManager',
+          mode: 'state',
+          value: 'pnpm',
+          validFrom: '2026-08-20T10:00:00+08:00',
+          sourceEventIds: [relevant.id],
+        }],
+      })
+      const irrelevant = await memory.addEvent({
+        title: 'Unrelated archive note',
+        summary: 'A completely unrelated zebra record.',
+        sourceMessageIds: [block!.l5Raw[0]!.id],
+        sourceBlockId: block!.id,
+      })
+      const pinned = await memory.addEvent({
+        title: 'Pinned background',
+        summary: 'This pinned fact has no lexical overlap.',
+        sourceMessageIds: [block!.l5Raw[0]!.id],
+        sourceBlockId: block!.id,
+      })
+      await memory.pinEvent(pinned.id)
+      const safety = await memory.addEvent({
+        title: 'Safety background',
+        summary: 'This safety fact has no lexical overlap.',
+        sourceMessageIds: [block!.l5Raw[0]!.id],
+        sourceBlockId: block!.id,
+        criticality: 'safety',
+      })
+      await memory.appendTurn({ user: 'We chose pnpm earlier.', assistant: 'I will keep that in mind.' })
+
+      const before = new Map(memory.listEvents().map((event) => [
+        event.id,
+        [event.weight.mentionCount, event.weight.lastAdoptedTurn],
+      ]))
+      const context = await runtime.buildAutoContext(activeSession)
+
+      expect(context).toContain('[Current conversation]\nuser: We chose pnpm earlier.')
+      expect(context).toContain('[Decayed memory blocks]')
+      expect(context).toContain(`block ${block!.id} | turns 1-2 | L`)
+      expect(context).toContain('[Activated long-term memory]')
+      expect(context).toContain('Historical memory context.')
+      expect(context).toContain(relevant.id)
+      expect(context).toContain('"temporal":{"status":"ongoing"}')
+      expect(context).toContain('"elementId":')
+      expect(context).toContain('"key":"packageManager"')
+      expect(context).toContain(pinned.id)
+      expect(context).toContain(safety.id)
+      expect(context).not.toContain(irrelevant.id)
+      expect(context).not.toContain('PRIVATE NARRATIVE')
+      expect(context).not.toContain('PRIVATE QUOTE')
+      expect(context).not.toContain('sourceMessageIds')
+      expect(context).not.toContain('sourceEventIds')
+      expect(context).not.toContain('mentionCount')
+      expect((context.match(/^\- \{"id":"evt_/gm) ?? [])).toHaveLength(3)
+      expect((context.match(/^\- \{"elementId":/gm) ?? [])).toHaveLength(1)
+      for (const event of memory.listEvents()) {
+        expect([event.weight.mentionCount, event.weight.lastAdoptedTurn]).toEqual(before.get(event.id))
+      }
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('does not cache a rejected namespace opening after pending-work recovery fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-recovery-'))
+    const database = join(directory, 'memory.db')
+    let attempts = 0
+    const models = {
+      ...fakeModels,
+      run: async <T>(_session: Session, operation: () => Promise<T>): Promise<T> => {
+        if (attempts++ === 0) throw new Error('temporary recovery failure')
+        return operation()
+      },
+    } as unknown as DshModelBridge
+    const runtime = new StrataGateRuntime({
+      database,
+      namespaceMode: 'project',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 4,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, models)
+    try {
+      const space = (runtime as unknown as { space: (session: Session) => Promise<StrataGate> }).space
+      await expect(space.call(runtime, session)).rejects.toThrow('temporary recovery failure')
+      await expect(space.call(runtime, session)).resolves.toBeInstanceOf(StrataGate)
+    } finally {
+      await runtime.close().catch(() => {})
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('applies the configured block cadence to existing namespaces before the admin UI reads them', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-cadence-'))
+    const database = join(directory, 'memory.db')
+    const namespace = 'dsh:project:cadence'
+    const seed = await StrataGate.open({ database, namespace, blockTurnSize: 4 })
+    await seed.close()
+    const runtime = new StrataGateRuntime({
+      database,
+      namespaceMode: 'project',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 6,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, fakeModels)
+    try {
+      await runtime.syncConfiguredBlockTurnSize()
+      expect((await runtime.adminSnapshot(namespace))?.blockTurnSize).toBe(6)
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('persists a folded DSH turn once even if the event bracket is delivered twice', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-runtime-'))
     const database = join(directory, 'memory.db')
@@ -109,10 +276,17 @@ describe('DSH runtime ingestion', () => {
       })
       await seed.appendTurn({ user: 'Use pnpm.', assistant: 'Okay.' })
       await seed.appendTurn({ user: 'Continue.', assistant: 'Okay.' })
+      const sourceBlock = seed.listBlocks()[0]!
+      await seed.addEvent({
+        title: 'pnpm alternative note',
+        summary: 'A second pnpm memory that should not be reinforced unless selected.',
+        sourceMessageIds: [sourceBlock.l5Raw[0]!.id],
+        sourceBlockId: sourceBlock.id,
+      })
       await seed.close()
 
       const batch = await runtime.searchEvents(activeSession, 'pnpm') as { batchId: string; evidenceRefs: string[] }
-      expect(batch.evidenceRefs).toHaveLength(1)
+      expect(batch.evidenceRefs).toHaveLength(2)
       await runtime.assess(activeSession, {
         verdict: 'sufficient',
         evidence_refs: batch.evidenceRefs,
@@ -120,7 +294,10 @@ describe('DSH runtime ingestion', () => {
         missing: '',
         next_strategy: 'answer',
       })
-      await runtime.recordUse(activeSession, 'call-audit-1')
+      expect(runtime.needsRecordUse(activeSession)).toBe(true)
+      const selectedRefs = [batch.evidenceRefs[0]!]
+      await runtime.recordUse(activeSession, 'call-audit-1', selectedRefs)
+      expect(runtime.needsRecordUse(activeSession)).toBe(false)
 
       const audit = (await runtime.adminSnapshot(namespace))?.usageReceipts[0]
       expect(audit).toMatchObject({
@@ -129,11 +306,30 @@ describe('DSH runtime ingestion', () => {
           sessionId: 'session-runtime',
           turn: 9,
           batchId: batch.batchId,
-          evidenceRefs: batch.evidenceRefs,
+          evidenceRefs: selectedRefs,
           verdict: 'sufficient',
           nextStrategy: 'answer',
         },
       })
+
+      const afterSelected = await runtime.adminSnapshot(namespace)
+      const selectedEventId = selectedRefs[0]!.slice('event:'.length)
+      expect(afterSelected?.events.find(({ id }) => id === selectedEventId)?.weight.mentionCount).toBe(2)
+      expect(afterSelected?.events.find(({ id }) => id !== selectedEventId)?.weight.mentionCount).toBe(1)
+      const mentionCounts = new Map(afterSelected?.events.map((event) => [event.id, event.weight.mentionCount]))
+      await runtime.searchEvents(activeSession, 'pnpm')
+      expect(runtime.needsRecordUse(activeSession)).toBe(true)
+      await runtime.recordUse(activeSession, 'call-audit-zero', [])
+      expect(runtime.needsRecordUse(activeSession)).toBe(false)
+      const afterZero = await runtime.adminSnapshot(namespace)
+      for (const event of afterZero?.events ?? []) {
+        expect(event.weight.mentionCount).toBe(mentionCounts.get(event.id))
+      }
+      expect(afterZero?.usageReceipts).toContainEqual(expect.objectContaining({
+        id: 'dsh:session-runtime:tool:call-audit-zero',
+        eventIds: [],
+        elementIds: [],
+      }))
     } finally {
       await runtime.close()
       await rm(directory, { recursive: true, force: true })

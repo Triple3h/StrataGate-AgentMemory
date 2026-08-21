@@ -271,6 +271,39 @@ describe('SQLite persistence', () => {
     await restored.close();
   });
 
+  it('persists an explicitly reconfigured block turn size for an existing namespace', async () => {
+    const filename = await databasePath();
+    const first = await StrataGate.open({
+      database: filename,
+      namespace: 'project:block-size-change',
+      blockTurnSize: 4,
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    await first.appendTurn({ user: 'one', assistant: 'stored' });
+    await first.close();
+
+    const changed = await StrataGate.open({
+      database: filename,
+      namespace: 'project:block-size-change',
+      blockTurnSize: 6,
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    expect(changed.blockTurnSize).toBe(6);
+    expect(changed.listOpenTail()).toHaveLength(2);
+    await changed.close();
+
+    const restored = await StrataGate.open({
+      database: filename,
+      namespace: 'project:block-size-change',
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    expect(restored.blockTurnSize).toBe(6);
+    await restored.close();
+  });
+
   it('rejects a stale writer and rolls back its in-memory mutation', async () => {
     const filename = await databasePath();
     const first = await StrataGate.open({

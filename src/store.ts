@@ -23,6 +23,7 @@ import {
   type ElementProjectionJob,
   type ExtractionJob,
   type IngestionReceipt,
+  type SuccessfulModelResponse,
   type StorageAdapter,
   type StrataGateSnapshot,
   type UsageAudit,
@@ -49,6 +50,7 @@ import type {
   ToolTrace,
 } from './types.js';
 import { criticalityFloor, memoryWeightAt } from './weights.js';
+import { toUtc8Iso } from './time.js';
 
 export interface StrataGateOptions {
   blockTurnSize?: number;
@@ -113,6 +115,11 @@ export interface ResumePendingResult {
   projectedElements: ElementCard[];
 }
 
+export interface ResumePendingOptions {
+  /** Retry previously skipped extraction jobs once per block. */
+  retrySkipped?: boolean;
+}
+
 function defaultIdFactory(prefix: 'msg' | 'blk' | 'evt'): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -153,7 +160,11 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
 }
 
 function errorMessage(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 1_000);
+  if (error && typeof error === 'object' && 'fullMessage' in error) {
+    const fullMessage = (error as { fullMessage?: unknown }).fullMessage;
+    if (typeof fullMessage === 'string') return fullMessage;
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 const STRATAGATE_CONSTRUCTOR_TOKEN = Symbol('StrataGate constructor');
@@ -174,6 +185,7 @@ export class StrataGate {
   private readonly extractionJobs = new Map<string, ExtractionJob>();
   private readonly elementProjectionJobs = new Map<string, ElementProjectionJob>();
   private readonly usageReceipts = new Map<string, UsageReceipt>();
+  private readonly successfulModelResponses: SuccessfulModelResponse[] = [];
   private readonly ingestionReceipts = new Map<string, IngestionReceipt>();
   private currentTurn = 0;
   private storage: StorageAdapter | undefined;
@@ -228,10 +240,13 @@ export class StrataGate {
     if (!namespace) throw new TypeError('Storage namespace must not be empty');
     const loaded = await options.storage.load(namespace);
     const loadedSnapshot = loaded ? normalizeSnapshot(loaded.snapshot) : null;
+    let loadedRevision = loaded?.revision ?? 0;
     if (loaded && options.blockTurnSize !== undefined) {
       const requested = Math.max(1, Math.floor(options.blockTurnSize));
       if (requested !== loadedSnapshot?.blockTurnSize) {
-        throw new Error(`Stored blockTurnSize is ${loadedSnapshot?.blockTurnSize}, but ${requested} was requested`);
+        if (!loadedSnapshot) throw new Error('Loaded StrataGate state did not contain a snapshot');
+        loadedSnapshot.blockTurnSize = requested;
+        loadedRevision = await options.storage.save(namespace, loadedSnapshot, loadedRevision);
       }
     }
     const memoryOptions: StrataGateOptions = {};
@@ -248,11 +263,11 @@ export class StrataGate {
     memory.namespace = namespace;
     if (loaded && loadedSnapshot) {
       memory.restoreSnapshot(loadedSnapshot);
-      memory.revision = loaded.revision;
+      memory.revision = loadedRevision;
       const interrupted = [...memory.extractionJobs.values()].filter((job) => job.status === 'running');
       if (interrupted.length > 0) {
         await memory.commitMutation(() => {
-          const now = memory.now().toISOString();
+          const now = toUtc8Iso(memory.now());
           for (const job of interrupted) {
             memory.extractionJobs.set(job.blockId, {
               ...job,
@@ -267,7 +282,7 @@ export class StrataGate {
         .filter((job) => job.status === 'running');
       if (interruptedProjections.length > 0) {
         await memory.commitMutation(() => {
-          const now = memory.now().toISOString();
+          const now = toUtc8Iso(memory.now());
           for (const job of interruptedProjections) {
             memory.elementProjectionJobs.set(job.id, {
               ...job,
@@ -320,6 +335,23 @@ export class StrataGate {
     return [...this.usageReceipts.values()];
   }
 
+  listSuccessfulModelResponses(): readonly SuccessfulModelResponse[] {
+    return this.successfulModelResponses;
+  }
+
+  async recordSuccessfulModelResponses(responses: readonly SuccessfulModelResponse[]): Promise<void> {
+    if (responses.length === 0) return;
+    await this.commitMutation(() => {
+      for (const response of responses) {
+        if (this.successfulModelResponses.some(({ id }) => id === response.id)) continue;
+        this.successfulModelResponses.push(structuredClone(response));
+      }
+      if (this.successfulModelResponses.length > 5) {
+        this.successfulModelResponses.splice(0, this.successfulModelResponses.length - 5);
+      }
+    });
+  }
+
   exportSnapshot(): StrataGateSnapshot {
     return cloneSnapshot({
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
@@ -333,6 +365,7 @@ export class StrataGate {
       elementProjectionJobs: [...this.elementProjectionJobs.values()],
       usageReceipts: [...this.usageReceipts.values()],
       ingestionReceipts: [...this.ingestionReceipts.values()],
+      successfulModelResponses: this.successfulModelResponses,
     });
   }
 
@@ -345,7 +378,7 @@ export class StrataGate {
     if (input.receiptId !== undefined && !receiptId) {
       throw new TypeError('Turn receiptId must not be empty');
     }
-    const createdAt = input.createdAt ?? this.now().toISOString();
+    const createdAt = toUtc8Iso(input.createdAt ?? this.now());
     const userMessage: RawMessage = {
       id: this.idFactory('msg'),
       role: 'user',
@@ -383,7 +416,7 @@ export class StrataGate {
     return { sealedBlock, extractedEvents, projectedElements };
   }
 
-  async resumePendingWork(): Promise<ResumePendingResult> {
+  async resumePendingWork(options: ResumePendingOptions = {}): Promise<ResumePendingResult> {
     const sealedBlocks: MemoryBlock[] = [];
     const extractedEvents: EventCard[] = [];
     const projectedElements: ElementCard[] = [];
@@ -397,6 +430,19 @@ export class StrataGate {
       if (extracted === null) break;
       extractedEvents.push(...extracted);
       projectedElements.push(...(await this.projectEligibleElements() ?? []));
+    }
+    if (options.retrySkipped === true) {
+      const skippedBlockIds = this.blocks
+        .filter((block, index) => index < this.blocks.length - 1
+          && block.shouldExtract
+          && this.extractionJobs.get(block.id)?.status === 'skipped')
+        .map((block) => block.id);
+      for (const blockId of skippedBlockIds) {
+        const extracted = await this.extractEligibleBlock({ blockId, includeSkipped: true });
+        if (extracted === null) continue;
+        extractedEvents.push(...extracted);
+        projectedElements.push(...(await this.projectEligibleElements() ?? []));
+      }
     }
     while (true) {
       const projected = await this.projectEligibleElements();
@@ -478,7 +524,7 @@ export class StrataGate {
     }
     const ranked = rrfRank(rankings).slice(0, limit).map(({ item: event, score }) => ({ event, score }));
     if (ranked.length > 0) {
-      const now = this.now().toISOString();
+      const now = toUtc8Iso(this.now());
       await this.commitMutation(() => {
         for (const { event } of ranked) event.weight.lastRetrievedAt = now;
       });
@@ -498,7 +544,7 @@ export class StrataGate {
       job.status = 'running';
       job.attempts += 1;
       job.lastError = null;
-      job.updatedAt = this.now().toISOString();
+      job.updatedAt = toUtc8Iso(this.now());
       return {
         jobId: job.id,
         events: structuredClone(events),
@@ -519,17 +565,21 @@ export class StrataGate {
         events: this.events,
         changes: Array.isArray(result.changes) ? result.changes : [],
         allowedEventIds: new Set(job.sourceEventIds),
-        now: this.now().toISOString(),
+        now: toUtc8Iso(this.now()),
         currentTurn: this.currentTurn,
         idFactory: this.elementIdFactory,
       });
+      const normalizedReason = typeof result.reason === 'string'
+        ? result.reason.trim().replace(/\s+/g, ' ').slice(0, 500)
+        : '';
+      const warning = touched.length === 0 && job.sourceEventIds.length > 0
+        ? `0 changes projected from ${job.sourceEventIds.length} events${normalizedReason ? `: ${normalizedReason}` : '.'}`
+        : normalizedReason;
       job.status = 'completed';
       job.elementIds = touched.map(({ id }) => id);
-      job.reason = typeof result.reason === 'string'
-        ? result.reason.trim().replace(/\s+/g, ' ').slice(0, 500) || null
-        : null;
+      job.reason = warning.slice(0, 500) || null;
       job.lastError = null;
-      job.updatedAt = this.now().toISOString();
+      job.updatedAt = toUtc8Iso(this.now());
       return touched;
     });
   }
@@ -540,7 +590,7 @@ export class StrataGate {
       if (job.status === 'completed') return;
       job.status = 'failed';
       job.lastError = errorMessage(error);
-      job.updatedAt = this.now().toISOString();
+      job.updatedAt = toUtc8Iso(this.now());
     });
   }
 
@@ -589,7 +639,7 @@ export class StrataGate {
     }
     const ranked = rrfRank(rankings).slice(0, Math.max(1, Math.min(12, options.limit ?? 8)));
     if (ranked.length > 0) {
-      const now = this.now().toISOString();
+      const now = toUtc8Iso(this.now());
       await this.commitMutation(() => {
         for (const elementId of new Set(ranked.map(({ item }) => item.elementId))) {
           const element = this.elements.find(({ id }) => id === elementId);
@@ -656,7 +706,7 @@ export class StrataGate {
       block.pointerCurrentLevel = level;
       block.pointerAnchorLevel = level;
       block.pointerAnchorTurn = this.currentTurn;
-      block.lastLiftedAt = this.now().toISOString();
+      block.lastLiftedAt = toUtc8Iso(this.now());
       return {
         id: block.id,
         turnRange: [block.startTurn, block.endTurn] as [number, number],
@@ -693,7 +743,7 @@ export class StrataGate {
     }
 
     await this.commitMutation(() => {
-      const now = this.now().toISOString();
+      const now = toUtc8Iso(this.now());
       for (const id of requestedEventIds) {
         const event = this.events.find((candidate) => candidate.id === id);
         if (!event || event.status === 'forgotten' || event.status === 'archived') continue;
@@ -722,7 +772,7 @@ export class StrataGate {
     await this.commitMutation(() => {
       const event = this.requireEvent(id);
       event.weight.pinned = pinned;
-      event.updatedAt = this.now().toISOString();
+      event.updatedAt = toUtc8Iso(this.now());
     });
   }
 
@@ -730,7 +780,7 @@ export class StrataGate {
     await this.commitMutation(() => {
       const event = this.requireEvent(id);
       event.status = 'forgotten';
-      event.updatedAt = this.now().toISOString();
+      event.updatedAt = toUtc8Iso(this.now());
     });
   }
 
@@ -738,7 +788,7 @@ export class StrataGate {
     await this.commitMutation(() => {
       const event = this.requireEvent(id);
       event.status = 'active';
-      event.updatedAt = this.now().toISOString();
+      event.updatedAt = toUtc8Iso(this.now());
     });
   }
 
@@ -752,7 +802,7 @@ export class StrataGate {
     const validIds = new Set(sourceBlock.l5Raw.map((message) => message.id));
     const requestedRefs = [...new Set(input.sourceMessageIds.filter((id) => validIds.has(id)))];
     const sourceMessageIds = requestedRefs.length > 0 ? requestedRefs : sourceBlock.l5Raw.map((message) => message.id);
-    const now = this.now().toISOString();
+    const now = toUtc8Iso(this.now());
     const criticality = input.criticality ?? 'routine';
     const event: EventCard = {
       id: input.id ?? this.idFactory('evt'),
@@ -809,7 +859,7 @@ export class StrataGate {
   private queueElementProjection(sourceEventIds: readonly string[]): ElementProjectionJob | null {
     const ids = [...new Set(sourceEventIds.filter((id) => this.events.some((event) => event.id === id)))];
     if (ids.length === 0) return null;
-    const now = this.now().toISOString();
+    const now = toUtc8Iso(this.now());
     const job: ElementProjectionJob = {
       id: this.elementIdFactory('proj'),
       sourceEventIds: ids,
@@ -859,7 +909,7 @@ export class StrataGate {
         sequence,
         startTurn,
         endTurn,
-        createdAt: raw.at(-1)?.createdAt ?? this.now().toISOString(),
+        createdAt: raw.at(-1)?.createdAt ?? toUtc8Iso(this.now()),
         l0Title: generated.l0Title,
         l0Tags: generated.l0Tags,
         l1Summary: generated.l1Summary,
@@ -877,12 +927,13 @@ export class StrataGate {
     });
   }
 
-  private async extractEligibleBlock(): Promise<EventCard[] | null> {
+  private async extractEligibleBlock(options: { blockId?: string; includeSkipped?: boolean } = {}): Promise<EventCard[] | null> {
     if (!this.extractor || this.blocks.length < 2) return null;
     const targetIndex = this.blocks.findIndex((block, index) => {
       if (index >= this.blocks.length - 1 || !block.shouldExtract) return false;
+      if (options.blockId !== undefined && block.id !== options.blockId) return false;
       const status = this.extractionJobs.get(block.id)?.status;
-      return status === undefined || status === 'failed';
+      return status === undefined || status === 'failed' || (options.includeSkipped === true && status === 'skipped');
     });
     if (targetIndex < 0) return null;
     const target = this.blocks[targetIndex];
@@ -891,7 +942,8 @@ export class StrataGate {
     const existing = this.extractionJobs.get(target.id);
     await this.commitMutation(() => {
       const currentStatus = this.extractionJobs.get(target.id)?.status;
-      if (currentStatus !== undefined && currentStatus !== 'failed') {
+      const canRetrySkipped = options.includeSkipped === true && currentStatus === 'skipped';
+      if (currentStatus !== undefined && currentStatus !== 'failed' && !canRetrySkipped) {
         throw new Error(`Extraction block ${target.id} is already ${currentStatus}`);
       }
       this.extractionJobs.set(target.id, {
@@ -899,7 +951,7 @@ export class StrataGate {
         status: 'running',
         attempts: (existing?.attempts ?? 0) + 1,
         lastError: null,
-        updatedAt: this.now().toISOString(),
+        updatedAt: toUtc8Iso(this.now()),
       });
     });
 
@@ -919,10 +971,25 @@ export class StrataGate {
           ...job,
           status: 'failed',
           lastError: errorMessage(error),
-          updatedAt: this.now().toISOString(),
+          updatedAt: toUtc8Iso(this.now()),
         });
       });
       throw error;
+    }
+
+    if (result.shouldExtract && result.events.length === 0) {
+      const reason = `Extractor requested extraction but returned no valid events${result.reason.trim() ? `: ${result.reason.trim()}` : '.'}`;
+      await this.commitMutation(() => {
+        const job = this.extractionJobs.get(target.id);
+        if (!job) return;
+        this.extractionJobs.set(target.id, {
+          ...job,
+          status: 'failed',
+          lastError: reason,
+          updatedAt: toUtc8Iso(this.now()),
+        });
+      });
+      throw new Error(reason);
     }
 
     return this.commitMutation(() => {
@@ -936,7 +1003,7 @@ export class StrataGate {
         ...job,
         status: result.shouldExtract ? 'succeeded' : 'skipped',
         lastError: null,
-        updatedAt: this.now().toISOString(),
+        updatedAt: toUtc8Iso(this.now()),
       });
       return extracted;
     });
@@ -1009,6 +1076,7 @@ export class StrataGate {
     for (const receipt of copy.usageReceipts) this.usageReceipts.set(receipt.id, receipt);
     this.ingestionReceipts.clear();
     for (const receipt of copy.ingestionReceipts) this.ingestionReceipts.set(receipt.id, receipt);
+    this.successfulModelResponses.splice(0, this.successfulModelResponses.length, ...(copy.successfulModelResponses ?? []));
     this.validateReferences();
   }
 

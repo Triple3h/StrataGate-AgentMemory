@@ -31,11 +31,11 @@ export const Config: z<Config> = z.object({
   namespaceMode: z.union(['project', 'session', 'global'] as const).default('project'),
   namespacePrefix: z.string().default('dsh'),
   globalNamespace: z.string().default('global'),
-  blockTurnSize: z.natural().min(1).default(4),
+  blockTurnSize: z.natural().min(1).default(6),
   ingestSubagents: z.boolean().default(false),
   provider: z.string(),
   model: z.string(),
-  maxOutputTokens: z.natural().min(256).default(2_048),
+  maxOutputTokens: z.natural().min(256).default(10_000),
 })
 
 export function resolveConfig(config: Config): ResolvedConfig {
@@ -53,9 +53,9 @@ export function resolveConfig(config: Config): ResolvedConfig {
     namespaceMode: config.namespaceMode ?? 'project',
     namespacePrefix,
     globalNamespace,
-    blockTurnSize: Math.max(1, Math.floor(config.blockTurnSize ?? 4)),
+    blockTurnSize: Math.max(1, Math.floor(config.blockTurnSize ?? 6)),
     ingestSubagents: config.ingestSubagents ?? false,
     ...(provider && model ? { provider, model } : {}),
-    maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 2_048)),
+    maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 10_000)),
   }
 }

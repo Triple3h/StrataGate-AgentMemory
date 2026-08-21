@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { nowUtc8 } from '@diqier/stratagate'
 
 export interface EvidenceTarget {
   eventIds: string[]
@@ -117,7 +118,7 @@ export class WorkBuddyState {
     await mkdir(dirname(path), { recursive: true })
     try {
       await writeFile(path, `${JSON.stringify({
-        shownAt: new Date().toISOString(),
+        shownAt: nowUtc8(),
         usageRecords,
       } satisfies StarPromptState)}\n`, { encoding: 'utf8', flag: 'wx' })
       return true

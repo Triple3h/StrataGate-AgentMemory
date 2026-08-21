@@ -1,4 +1,5 @@
 import { open, stat } from 'node:fs/promises'
+import { nowUtc8 } from '@diqier/stratagate'
 import { resolveConfig } from './config.js'
 import { WorkBuddyRuntime } from './runtime.js'
 import { foldLatestTurn, parseJsonLines } from './transcript.js'
@@ -71,7 +72,7 @@ async function userPrompt(input: HookInput): Promise<unknown> {
     prompt,
     transcriptPath: input.transcript_path?.trim() ?? '',
     projectDir: config.projectDir,
-    receivedAt: new Date().toISOString(),
+    receivedAt: nowUtc8(),
   })
   const recalled = await runtime.initialContext(sessionId, prompt)
   return success(recalled.context || undefined)
@@ -98,7 +99,7 @@ async function stop(input: HookInput): Promise<unknown> {
   await runtime.state.writeCursor(sessionId, {
     transcriptPath,
     offset: delta.endOffset,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowUtc8(),
   })
   return success()
 }

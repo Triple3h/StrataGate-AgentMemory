@@ -8,6 +8,7 @@ import {
   type ExtractionJob,
   type IngestionReceipt,
   type LoadedStrataGateState,
+  type SuccessfulModelResponse,
   type StorageAdapter,
   type StrataGateSnapshot,
   type UsageAudit,
@@ -29,6 +30,7 @@ import type {
   RawMessage,
   ToolTrace,
 } from './types.js';
+import { nowUtc8 } from './time.js';
 
 export interface SqliteStorageOptions {
   filename: string;
@@ -109,6 +111,13 @@ interface ExtractionJobRow {
   attempts: number;
   last_error: string | null;
   updated_at: string;
+}
+
+interface SuccessfulModelResponseRow {
+  id: string;
+  kind: SuccessfulModelResponse['kind'];
+  response: string;
+  created_at: string;
 }
 
 interface UsageReceiptRow {
@@ -335,6 +344,16 @@ CREATE TABLE IF NOT EXISTS extraction_jobs (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (namespace, block_id),
   FOREIGN KEY (namespace, block_id) REFERENCES blocks(namespace, id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_response_history (
+  namespace TEXT NOT NULL,
+  id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  response TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (namespace, id),
+  FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS element_projection_jobs (
@@ -607,6 +626,16 @@ export class SqliteStorage implements StorageAdapter {
       updatedAt: row.updated_at,
     }));
 
+    const successfulModelResponses = (this.database.prepare(`
+      SELECT id, kind, response, created_at
+      FROM model_response_history WHERE namespace = ? ORDER BY created_at, id
+    `).all(key) as unknown as SuccessfulModelResponseRow[]).map<SuccessfulModelResponse>((row) => ({
+      id: row.id,
+      kind: row.kind,
+      response: row.response,
+      createdAt: row.created_at,
+    }));
+
     const usageReceipts = (this.database.prepare(`
       SELECT receipt_id, event_ids_json, element_ids_json, audit_json, created_at
       FROM usage_receipts WHERE namespace = ? ORDER BY created_at, receipt_id
@@ -641,6 +670,7 @@ export class SqliteStorage implements StorageAdapter {
       elementProjectionJobs,
       usageReceipts,
       ingestionReceipts,
+      successfulModelResponses,
     };
     assertValidSnapshot(snapshot);
     return { snapshot: cloneSnapshot(snapshot), revision: space.revision };
@@ -671,7 +701,7 @@ export class SqliteStorage implements StorageAdapter {
     }
 
     const nextRevision = expectedRevision + 1;
-    const updatedAt = new Date().toISOString();
+    const updatedAt = nowUtc8();
     if (current) {
       this.database.prepare(`
         UPDATE memory_spaces
@@ -996,6 +1026,15 @@ export class SqliteStorage implements StorageAdapter {
       insertIngestionReceipt.run(namespace, receipt.id, receipt.createdAt);
     }
 
+    this.database.prepare('DELETE FROM model_response_history WHERE namespace = ?').run(namespace);
+    const insertSuccessfulModelResponse = this.database.prepare(`
+      INSERT INTO model_response_history (namespace, id, kind, response, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const response of snapshot.successfulModelResponses ?? []) {
+      insertSuccessfulModelResponse.run(namespace, response.id, response.kind, response.response, response.createdAt);
+    }
+
     return nextRevision;
   }
 
@@ -1026,6 +1065,8 @@ export class SqliteStorage implements StorageAdapter {
           .run(STRATAGATE_STORAGE_SCHEMA_VERSION, STRATAGATE_STORAGE_SCHEMA_VERSION);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
+    } else if (version === STRATAGATE_STORAGE_SCHEMA_VERSION) {
+      this.database.exec(SCHEMA);
     }
     this.assertSchemaVersion();
   }

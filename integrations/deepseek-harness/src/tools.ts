@@ -126,9 +126,15 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_record_use',
-    description: 'Record that the sufficient evidence from the last assessment was actually used. Call exactly once immediately before an answer that relies on memory.',
-    parameters: {},
+    description: 'Required after every StrataGate retrieval. Pass exactly the evidenceRefs actually used in the answer, or an empty array when none were used. Non-empty refs require a sufficient assessment of the latest batch.',
+    parameters: {
+      evidence_refs: { type: 'array', items: { type: 'string' }, required: true },
+    },
     output: jsonOutput,
-    execute: async (_args, exec) => runtime.recordUse(sessionOf(exec), String(exec.callId)) as never,
+    execute: async (args, exec) => runtime.recordUse(
+      sessionOf(exec),
+      String(exec.callId),
+      args.evidence_refs,
+    ) as never,
   }))
 }

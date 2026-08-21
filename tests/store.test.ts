@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { StrataGate, memoryWeightAt, type BlockSummarizer, type EventExtractor } from '../src/index.js';
+import { toUtc8Iso } from '../src/time.js';
 
 function ids(): (prefix: 'msg' | 'blk' | 'evt') => string {
   let value = 0;
@@ -30,6 +31,10 @@ const extractor: EventExtractor = async ({ target }) => ({
 });
 
 describe('StrataGate lifecycle', () => {
+  it('writes canonical timestamps with the UTC+8 offset', () => {
+    expect(toUtc8Iso('2026-08-20T00:00:00.000Z')).toBe('2026-08-20T08:00:00.000+08:00');
+  });
+
   it('rejects implicit construction so ephemeral storage stays explicit', () => {
     const UnsafeConstructor = StrataGate as unknown as new () => StrataGate;
     expect(() => new UnsafeConstructor()).toThrow('Use StrataGate.open() for SQLite');
@@ -67,5 +72,48 @@ describe('StrataGate lifecycle', () => {
     await memory.forgetEvent(event.id);
     expect(await memory.searchEvents('concise')).toHaveLength(0);
     expect(memory.listEvents()[0]?.sourceMessageIds.length).toBeGreaterThan(0);
+  });
+
+  it('fails extraction when the model requests events but returns none', async () => {
+    const extractorWithNoEvents: EventExtractor = async () => ({
+      shouldExtract: true,
+      reason: 'All source ids belonged to the neighboring block.',
+      events: [],
+    });
+    const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer, extractor: extractorWithNoEvents, idFactory: ids() });
+    await memory.appendTurn({ user: 'Target evidence', assistant: 'Recorded.' });
+    await expect(memory.appendTurn({ user: 'Next context', assistant: 'Continuing.' }))
+      .rejects.toThrow('returned no valid events');
+    expect(memory.listEvents()).toHaveLength(0);
+    expect(memory.listExtractionJobs()).toMatchObject([{
+      status: 'failed',
+      lastError: expect.stringContaining('All source ids belonged'),
+    }]);
+  });
+
+  it('retries skipped extraction jobs once when explicitly requested', async () => {
+    let attempts = 0;
+    const retryableExtractor: EventExtractor = async ({ target }) => {
+      attempts += 1;
+      if (attempts === 1) return { shouldExtract: false, reason: 'No event yet.', events: [] };
+      return {
+        shouldExtract: true,
+        reason: 'Event became available after retry.',
+        events: [{
+          title: 'Recovered event',
+          summary: 'Recovered after a bounded retry.',
+          sourceMessageIds: [target.l5Raw[0]?.id ?? 'missing'],
+          sourceBlockId: target.id,
+        }],
+      };
+    };
+    const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer, extractor: retryableExtractor, idFactory: ids() });
+    await memory.appendTurn({ user: 'First block', assistant: 'Recorded.' });
+    await memory.appendTurn({ user: 'Second block', assistant: 'Continuing.' });
+    expect(memory.listExtractionJobs()[0]?.status).toBe('skipped');
+    const resumed = await memory.resumePendingWork({ retrySkipped: true });
+    expect(resumed.extractedEvents).toHaveLength(1);
+    expect(memory.listExtractionJobs()[0]?.status).toBe('succeeded');
+    expect(attempts).toBe(2);
   });
 });

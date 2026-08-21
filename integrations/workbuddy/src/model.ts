@@ -10,6 +10,7 @@ import type {
   MemoryCriticality,
   MemoryElementType,
   MemoryScope,
+  MemoryBlock,
   RawMessage,
 } from '@diqier/stratagate'
 import type { ModelConfig, WorkBuddyModelConfig } from './config.js'
@@ -62,6 +63,29 @@ function strings(value: unknown): string[] {
 
 function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value.trim() : fallback
+}
+
+function l2Neighbor(block: MemoryBlock | null): Record<string, unknown> | null {
+  if (!block) return null
+  return {
+    blockId: block.id,
+    sequence: block.sequence,
+    startTurn: block.startTurn,
+    endTurn: block.endTurn,
+    l2Keypoints: block.l2Keypoints,
+  }
+}
+
+function extractorPayload(context: ExtractionContext): Record<string, unknown> {
+  return {
+    target: context.target,
+    neighbors: {
+      previous: l2Neighbor(context.previous),
+      next: l2Neighbor(context.next),
+    },
+    allowedSourceMessageIds: context.target.l5Raw.map((message) => message.id),
+    timeline: context.timeline,
+  }
 }
 
 function parseJsonResponse(value: string): unknown {
@@ -119,8 +143,8 @@ abstract class StructuredModelBridge {
   readonly extractor: EventExtractor = async (context: ExtractionContext) => {
     const validMessageIds = new Set(context.target.l5Raw.map((message) => message.id))
     const raw = object(await this.callJson(
-      'Extract only durable, evidence-backed events from target. Never invent source ids. Return JSON only: {shouldExtract:boolean,reason:string,events:[{title,summary,narrative,tags,quotes,sourceMessageIds,temporal,scope,criticality,confidence}]}. Events must be understandable later without the original chat. Use project scope for repository decisions, user scope for stable preferences/identity, and session scope for temporary task state. Do not turn an assistant statement that merely recalls older memory into a new event; require new human input or a new observable task/tool outcome from this target block.',
-      context,
+      'Extract only durable, evidence-backed events from target.l5Raw. The target block is the only legal source of new facts, quotations, and sourceMessageIds. neighbors.previous and neighbors.next are context-only L2 summaries; never extract from them. Every sourceMessageIds entry must exactly match allowedSourceMessageIds. If a fact appears only in a neighbor, do not extract it in this call. Return JSON only: {shouldExtract:boolean,reason:string,events:[{title,summary,narrative,tags,quotes,sourceMessageIds,temporal,scope,criticality,confidence}]}. Events must be understandable later without the original chat. Use project scope for repository decisions, user scope for stable preferences/identity, and session scope for temporary task state. Use ISO-8601 timestamps with the explicit +08:00 offset in temporal fields. Do not turn an assistant statement that merely recalls older memory into a new event; require new human input or a new observable task/tool outcome from target.l5Raw.',
+      extractorPayload(context),
       EXTRACTION_SCHEMA,
     ))
     const events = (Array.isArray(raw.events) ? raw.events : []).map((candidate): EventCardInput | null => {
@@ -146,7 +170,7 @@ abstract class StructuredModelBridge {
       }
     }).filter((event): event is EventCardInput => event !== null)
     return {
-      shouldExtract: raw.shouldExtract === true && events.length > 0,
+      shouldExtract: raw.shouldExtract === true,
       reason: text(raw.reason, events.length ? 'Durable evidence extracted.' : 'No durable evidence.'),
       events,
     }
