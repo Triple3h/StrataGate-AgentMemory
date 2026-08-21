@@ -17,7 +17,7 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": ["dist", "cordis.patch.yml", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": ["dist", "cordis.patch.yml", "README.md", "docs/README.zh-CN.md", "CHANGELOG.md", "LICENSE"],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {
@@ -33,6 +33,13 @@
     "prepare": "npm run build"
   },
   "keywords": [
+    "memory",
+    "dsh",
+    "deepseek",
+    "plugin",
+    "agent",
+    "cross-session",
+    "evidence",
     "deepseek-harness",
     "dsh-plugin",
     "agent-memory",
@@ -42,6 +49,9 @@
     "conversation-memory",
     "long-term-memory",
     "local-first",
+    "time-decay",
+    "usage-reinforcement",
+    "source-traceability",
     "source-tracing",
     "evidence-gate"
   ],

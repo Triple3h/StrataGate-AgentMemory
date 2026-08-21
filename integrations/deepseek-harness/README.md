@@ -1,6 +1,6 @@
 # StrataGate for DeepSeek Harness
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[English](README.md) · [简体中文](docs/README.zh-CN.md)
 
 Automatic, local-first cross-session memory for DeepSeek Harness. StrataGate remembers user preferences, project decisions, completed conversations, and tool results, then checks recalled evidence and can expand it back to the original messages before the agent answers. No separate memory server is required.
 

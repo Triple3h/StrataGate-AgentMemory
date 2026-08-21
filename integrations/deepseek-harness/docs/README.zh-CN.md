@@ -1,6 +1,6 @@
 # StrataGate for DeepSeek Harness
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[English](../README.md) · [简体中文](README.zh-CN.md)
 
 面向 DeepSeek Harness 的自动、本地优先跨会话记忆。StrataGate 能够记住用户偏好、项目决策、已完成的对话和工具结果；Agent 回答前会检查找回的证据，并可将其展开追溯到原始消息。无需单独部署记忆服务器。
 

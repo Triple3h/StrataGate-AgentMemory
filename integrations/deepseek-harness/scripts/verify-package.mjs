@@ -38,6 +38,7 @@ try {
     'package.json',
     'cordis.patch.yml',
     'README.md',
+    'docs/README.zh-CN.md',
     'CHANGELOG.md',
     'LICENSE',
     'dist/index.js',
@@ -46,6 +47,7 @@ try {
     'dist/client.d.ts',
   ]
   for (const path of required) assert(files.has(path), `Packed artifact is missing ${path}`)
+  assert(!files.has('README.zh-CN.md'), 'Localized README must not compete with README.md at the package root')
   for (const path of files) {
     assert(!/^(src|tests|scripts|benchmarks)\//.test(path), `Development file leaked into package: ${path}`)
     assert(!/\.(?:db|sqlite3?|pem|key)$/i.test(path), `Sensitive/runtime file leaked into package: ${path}`)
