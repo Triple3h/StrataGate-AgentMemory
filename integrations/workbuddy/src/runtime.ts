@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import {
   StrataGate,
+  nowUtc8,
   StorageConflictError,
   normalizeRetrievalAssessment,
   searchTokens,
@@ -280,7 +281,7 @@ export class WorkBuddyRuntime {
       namespace: batch.namespace,
       sessionId: batch.sessionId,
       projectDir: batch.projectDir,
-      createdAt: new Date().toISOString(),
+      createdAt: nowUtc8(),
       ...normalized,
       eventIds: [...eventIds],
       elementIds: [...elementIds],
@@ -352,7 +353,7 @@ export class WorkBuddyRuntime {
       namespace: this.config.namespace,
       sessionId,
       projectDir: this.config.projectDir,
-      createdAt: new Date().toISOString(),
+      createdAt: nowUtc8(),
       refs: Object.fromEntries(items.map((item) => [item.ref, item.target])),
     }
     await this.state.writeBatch(batch)

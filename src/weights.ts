@@ -1,4 +1,4 @@
-import type { EventCard, MemoryCriticality } from './types.js';
+import type { MemoryCriticality, MemoryStatus, MemoryWeight } from './types.js';
 
 const BASE_DECAY = 0.15;
 const REHEARSAL_FACTOR = 1.5;
@@ -10,12 +10,12 @@ export function criticalityFloor(criticality: MemoryCriticality): number {
   return 0;
 }
 
-export function memoryWeightAt(event: EventCard, currentTurn: number): number {
-  if (event.status === 'forgotten' || event.status === 'archived') return 0;
-  const elapsed = Math.max(0, currentTurn - event.weight.lastAdoptedTurn);
-  const mentionCount = Math.max(1, event.weight.mentionCount);
+export function memoryWeightAt(memory: { weight: MemoryWeight; status?: MemoryStatus }, currentTurn: number): number {
+  if (memory.status === 'forgotten' || memory.status === 'archived') return 0;
+  const elapsed = Math.max(0, currentTurn - memory.weight.lastAdoptedTurn);
+  const mentionCount = Math.max(1, memory.weight.mentionCount);
   const lambda = BASE_DECAY / (1 + REHEARSAL_FACTOR * Math.log(mentionCount));
-  const decayed = Math.max(event.weight.floorWeight, Math.exp(-lambda * elapsed));
-  const capped = event.weight.forcedCap === null ? decayed : Math.min(decayed, event.weight.forcedCap);
-  return event.weight.pinned ? 1 : capped;
+  const decayed = Math.max(memory.weight.floorWeight, Math.exp(-lambda * elapsed));
+  const capped = memory.weight.forcedCap === null ? decayed : Math.min(decayed, memory.weight.forcedCap);
+  return memory.weight.pinned ? 1 : capped;
 }

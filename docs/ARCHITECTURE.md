@@ -79,12 +79,14 @@ Short repeated natural-language messages are retained. L3 never performs semanti
 
 If block `N` is marked as a candidate, precise extraction waits until block `N+1` is sealed. The extractor receives:
 
-- previous block `N-1` for context, if it exists;
-- target block `N`, including its L5 source;
-- next block `N+1` for context;
+- target block `N`, including its L5 source and legal evidence IDs;
+- previous block `N-1` L2 keypoints for context, if it exists;
+- next block `N+1` L2 keypoints for context;
 - a compact timeline of existing event IDs, titles, and temporal fields.
 
-The target is the only legal source of new facts and quotations. Source message IDs are checked against the target block. The reference implementation falls back to all target messages when an extractor returns no valid source ID; stricter adapters may reject the card instead.
+The target is the only legal source of new facts and quotations. Neighbor blocks are context-only and must not contribute events or source references. Source message IDs are checked against the target block. The reference implementation falls back to all target messages when an extractor returns no valid source ID; stricter adapters may reject the card instead.
+
+The core callback retains full `MemoryBlock` objects for compatibility. Bundled model adapters project that callback into the target-first payload above, exposing only L2 keypoints for neighboring blocks.
 
 ## Event-card contract
 
@@ -209,7 +211,7 @@ External model calls are never made inside a database transaction:
 2. summarization runs outside the transaction, then sealing commits atomically;
 3. extraction first commits a running job, calls the extractor, then atomically commits either the event cards or a failed/skipped job state;
 4. element projection follows the same claim/call/complete boundary after its source events are durable;
-5. `resumePendingWork()` retries only failed or interrupted work after restart.
+5. `resumePendingWork()` retries only failed or interrupted work after restart; callers may explicitly request one bounded retry of skipped extraction jobs with `retrySkipped: true`.
 
 The adapter preserves these invariants:
 

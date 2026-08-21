@@ -12,6 +12,15 @@ export interface ExtractionJob {
   updatedAt: string;
 }
 
+export type SuccessfulModelResponseKind = 'summarizer' | 'extractor' | 'projector';
+
+export interface SuccessfulModelResponse {
+  id: string;
+  kind: SuccessfulModelResponseKind;
+  response: string;
+  createdAt: string;
+}
+
 export type ElementProjectionJobStatus = 'pending' | 'running' | 'completed' | 'failed';
 
 export interface ElementProjectionJob {
@@ -62,6 +71,7 @@ export interface StrataGateSnapshot {
   elementProjectionJobs: ElementProjectionJob[];
   usageReceipts: UsageReceipt[];
   ingestionReceipts: IngestionReceipt[];
+  successfulModelResponses?: SuccessfulModelResponse[];
 }
 
 export interface LoadedStrataGateState {
@@ -144,6 +154,10 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   }
   for (const key of ['openTail', 'blocks', 'events', 'elements', 'extractionJobs', 'elementProjectionJobs', 'usageReceipts', 'ingestionReceipts'] as const) {
     if (!Array.isArray(snapshot[key])) throw new TypeError(`Invalid StrataGate snapshot: ${key} must be an array`);
+  }
+  if (!Array.isArray(snapshot.successfulModelResponses)) snapshot.successfulModelResponses = [];
+  if (snapshot.successfulModelResponses.length > 5) {
+    snapshot.successfulModelResponses = snapshot.successfulModelResponses.slice(-5);
   }
   return snapshot;
 }

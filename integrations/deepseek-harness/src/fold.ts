@@ -1,6 +1,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolTrace, TurnInput } from '@diqier/stratagate'
+import { toUtc8Iso } from '@diqier/stratagate'
 
 interface PendingTurn {
   turn: number
@@ -111,7 +112,7 @@ export class TurnFolder {
           user: pending.user.join('\n\n'),
           assistant: pending.assistant.join('\n\n') || reasonLabel(event.data.reason),
           assistantToolCalls: [...pending.tools.values()],
-          createdAt: new Date(event.time).toISOString(),
+          createdAt: toUtc8Iso(event.time),
           receiptId: `dsh:${sessionId}:turn:${event.data.turn}`,
         }
       }

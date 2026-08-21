@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentDefaultModelConfig from '@deepseek-ai/dsh-agent-default-model'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { describe, expect, it } from 'vitest'
@@ -37,6 +39,54 @@ describe('DSH plugin composition', () => {
         name: 'tool:stratagate-memory',
         text: expect.stringContaining('StrataGate provides durable, evidence-gated memory'),
       }))
+
+      const session = {
+        id: 'auto-context-session',
+        header: { id: 'auto-context-session', version: 0, createdAt: 0, cwd: directory },
+        events: [],
+        deriveMessages: () => [],
+      } as unknown as Session
+      const steered: unknown[] = []
+      const agent = {
+        session,
+        steer: (message: unknown) => steered.push(message),
+      } as unknown as Agent
+      const scopedPrompt = await ctx.systemPrompt.assemble({
+        agent,
+      })
+      expect(scopedPrompt.contexts).toContainEqual(expect.objectContaining({
+        name: 'stratagate:auto-memory',
+        text: expect.stringContaining('[Activated long-term memory]'),
+      }))
+
+      const search = ctx.tools.get('memory_search_events')
+      const recordUse = ctx.tools.get('memory_record_use')
+      expect(search).toBeDefined()
+      expect(recordUse).toBeDefined()
+      await search!.execute({ query: 'nothing stored' }, {
+        agent,
+        callId: 'search-call',
+      } as never)
+      await ctx.serial('agent/turn-stopping', {
+        agent,
+        turn: 1,
+        signal: new AbortController().signal,
+      })
+      expect(steered).toHaveLength(1)
+      expect(steered[0]).toMatchObject({
+        source: { kind: 'plugin', plugin: 'stratagate-memory', form: 'instructions' },
+      })
+
+      await recordUse!.execute({ evidence_refs: [] }, {
+        agent,
+        callId: 'record-use-call',
+      } as never)
+      await ctx.serial('agent/turn-stopping', {
+        agent,
+        turn: 1,
+        signal: new AbortController().signal,
+      })
+      expect(steered).toHaveLength(1)
     } finally {
       await ctx.fiber.dispose()
       await rm(directory, { recursive: true, force: true })

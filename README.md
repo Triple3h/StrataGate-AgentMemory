@@ -78,6 +78,8 @@ Conversations are sealed into layered memories at different levels of detail, an
 
 By default, every 12 complete conversation turns are sealed into one memory block. Messages that have not yet reached the boundary remain in the open tail and are not compressed or extracted early.
 
+This is the core-library default. The DeepSeek Harness plugin defaults to 6 turns per Block so Event extraction becomes available sooner, and exposes `blockTurnSize` as a user setting.
+
 Each sealed block contains six levels of detail:
 
 | Level | Contents | Primary use |

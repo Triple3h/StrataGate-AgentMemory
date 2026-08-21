@@ -14,7 +14,7 @@
 
 [English](README.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
 
-**DeepSeek Harness 插件：**自动、本地优先的跨会话记忆，能够记住用户偏好、项目决策、历史对话和工具结果；Agent 回答前会检查找回的证据，并可追溯到原始消息。安装包为 `stratagate-dsh`，实现与使用说明见 [`integrations/deepseek-harness`](integrations/deepseek-harness)。
+**DeepSeek Harness 插件：**自动、本地优先的跨会话记忆，能够记住用户偏好、项目决策、历史对话和工具结果；Agent 回答前会检查找回的证据，并可追溯到原始消息。安装包为 `stratagate-dsh`，实现与使用说明见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/README.zh-CN.md)。
 
 **LoCoMo `conv-26`：StrataGate 10 次独立评审平均准确率为 80.46%，Mem0 base 为 63.22%（+17.24 个百分点）**
 
@@ -77,6 +77,8 @@ StrataGate 的目标不是让 Agent 每次检索更多，而是让它知道：**
 ### 1. 分层记忆：压缩视图，不丢来源
 
 默认每 12 轮完整对话封存为一个记忆块。尚未达到边界的消息保留在 open tail 中，不会提前压缩或抽取。
+
+这是核心库的默认值。DeepSeek Harness 插件为了更及时地产生 Event，默认每 6 轮封存一个 Block，并允许用户通过 `blockTurnSize` 自定义。
 
 每个已封存的块包含六种详细程度：
 
@@ -373,7 +375,7 @@ DeepSeek Harness 用户可以直接安装预构建插件：
 dsh plugin --profile web add stratagate-dsh
 ```
 
-DSH 适配层的行为、工具、配置和失败恢复方式见 [`integrations/deepseek-harness`](integrations/deepseek-harness)。
+DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/README.zh-CN.md)。
 
 ## 许可证
 

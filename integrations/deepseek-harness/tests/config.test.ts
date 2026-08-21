@@ -8,9 +8,9 @@ describe('DeepSeek Harness plugin config', () => {
       namespaceMode: 'project',
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
-      blockTurnSize: 4,
+      blockTurnSize: 6,
       ingestSubagents: false,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 10000,
     })
   })
 

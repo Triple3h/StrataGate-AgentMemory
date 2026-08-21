@@ -114,6 +114,25 @@ describe('element projection and retrieval', () => {
     expect(await memory.searchEvents('', { participants: ['StrataGate'] })).toHaveLength(1);
   });
 
+  it('records an explicit diagnostic when a projection has events but no valid changes', async () => {
+    const memory = StrataGate.inMemory({
+      blockTurnSize: 1,
+      summarizer,
+      extractor,
+      elementProjector: async () => ({ reason: 'Model returned no entity changes.', changes: [] }),
+      idFactory: ids(),
+      elementIdFactory: elementIds(),
+    });
+    await memory.appendTurn({ user: 'The project database is SQLite.', assistant: 'Recorded.' });
+    await memory.appendTurn({ user: 'Continue.', assistant: 'Okay.' });
+
+    const job = memory.listElementProjectionJobs()[0];
+    expect(job?.status).toBe('completed');
+    expect(job?.elementIds).toEqual([]);
+    expect(job?.reason).toBe('0 changes projected from 1 events: Model returned no entity changes.');
+    expect(memory.listElements()).toHaveLength(0);
+  });
+
   it('retries only a failed projection and rejects facts without batch provenance', async () => {
     const memory = StrataGate.inMemory({
       blockTurnSize: 1,
