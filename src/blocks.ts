@@ -2,7 +2,7 @@ import type { BlockLevel, RawMessage, ToolTrace } from './types.js';
 
 export const DEFAULT_BLOCK_TURN_SIZE = 12;
 export const BLOCK_MAX_LEVEL = 5;
-export const BLOCK_DECAY_LAMBDA = 0.05;
+export const BLOCK_DECAY_LAMBDA = 0.3;
 
 const FILLER_ONLY = new Set([
   'ok', 'okay', 'got it', 'thanks', 'thank you', 'yes', 'correct', 'sure',
@@ -17,16 +17,21 @@ function asBlockLevel(value: number): BlockLevel {
   return Math.max(0, Math.min(BLOCK_MAX_LEVEL, Math.round(value))) as BlockLevel;
 }
 
-export function getBlockWeight(anchorTurn: number, currentTurn: number): number {
-  return Math.exp(-BLOCK_DECAY_LAMBDA * Math.max(0, currentTurn - anchorTurn));
+export function getBlockWeight(
+  anchorBlockPosition: number,
+  latestBlockPosition: number,
+  lambda = BLOCK_DECAY_LAMBDA,
+): number {
+  return Math.exp(-lambda * Math.max(0, latestBlockPosition - anchorBlockPosition));
 }
 
 export function getDecayedBlockLevel(
   anchorLevel: BlockLevel,
-  anchorTurn: number,
-  currentTurn: number,
+  anchorBlockPosition: number,
+  latestBlockPosition: number,
+  lambda = BLOCK_DECAY_LAMBDA,
 ): BlockLevel {
-  const weight = getBlockWeight(anchorTurn, currentTurn);
+  const weight = getBlockWeight(anchorBlockPosition, latestBlockPosition, lambda);
   const droppedLevels = weight > 0.7
     ? 0
     : weight > 0.5

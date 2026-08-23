@@ -78,7 +78,7 @@ StrataGate 的目标不是让 Agent 每次检索更多，而是让它知道：**
 
 默认每 12 轮完整对话封存为一个记忆块。尚未达到边界的消息保留在 open tail 中，不会提前压缩或抽取。
 
-这是核心库的默认值。DeepSeek Harness 插件为了更及时地产生 Event，默认每 6 轮封存一个 Block，并允许用户通过 `blockTurnSize` 自定义。
+这是核心库的默认值。DeepSeek Harness 插件为了更及时地产生 Event，默认每 6 轮封存一个 Block，并允许用户通过 `blockTurnSize` 自定义。Block 的 age 是它与同一线程中最新已封存 Block 的距离，因此 open tail 中新增轮次不会触发衰减；默认 Block 衰减系数为 `0.30`。
 
 每个已封存的块包含六种详细程度：
 

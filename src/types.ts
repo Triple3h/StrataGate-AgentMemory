@@ -37,7 +37,7 @@ export interface MemoryBlock extends BlockLayers {
   shouldExtract: boolean;
   pointerCurrentLevel: BlockLevel;
   pointerAnchorLevel: BlockLevel;
-  pointerAnchorTurn: number;
+  pointerAnchorBlockPosition: number;
   lastLiftedAt: string | null;
 }
 

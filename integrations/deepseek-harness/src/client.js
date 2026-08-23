@@ -1,4 +1,4 @@
-// StrataGate Memory UI - read-only DSH settings page.
+// StrataGate AgentMemory UI for DSH.
 window.__ModuleLoader__.load({
   id: 'stratagate-dsh',
   factory: (require) => {
@@ -8,32 +8,31 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
     const STAR_REPOSITORY_URL = 'https://github.com/diqierjia/StrataGate-AgentMemory'
-    const STAR_DISMISSED_KEY = 'stratagate.starPrompt.dismissed.v1'
-    const STAR_PROMPT_USAGE_THRESHOLD = 3
+    const MASCOT_DATA_URL = '__STRATAGATE_MASCOT_DATA_URL__'
 
     const css = `
       .sg-memory {
-        color-scheme:light dark;
-        --sg-page:var(--dsh-color-background,var(--color-background,#fff));
-        --sg-surface:var(--dsh-color-surface,var(--color-surface,#fff));
-        --sg-soft:var(--dsh-color-surface-secondary,var(--color-fill-secondary,#f6f7f9));
-        --sg-text:var(--dsh-color-text,var(--color-text,#1c2028));
-        --sg-muted:var(--dsh-color-text-secondary,var(--color-text-secondary,#707782));
-        --sg-border:var(--dsh-color-border,var(--color-border,#e2e5e9));
-        --sg-accent:var(--dsh-color-primary,var(--color-primary,#2563d9));
-        --sg-accent-soft:var(--dsh-color-primary-soft,#edf3ff);
-        --sg-good:var(--dsh-color-success,#16835b);
-        --sg-good-soft:var(--dsh-color-success-soft,#eaf8f1);
-        --sg-warn:var(--dsh-color-warning,#ad6200);
-        --sg-warn-soft:var(--dsh-color-warning-soft,#fff5e5);
-        --sg-danger:var(--dsh-color-danger,#c73b36);
-        --sg-danger-soft:var(--dsh-color-danger-soft,#fff0ef);
+        color-scheme:inherit;
+        --sg-page:var(--dsw-alias-bg-layer-2,#fff);
+        --sg-surface:var(--dsw-specific-input-major,var(--sg-page));
+        --sg-soft:var(--dsw-alias-interactive-bg-hover-solid,#f1f3f5);
+        --sg-text:var(--dsw-alias-label-primary,#0f1115);
+        --sg-muted:var(--dsw-alias-label-secondary,#61666b);
+        --sg-border:var(--dsw-alias-border-l2,rgba(0,0,0,.1));
+        --sg-accent:var(--dsw-alias-state-business-primary,#4176e6);
+        --sg-accent-soft:var(--dsw-alias-state-business-tertiary,#e4edfd);
+        --sg-good:var(--dsw-alias-state-success-primary,#22c55e);
+        --sg-good-soft:var(--dsw-alias-state-success-tertiary,#e6faed);
+        --sg-warn:var(--dsw-alias-state-warn-label,#dd8629);
+        --sg-warn-soft:var(--dsw-alias-state-warn-tertiary,#fef5e7);
+        --sg-danger:var(--dsw-alias-state-error-primary,#ec1313);
+        --sg-danger-soft:var(--dsw-alias-interactive-bg-hover-danger,rgba(236,19,19,.05));
         box-sizing:border-box;width:100%;max-width:680px;min-width:0;margin:0 auto;padding:16px 18px 32px;
         background:var(--sg-page);color:var(--sg-text);font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
         letter-spacing:0;overflow-wrap:anywhere;
       }
       .sg-memory *{box-sizing:border-box;letter-spacing:0}.sg-memory button,.sg-memory input,.sg-memory select{font:inherit;color:inherit}
-      .sg-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px}.sg-brand{display:flex;align-items:center;gap:9px;min-width:0}.sg-logo{width:30px;height:30px;display:grid;place-items:center;flex:0 0 auto;border-radius:7px;background:var(--sg-accent);color:#fff;font-size:17px;font-weight:750}.sg-brand-name{font-size:15px;font-weight:720;white-space:nowrap}
+      .sg-header{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin-bottom:11px}.sg-brand{display:flex;align-items:center;gap:9px;min-width:0;color:var(--sg-text);text-decoration:none}.sg-logo{width:34px;height:34px;display:block;object-fit:cover;flex:0 0 auto;border-radius:9px}.sg-brand-name{min-width:0;font-size:15px;font-weight:720;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sg-header-usage{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;width:100%;flex-wrap:wrap;color:var(--sg-muted);font-size:12px;line-height:1.4;text-align:right}.sg-header-star{white-space:nowrap;color:var(--sg-accent);text-decoration:none;font-weight:650}
       .sg-icon-button,.sg-back,.sg-quiet-button{border:0;background:transparent;cursor:pointer}.sg-icon-button{width:32px;height:32px;border-radius:6px;font-size:20px}.sg-icon-button:hover,.sg-back:hover,.sg-quiet-button:hover{background:var(--sg-soft)}
       .sg-project{display:flex;align-items:center;gap:7px;min-width:0;margin:0 0 9px;color:var(--sg-muted);font-size:12px}.sg-project-label{flex:0 0 auto}.sg-project-select{min-width:0;max-width:100%;padding:3px 22px 3px 5px;border:0;border-radius:5px;background:transparent;color:var(--sg-text);font-weight:620;cursor:pointer;text-overflow:ellipsis}
       .sg-tabs{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--sg-border);margin-bottom:20px}.sg-tab{position:relative;min-width:0;padding:10px 4px;border:0;background:transparent;color:var(--sg-muted);cursor:pointer;white-space:nowrap}.sg-tab.active{color:var(--sg-accent);font-weight:700}.sg-tab.active:after{content:"";position:absolute;left:18%;right:18%;bottom:-1px;height:2px;border-radius:2px;background:var(--sg-accent)}
@@ -43,31 +42,42 @@ window.__ModuleLoader__.load({
       .sg-status{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:5px;font-size:12px;font-weight:650}.sg-status:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.sg-status.organized{color:var(--sg-good);background:var(--sg-good-soft)}.sg-status.processing{color:var(--sg-accent);background:var(--sg-accent-soft)}.sg-status.waiting{color:var(--sg-muted);background:var(--sg-soft)}.sg-status.failed{color:var(--sg-warn);background:var(--sg-warn-soft)}
       .sg-backbar{display:flex;align-items:center;min-height:35px;margin:-4px 0 13px}.sg-back{display:inline-flex;align-items:center;gap:6px;margin-left:-7px;padding:6px 7px;border-radius:6px;font-weight:650}.sg-detail-header{padding-bottom:16px;border-bottom:1px solid var(--sg-border)}.sg-detail-section{padding:18px 0;border-bottom:1px solid var(--sg-border)}.sg-detail-section:last-child{border-bottom:0}.sg-section-title{margin:0 0 11px;font-size:14px;font-weight:730}.sg-prose{margin:0;white-space:pre-wrap}.sg-facts{margin:0;padding-left:20px}.sg-facts li+li{margin-top:7px}.sg-related-list{display:flex;flex-direction:column}.sg-related{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border:0;border-bottom:1px solid var(--sg-border);background:transparent;text-align:left;cursor:pointer}.sg-related:last-child{border-bottom:0}.sg-related-name{color:var(--sg-accent)}.sg-related-time{flex:0 0 auto;color:var(--sg-muted);font-size:12px}
       .sg-source-label{display:flex;align-items:center;gap:8px}.sg-source-icon{color:var(--sg-muted)}.sg-tech{margin-top:13px}.sg-tech summary{color:var(--sg-muted);font-size:12px;cursor:pointer}.sg-tech-body{margin-top:10px;padding:11px;border-radius:7px;background:var(--sg-soft);font-size:12px}.sg-tech-row{display:grid;grid-template-columns:88px minmax(0,1fr);gap:9px;padding:3px 0}.sg-code{font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.sg-raw-message{padding-top:10px;margin-top:10px;border-top:1px solid var(--sg-border)}
-      .sg-result-count{margin:0 0 9px;color:var(--sg-muted);font-size:12px}.sg-result-event{padding:8px 0;border-bottom:1px solid var(--sg-border)}.sg-result-event:last-child{border-bottom:0}.sg-pipeline{display:flex;flex-direction:column}.sg-stage{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:9px 0;border-bottom:1px solid var(--sg-border)}.sg-stage:last-child{border-bottom:0}.sg-stage-value{font-size:12px}.sg-stage-value.done{color:var(--sg-good)}.sg-stage-value.failed{color:var(--sg-danger)}.sg-stage-value.waiting{color:var(--sg-muted)}.sg-safe-note{padding:11px 12px;margin-bottom:12px;border-radius:7px;background:var(--sg-good-soft);color:var(--sg-good);font-weight:650}.sg-error-note{margin:8px 0 0;color:var(--sg-muted);font-size:12px}
+      .sg-result-count{margin:0 0 9px;color:var(--sg-muted);font-size:12px}.sg-result-event{padding:8px 0;border-bottom:1px solid var(--sg-border)}.sg-result-event:last-child{border-bottom:0}.sg-pipeline{display:flex;flex-direction:column}.sg-stage{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:9px 0;border-bottom:1px solid var(--sg-border)}.sg-stage:last-child{border-bottom:0}.sg-stage-value{font-size:12px}.sg-stage-value.done{color:var(--sg-good)}.sg-stage-value.failed{color:var(--sg-danger)}.sg-stage-value.waiting{color:var(--sg-muted)}.sg-lambda-control{display:flex;align-items:center;justify-content:flex-end;gap:7px}.sg-number-input{width:82px;padding:4px 5px;border:1px solid var(--sg-border);border-radius:6px;background:var(--sg-surface);text-align:right}.sg-setting-note{margin:7px 0 11px;color:var(--sg-muted);font-size:12px}.sg-safe-note{padding:11px 12px;margin-bottom:12px;border-radius:7px;background:var(--sg-good-soft);color:var(--sg-good);font-weight:650}.sg-error-note{margin:8px 0 0;color:var(--sg-muted);font-size:12px}
       .sg-menu{border-top:1px solid var(--sg-border)}.sg-menu-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:14px 2px;border:0;border-bottom:1px solid var(--sg-border);background:transparent;text-align:left;cursor:pointer}.sg-menu-row:hover .sg-menu-title{color:var(--sg-accent)}.sg-menu-icon{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;background:var(--sg-soft);color:var(--sg-muted)}.sg-menu-title{font-weight:680}.sg-menu-subtitle{color:var(--sg-muted);font-size:12px}.sg-counts{display:flex;gap:22px;padding:5px 0 18px;border-bottom:1px solid var(--sg-border)}.sg-count-value{font-size:22px;font-weight:740}.sg-count-label{color:var(--sg-muted);font-size:12px}.sg-structured-group{padding-top:17px}.sg-raw-group{padding:12px 0;border-bottom:1px solid var(--sg-border)}.sg-raw-group summary{cursor:pointer;font-weight:680}.sg-raw-json{max-height:360px;padding:11px;margin:10px 0 0;overflow:auto;border-radius:7px;background:var(--sg-soft)}
       .sg-audit{padding:14px 0;border-bottom:1px solid var(--sg-border)}.sg-audit summary{cursor:pointer}.sg-audit-body{margin-top:10px}.sg-audit-evidence{margin-top:9px}.sg-star{padding:14px 0;margin-top:14px;border-top:1px solid var(--sg-border)}.sg-star-actions{display:flex;gap:10px;align-items:center;margin-top:8px}.sg-link{color:var(--sg-accent);text-decoration:none}.sg-quiet-button{padding:5px 7px;border-radius:5px;color:var(--sg-muted);font-size:12px}
       .sg-loading{padding:32px 0}.sg-skeleton{height:12px;margin:10px 0;border-radius:4px;background:var(--sg-soft)}.sg-skeleton:nth-child(2){width:72%}.sg-empty{padding:34px 14px;text-align:center;color:var(--sg-muted)}.sg-empty strong{display:block;margin-bottom:5px;color:var(--sg-text)}.sg-error{padding:13px;margin-bottom:16px;border:1px solid color-mix(in srgb,var(--sg-danger) 28%,var(--sg-border));border-radius:8px;background:var(--sg-danger-soft)}.sg-error-title{font-weight:700;color:var(--sg-danger)}.sg-error details{margin-top:7px;font-size:12px}
       .sg-muted{color:var(--sg-muted);font-size:12px}
-      @media (prefers-color-scheme:dark){.sg-memory{--sg-page:var(--dsh-color-background,var(--color-background,#15171b));--sg-surface:var(--dsh-color-surface,var(--color-surface,#191c21));--sg-soft:var(--dsh-color-surface-secondary,var(--color-fill-secondary,#22262d));--sg-text:var(--dsh-color-text,var(--color-text,#edf0f4));--sg-muted:var(--dsh-color-text-secondary,var(--color-text-secondary,#9da5b0));--sg-border:var(--dsh-color-border,var(--color-border,#343942));--sg-accent:var(--dsh-color-primary,var(--color-primary,#78a7ff));--sg-accent-soft:var(--dsh-color-primary-soft,#192842);--sg-good:var(--dsh-color-success,#67ce9a);--sg-good-soft:var(--dsh-color-success-soft,#162a22);--sg-warn:var(--dsh-color-warning,#f0ad58);--sg-warn-soft:var(--dsh-color-warning-soft,#302519);--sg-danger:var(--dsh-color-danger,#ff8179);--sg-danger-soft:var(--dsh-color-danger-soft,#321e1f)}}
-      @media (max-width:440px){.sg-memory{padding:12px 12px 26px}.sg-brand-name{font-size:14px}.sg-tabs{margin-left:-2px;margin-right:-2px}.sg-tab{padding-left:0;padding-right:0}.sg-alert{grid-template-columns:auto minmax(0,1fr)}.sg-alert>.sg-chevron{display:none}.sg-tech-row{grid-template-columns:1fr;gap:1px}.sg-counts{gap:16px}.sg-entry-title{font-size:14px}}
+      @media (max-width:560px){.sg-memory{padding:12px 12px 26px}.sg-brand-name{font-size:14px}.sg-tabs{margin-left:-2px;margin-right:-2px}.sg-tab{padding-left:0;padding-right:0}.sg-alert{grid-template-columns:auto minmax(0,1fr)}.sg-alert>.sg-chevron{display:none}.sg-tech-row{grid-template-columns:1fr;gap:1px}.sg-counts{gap:16px}.sg-entry-title{font-size:14px}}
     `
 
-    function api(path, params) {
+    function api(path, params, options) {
       const query = new URLSearchParams(params || {})
-      return fetch('/api/stratagate/' + path + (query.size ? '?' + query : ''))
+      return fetch('/api/stratagate/' + path + (query.size ? '?' + query : ''), options)
         .then((res) => res.json().catch(() => ({})).then((data) => {
           if (!res.ok) throw new Error((data && data.error) || 'HTTP ' + res.status)
           return data
         }))
     }
 
-    function projectName(namespace) {
-      const value = String(namespace || '')
-      const marker = ':project:'
-      if (value.includes(marker)) return value.slice(value.indexOf(marker) + marker.length) || '当前项目'
+    function projectName(item, workspaceTitles = {}) {
+      const value = String(item?.namespace || item || '')
+      if (value.includes(':project:')) {
+        const key = value.split(':project:').pop()
+        if (key && workspaceTitles[key]) return workspaceTitles[key]
+        if (item?.workspaceName && item.workspaceName !== '当前工作区') return item.workspaceName
+        return '工作区名称读取中…'
+      }
+      if (item?.workspaceName) return item.workspaceName
       if (value.includes(':global:')) return value.split(':global:').pop() || '全局记忆'
       if (value.includes(':session:')) return '当前对话'
-      return value || '当前项目'
+      return value || '当前工作区'
+    }
+
+    function workspaceProjectKey(path) {
+      const canonical = String(path || '').replaceAll('\\', '/').toLowerCase()
+      if (!canonical || !globalThis.crypto?.subtle) return Promise.resolve('')
+      return globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical)).then((digest) =>
+        Array.from(new Uint8Array(digest).slice(0, 10), (byte) => byte.toString(16).padStart(2, '0')).join(''))
     }
 
     function formatTime(value) {
@@ -93,9 +103,6 @@ window.__ModuleLoader__.load({
       if (status === 'waiting') return '等待整理'
       return '整理中'
     }
-
-    function wasStarPromptDismissed() { try { return window.localStorage?.getItem(STAR_DISMISSED_KEY) === '1' } catch { return false } }
-    function rememberStarPromptDismissal() { try { window.localStorage?.setItem(STAR_DISMISSED_KEY, '1') } catch { /* no-op */ } }
 
     function Loading() {
       return h('div', { className: 'sg-loading', role: 'status' }, h('div', { className: 'sg-skeleton' }), h('div', { className: 'sg-skeleton' }), h('div', { className: 'sg-skeleton' }))
@@ -143,7 +150,7 @@ window.__ModuleLoader__.load({
         .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
       const elementMap = new Map(elements.map((element) => [element.id, element]))
       return h(React.Fragment, null,
-        h('div', { className: 'sg-intro' }, h('h2', null, 'AI 已形成的长期记忆'), h('p', null, '围绕当前项目整理出的经历与相关事物')),
+        h('div', { className: 'sg-intro' }, h('h2', null, 'AI 已形成的长期记忆'), h('p', null, '围绕当前工作区整理出的经历与相关事物')),
         h(SearchBox, { value: query, onChange: setQuery }),
         visible.length ? h('div', { className: 'sg-feed' }, visible.map((event) => h('article', { key: event.id, className: 'sg-entry' },
           h('button', { className: 'sg-entry sg-entry-button', style: { padding: 0, borderBottom: 0 }, onClick: () => openEvent(event) },
@@ -235,13 +242,6 @@ window.__ModuleLoader__.load({
         h('details', { className: 'sg-tech' }, h('summary', null, '技术错误详情'), h('pre', { className: 'sg-tech-body sg-code' }, first?.lastErrorFull || first?.lastError || '没有记录技术错误。')))
     }
 
-    function StarPrompt({ usageRecords }) {
-      const [dismissed, setDismissed] = React.useState(wasStarPromptDismissed)
-      if (dismissed || Number(usageRecords || 0) < STAR_PROMPT_USAGE_THRESHOLD) return null
-      const dismiss = () => { rememberStarPromptDismissal(); setDismissed(true) }
-      return h('div', { className: 'sg-star', 'data-testid': 'stratagate-star-prompt' }, h('strong', null, 'StrataGate 已在当前项目中帮助使用记忆 ', usageRecords, ' 次。'), h('div', { className: 'sg-star-actions' }, h('a', { className: 'sg-link', href: STAR_REPOSITORY_URL, target: '_blank', rel: 'noopener noreferrer', onClick: dismiss }, '在 GitHub 支持项目'), h('button', { className: 'sg-quiet-button', onClick: dismiss }, '不再提示')))
-    }
-
     function MoreHome({ selected, setView }) {
       const rows = [
         ['structure', '◇', '记忆结构', '浏览经历与相关事物'],
@@ -250,7 +250,7 @@ window.__ModuleLoader__.load({
         ['raw', '{}', '原始数据', 'Block、Event、Element 与模型响应'],
         ['settings', '⚙', '高级设置', 'Schema、提取间隔与项目空间'],
       ]
-      return h(React.Fragment, null, h('div', { className: 'sg-intro' }, h('h2', null, '更多'), h('p', null, '高级信息与工程视图')), h('div', { className: 'sg-menu' }, rows.map(([id, icon, title, subtitle]) => h('button', { key: id, className: 'sg-menu-row', onClick: () => setView({ name: id }) }, h('span', { className: 'sg-menu-icon', 'aria-hidden': 'true' }, icon), h('span', null, h('span', { className: 'sg-menu-title' }, title), h('br'), h('span', { className: 'sg-menu-subtitle' }, subtitle)), h('span', { className: 'sg-chevron' }, '›')))), h(StarPrompt, { usageRecords: selected.usageReceipts }))
+      return h(React.Fragment, null, h('div', { className: 'sg-intro' }, h('h2', null, '更多'), h('p', null, '高级信息与工程视图')), h('div', { className: 'sg-menu' }, rows.map(([id, icon, title, subtitle]) => h('button', { key: id, className: 'sg-menu-row', onClick: () => setView({ name: id }) }, h('span', { className: 'sg-menu-icon', 'aria-hidden': 'true' }, icon), h('span', null, h('span', { className: 'sg-menu-title' }, title), h('br'), h('span', { className: 'sg-menu-subtitle' }, subtitle)), h('span', { className: 'sg-chevron' }, '›')))))
     }
 
     function StructurePage({ events, elements, openEvent, openElement, onBack }) {
@@ -283,17 +283,31 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null, h(BackBar, { label: '更多', onBack }), h('div', { className: 'sg-intro' }, h('h2', null, '原始数据'), h('p', null, '供排查问题使用的内部字段与 JSON')), groups.map(([label, value]) => h('details', { key: label, className: 'sg-raw-group' }, h('summary', null, label + ' (' + value.length + ')'), h('pre', { className: 'sg-raw-json sg-code' }, JSON.stringify(value, null, 2)))))
     }
 
-    function SettingsPage({ selected, namespace, onBack }) {
-      const rows = [['Schema 版本', 'v' + selected.schemaVersion], ['提取间隔', '每 ' + selected.blockTurnSize + ' 轮形成一个 Block'], ['模型', '由 DSH 当前模型配置提供'], ['项目空间 ID', namespace], ['已处理轮次', selected.currentTurn]]
+    function SettingsPage({ selected, namespace, onBack, updateLambda, savingLambda }) {
+      const [lambda, setLambda] = React.useState(String(selected.blockDecayLambda ?? 0.3))
+      React.useEffect(() => setLambda(String(selected.blockDecayLambda ?? 0.3)), [selected.blockDecayLambda])
+      const changeLambda = (event) => {
+        const raw = event.target.value
+        setLambda(raw)
+        const value = Number(raw)
+        if (raw !== '' && Number.isFinite(value) && value >= 0) void updateLambda(value)
+      }
+      const rows = [['Schema 版本', 'v' + selected.schemaVersion], ['提取间隔', '每 ' + selected.blockTurnSize + ' 轮形成一个 Block'], ['模型', '由 DSH 当前模型配置提供'], ['内部空间 ID', namespace], ['已处理轮次', selected.currentTurn]]
       return h(React.Fragment, null,
         h(BackBar, { label: '更多', onBack }),
-        h('div', { className: 'sg-intro' }, h('h2', null, '高级设置'), h('p', null, '当前记忆空间的只读运行参数')),
-        h('div', { className: 'sg-pipeline' }, rows.map(([label, value]) => h('div', { key: label, className: 'sg-stage' }, h('span', null, label), h('span', { className: label === '项目空间 ID' ? 'sg-stage-value sg-code' : 'sg-stage-value' }, String(value))))))
+        h('div', { className: 'sg-intro' }, h('h2', null, '高级设置'), h('p', null, '修改后会立即应用到所有已有工作区，并作为新工作区的默认值。')),
+        h('div', { className: 'sg-pipeline' },
+          h('div', { className: 'sg-stage' }, h('span', null, 'Block 衰减系数 λ'), h('span', { className: 'sg-lambda-control' }, h('input', { className: 'sg-number-input', type: 'number', min: '0', step: '0.05', value: lambda, onChange: changeLambda, 'aria-label': 'Block 衰减系数 λ' }), h('span', { className: 'sg-stage-value waiting' }, savingLambda ? '保存中…' : '已保存'))),
+          h('p', { className: 'sg-setting-note' }, '默认 0.3；数字越小，记忆遗忘越慢，消耗 token 越多，不建议大于 0.4。'),
+          rows.map(([label, value]) => h('div', { key: label, className: 'sg-stage' }, h('span', null, label), h('span', { className: label === '内部空间 ID' ? 'sg-stage-value sg-code' : 'sg-stage-value' }, String(value)))))
+      )
     }
 
-    function MemoryPage() {
+    function MemoryPage({ useWorkspaces }) {
+      const workspaceItems = useWorkspaces((state) => state.items)
       const [overview, setOverview] = React.useState({ namespaces: [] })
       const [namespace, setNamespace] = React.useState('')
+      const [workspaceTitles, setWorkspaceTitles] = React.useState({})
       const [section, setSection] = React.useState('long')
       const [view, setView] = React.useState({ name: 'root' })
       const [data, setData] = React.useState({ events: [], elements: [], blocks: [], audit: [] })
@@ -301,6 +315,19 @@ window.__ModuleLoader__.load({
       const [source, setSource] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
+      const [savingLambda, setSavingLambda] = React.useState(false)
+
+      React.useEffect(() => {
+        let active = true
+        void Promise.all((workspaceItems || []).map(async (workspace) => [
+          await workspaceProjectKey(workspace.path),
+          String(workspace.title || '').trim(),
+        ])).then((entries) => {
+          if (!active) return
+          setWorkspaceTitles(Object.fromEntries(entries.filter(([key, title]) => key && title)))
+        })
+        return () => { active = false }
+      }, [workspaceItems])
 
       const loadOverview = React.useCallback(() => {
         setError('')
@@ -343,7 +370,7 @@ window.__ModuleLoader__.load({
       }, [namespace, loadOverview, loadMemoryData])
 
       const selected = (overview.namespaces || []).find((item) => item.namespace === namespace)
-      const project = projectName(namespace)
+      const project = projectName(selected || namespace, workspaceTitles)
       const failedCount = Number(selected?.failedJobs || 0)
       const processing = !error && (Number(selected?.processingJobs || 0) > 0
         || data.blocks.some((block) => block.status === 'processing'))
@@ -367,6 +394,14 @@ window.__ModuleLoader__.load({
       }
       const backLabel = view.back?.name === 'block' ? '最近记忆' : view.back?.name === 'element' ? '相关事物' : view.back?.name === 'event' ? '长期记忆' : view.back?.name === 'structure' ? '记忆结构' : section === 'recent' ? '最近记忆' : '长期记忆'
       const refresh = () => Promise.all([loadOverview(), loadMemoryData(namespace)])
+      const updateLambda = (value) => {
+        setSavingLambda(true)
+        setError('')
+        return api('settings', { blockDecayLambda: value }, { method: 'PATCH' })
+          .then(loadOverview)
+          .catch((reason) => setError(String(reason.message || reason)))
+          .finally(() => setSavingLambda(false))
+      }
       const moreBack = () => setView({ name: 'root' })
 
       let content = null
@@ -380,15 +415,17 @@ window.__ModuleLoader__.load({
       else if (view.name === 'system') content = h(SystemPage, { selected, blocks: data.blocks, onBack: moreBack, refresh })
       else if (view.name === 'audit') content = h(AuditPage, { audit: data.audit, onBack: moreBack })
       else if (view.name === 'raw') content = h(RawPage, { data, selected, onBack: moreBack })
-      else if (view.name === 'settings') content = h(SettingsPage, { selected, namespace, onBack: moreBack })
+      else if (view.name === 'settings') content = h(SettingsPage, { selected, namespace, onBack: moreBack, updateLambda, savingLambda })
       else content = h(React.Fragment, null,
         h(FailureAlert, { count: failedCount, onOpen: () => setView({ name: 'status' }) }),
-        loading ? h(Loading) : section === 'long' ? h(LongTermPage, { events: data.events, elements: data.elements, project, query, setQuery, openEvent, openElement }) : section === 'recent' ? h(RecentPage, { blocks: data.blocks, project, openBlock }) : h(MoreHome, { selected, setView }))
+        loading ? h(Loading) : section === 'long' ? h(LongTermPage, { events: data.events, elements: data.elements, project, query, setQuery, openEvent, openElement }) : section === 'recent' ? h(RecentPage, { blocks: data.blocks, project, openBlock }) : h(MoreHome, { setView }))
 
       return h('main', { className: 'sg-memory', 'data-testid': 'stratagate-memory-ui' },
         h('style', null, css),
-        h('header', { className: 'sg-header' }, h('div', { className: 'sg-brand' }, h('div', { className: 'sg-logo', 'aria-hidden': 'true' }, '◎'), h('div', { className: 'sg-brand-name' }, 'StrataGate Memory')), h('button', { className: 'sg-icon-button', title: '重新加载', onClick: refresh, 'aria-label': '重新加载' }, '↻')),
-        h('div', { className: 'sg-project' }, h('span', { className: 'sg-project-label' }, '当前项目：'), h('select', { className: 'sg-project-select', value: namespace, onChange: (event) => setNamespace(event.target.value), 'aria-label': '当前项目' }, (overview.namespaces || []).map((item) => h('option', { key: item.namespace, value: item.namespace }, projectName(item.namespace))))),
+        h('header', { className: 'sg-header' },
+          h('a', { className: 'sg-brand', href: STAR_REPOSITORY_URL, target: '_blank', rel: 'noopener noreferrer' }, h('img', { className: 'sg-logo', src: MASCOT_DATA_URL, alt: '' }), h('span', { className: 'sg-brand-name' }, 'StrataGate-AgentMemory')),
+          h('div', { className: 'sg-header-usage' }, h('span', null, 'StrataGate 已在当前工作区中帮助使用记忆 ', Number(selected?.memoryUseCount || 0), ' 次。'), h('a', { className: 'sg-header-star', href: STAR_REPOSITORY_URL, target: '_blank', rel: 'noopener noreferrer' }, '为 StrataGate 点 🌟🌟'))),
+        h('div', { className: 'sg-project' }, h('span', { className: 'sg-project-label' }, '当前工作区：'), h('select', { className: 'sg-project-select', value: namespace, onChange: (event) => setNamespace(event.target.value), 'aria-label': '当前工作区' }, (overview.namespaces || []).map((item) => h('option', { key: item.namespace, value: item.namespace }, projectName(item, workspaceTitles))))),
         h('nav', { className: 'sg-tabs', 'aria-label': '记忆视图' }, [['long', '长期记忆'], ['recent', '最近记忆'], ['more', '更多']].map(([id, label]) => h('button', { key: id, className: 'sg-tab ' + (section === id ? 'active' : ''), onClick: () => goSection(id) }, label))),
         error ? h('div', { className: 'sg-error' }, h('div', { className: 'sg-error-title' }, '暂时无法读取完整记忆'), h('div', null, '已显示能够读取的内容，请稍后重新加载。'), h('details', null, h('summary', null, '技术详情'), h('div', { className: 'sg-code' }, error))) : null,
         h(ProcessingAlert, { visible: processing }),
@@ -398,7 +435,7 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const slots = ctx.get('slots')
       if (!slots) return
-      slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'stratagate-memory', order: 32, label: () => 'StrataGate Memory' }, () => h(MemoryPage, null)))
+      slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'stratagate-memory', order: 32, label: () => 'StrataGate-AgentMemory' }, (props) => h(MemoryPage, props)))
     }
 
     exports.name = 'stratagate-dsh'

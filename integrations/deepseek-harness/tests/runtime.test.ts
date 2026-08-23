@@ -62,6 +62,7 @@ describe('DSH runtime ingestion', () => {
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
       blockTurnSize: 2,
+      blockDecayLambda: 0.3,
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, fakeModels)
@@ -134,7 +135,7 @@ describe('DSH runtime ingestion', () => {
 
       expect(context).toContain('[Current conversation]\nuser: We chose pnpm earlier.')
       expect(context).toContain('[Decayed memory blocks]')
-      expect(context).toContain(`block ${block!.id} | turns 1-2 | L`)
+      expect(context).toContain(`block ${block!.id} | turns 1-2 | age 0 | L`)
       expect(context).toContain('[Activated long-term memory]')
       expect(context).toContain('Historical memory context.')
       expect(context).toContain(relevant.id)
@@ -188,6 +189,7 @@ describe('DSH runtime ingestion', () => {
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
       blockTurnSize: 2,
+      blockDecayLambda: 0.3,
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, fakeModels)
@@ -239,6 +241,7 @@ describe('DSH runtime ingestion', () => {
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
       blockTurnSize: 4,
+      blockDecayLambda: 0.3,
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, models)
@@ -252,11 +255,11 @@ describe('DSH runtime ingestion', () => {
     }
   })
 
-  it('applies the configured block cadence to existing namespaces before the admin UI reads them', async () => {
+  it('persists the UI lambda globally for existing and future workspaces', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-cadence-'))
     const database = join(directory, 'memory.db')
     const namespace = 'dsh:project:cadence'
-    const seed = await StrataGate.open({ database, namespace, blockTurnSize: 4 })
+    const seed = await StrataGate.open({ database, namespace, blockTurnSize: 4, blockDecayLambda: 0.2 })
     await seed.close()
     const runtime = new StrataGateRuntime({
       database,
@@ -264,14 +267,50 @@ describe('DSH runtime ingestion', () => {
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
       blockTurnSize: 6,
+      blockDecayLambda: 0.3,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, fakeModels)
+    let futureNamespace = ''
+    try {
+      await runtime.syncConfiguredSettings()
+      expect((await runtime.adminSnapshot(namespace))?.blockTurnSize).toBe(6)
+      expect((await runtime.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.3)
+
+      await runtime.adminSetBlockDecayLambda(0.15)
+      expect((await runtime.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.15)
+
+      const futureSession = {
+        ...session,
+        id: 'future-workspace',
+        header: { ...session.header, id: 'future-workspace', cwd: 'C:\\work\\StrataGate' },
+      } as unknown as Session
+      futureNamespace = runtime.namespaceFor(futureSession)
+      const future = await (runtime as unknown as { space: (active: Session) => Promise<StrataGate> })
+        .space(futureSession)
+      expect(future.blockDecayLambda).toBe(0.15)
+      expect(runtime.adminWorkspaceName(futureNamespace)).toBe('StrataGate')
+    } finally {
+      await runtime.close()
+    }
+
+    const restored = new StrataGateRuntime({
+      database,
+      namespaceMode: 'project',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 6,
+      blockDecayLambda: 0.3,
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, fakeModels)
     try {
-      await runtime.syncConfiguredBlockTurnSize()
-      expect((await runtime.adminSnapshot(namespace))?.blockTurnSize).toBe(6)
+      await restored.syncConfiguredSettings()
+      expect((await restored.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.15)
+      expect((await restored.adminSnapshot(futureNamespace))?.blockDecayLambda).toBe(0.15)
+      expect(restored.adminWorkspaceName(futureNamespace)).toBe('StrataGate')
     } finally {
-      await runtime.close()
+      await restored.close()
       await rm(directory, { recursive: true, force: true })
     }
   })
@@ -285,6 +324,7 @@ describe('DSH runtime ingestion', () => {
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
       blockTurnSize: 4,
+      blockDecayLambda: 0.3,
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, fakeModels)
@@ -313,6 +353,7 @@ describe('DSH runtime ingestion', () => {
       namespacePrefix: 'dsh',
       globalNamespace: 'global',
       blockTurnSize: 1,
+      blockDecayLambda: 0.3,
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, fakeModels)

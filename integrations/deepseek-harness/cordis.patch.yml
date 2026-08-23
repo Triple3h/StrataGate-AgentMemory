@@ -8,5 +8,6 @@
         database: !!js dshHomePath('stratagate', 'memory.db')
         namespaceMode: project
         blockTurnSize: 6
+        blockDecayLambda: 0.3
         ingestSubagents: false
         maxOutputTokens: 10000

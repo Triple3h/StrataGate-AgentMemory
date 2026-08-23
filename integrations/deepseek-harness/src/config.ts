@@ -8,6 +8,7 @@ export interface Config {
   namespacePrefix?: string
   globalNamespace?: string
   blockTurnSize?: number
+  blockDecayLambda?: number
   ingestSubagents?: boolean
   provider?: string
   model?: string
@@ -20,6 +21,7 @@ export interface ResolvedConfig {
   namespacePrefix: string
   globalNamespace: string
   blockTurnSize: number
+  blockDecayLambda: number
   ingestSubagents: boolean
   provider?: string
   model?: string
@@ -32,6 +34,9 @@ export const Config: z<Config> = z.object({
   namespacePrefix: z.string().default('dsh'),
   globalNamespace: z.string().default('global'),
   blockTurnSize: z.natural().min(1).default(6),
+  blockDecayLambda: z.number().step(0.05).min(0).default(0.3)
+    .description('Block 衰减系数 λ')
+    .comment('默认 0.3；数字越小，记忆遗忘越慢，消耗 token 越多，不建议大于 0.4。'),
   ingestSubagents: z.boolean().default(false),
   provider: z.string(),
   model: z.string(),
@@ -54,6 +59,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     namespacePrefix,
     globalNamespace,
     blockTurnSize: Math.max(1, Math.floor(config.blockTurnSize ?? 6)),
+    blockDecayLambda: Math.max(0, config.blockDecayLambda ?? 0.3),
     ingestSubagents: config.ingestSubagents ?? false,
     ...(provider && model ? { provider, model } : {}),
     maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 10_000)),

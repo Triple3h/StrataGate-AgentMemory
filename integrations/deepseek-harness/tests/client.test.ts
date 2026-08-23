@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 
 describe('StrataGate Web client contract', () => {
-  it('registers a read-only settings section through the DSH module loader', () => {
+  it('registers its settings section through the DSH module loader', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     let definition: any
     runInNewContext(source, {
@@ -24,18 +24,28 @@ describe('StrataGate Web client contract', () => {
     }
     plugin.apply({ get: (name: string) => name === 'slots' ? slots : undefined })
     expect(registration.metadata).toMatchObject({ name: 'settings.section', id: 'stratagate-memory' })
+    expect(registration.metadata.label()).toBe('StrataGate-AgentMemory')
     expect(typeof registration.render).toBe('function')
-    expect(source).not.toContain("method: 'POST'")
   })
 
-  it('offers a one-time GitHub Star link only after demonstrated memory use', () => {
+  it('shows the unified project brand, mascot, usage count, and GitHub Star link', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
-    expect(source).toContain("const STAR_PROMPT_USAGE_THRESHOLD = 3")
-    expect(source).toContain("usageRecords: selected.usageReceipts")
+    expect(source).toContain('StrataGate-AgentMemory')
+    expect(source).toContain('__STRATAGATE_MASCOT_DATA_URL__')
+    expect(source).toContain('StrataGate 已在当前工作区中帮助使用记忆 ')
+    expect(source).toContain('为 StrataGate 点 🌟🌟')
     expect(source).toContain("https://github.com/diqierjia/StrataGate-AgentMemory")
-    expect(source).toContain("stratagate.starPrompt.dismissed.v1")
     expect(source).toContain("rel: 'noopener noreferrer'")
-    expect(source).not.toContain('window.open(')
+  })
+
+  it('uses the user-defined DSH Workspace title and keeps the compact header collision-free', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('function MemoryPage({ useWorkspaces })')
+    expect(source).toContain('const workspaceItems = useWorkspaces((state) => state.items)')
+    expect(source).toContain("String(workspace.title || '').trim()")
+    expect(source).toContain("value.split(':project:').pop()")
+    expect(source).toContain('display:grid;grid-template-columns:minmax(0,1fr)')
+    expect(source).not.toContain("title: '重新加载', onClick: refresh")
   })
 
   it('uses the memory-first three-part information architecture', () => {
@@ -49,7 +59,17 @@ describe('StrataGate Web client contract', () => {
     expect(source).not.toContain('sg-stats')
   })
 
-  it('keeps failures reassuring and moves engineering data under More', () => {
+  it('inherits the resolved light, dark, or system appearance from DSH theme tokens', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('color-scheme:inherit')
+    expect(source).toContain('--sg-page:var(--dsw-alias-bg-layer-2')
+    expect(source).toContain('--sg-text:var(--dsw-alias-label-primary')
+    expect(source).toContain('--sg-accent:var(--dsw-alias-state-business-primary')
+    expect(source).not.toContain('@media (prefers-color-scheme:dark)')
+    expect(source).not.toContain('--dsh-color-background')
+  })
+
+  it('keeps failures reassuring and makes only lambda editable under More', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(source).toContain('lastErrorFull')
     expect(source).toContain('原始内容已经保存，不会丢失。')
@@ -59,7 +79,11 @@ describe('StrataGate Web client contract', () => {
     expect(source).toContain("['audit', '↗', '使用记录'")
     expect(source).toContain("['settings', '⚙', '高级设置'")
     expect(source).not.toContain("['responses', '模型响应']")
-    expect(source).not.toContain("method: 'POST'")
+    expect(source).toContain("type: 'number'")
+    expect(source).toContain("step: '0.05'")
+    expect(source).toContain('默认 0.3；数字越小，记忆遗忘越慢，消耗 token 越多，不建议大于 0.4。')
+    expect(source).toContain("method: 'PATCH'")
+    expect(source).toContain('当前工作区')
   })
 
   it('shows a red processing banner with a loading icon while memory work is active', () => {

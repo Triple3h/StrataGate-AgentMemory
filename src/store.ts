@@ -1,4 +1,5 @@
 import {
+  BLOCK_DECAY_LAMBDA,
   DEFAULT_BLOCK_TURN_SIZE,
   blockLevelLabel,
   deterministicBlockLayers,
@@ -54,6 +55,7 @@ import { toUtc8Iso } from './time.js';
 
 export interface StrataGateOptions {
   blockTurnSize?: number;
+  blockDecayLambda?: number;
   summarizer?: BlockSummarizer;
   extractor?: EventExtractor;
   elementProjector?: ElementProjector;
@@ -96,6 +98,7 @@ export interface BlockContextEntry {
   id: string;
   threadId?: string;
   turnRange: [number, number];
+  age: number;
   level: BlockLevel;
   label: string;
   content: string;
@@ -174,6 +177,7 @@ const STRATAGATE_CONSTRUCTOR_TOKEN = Symbol('StrataGate constructor');
 export class StrataGate {
   readonly blockTurnSize: number;
 
+  private blockDecayLambdaValue: number;
   private readonly summarizer: BlockSummarizer | undefined;
   private readonly extractor: EventExtractor | undefined;
   private readonly elementProjector: ElementProjector | undefined;
@@ -200,6 +204,11 @@ export class StrataGate {
       throw new TypeError('Use StrataGate.open() for SQLite or StrataGate.inMemory() for explicit ephemeral storage');
     }
     this.blockTurnSize = Math.max(1, Math.floor(options.blockTurnSize ?? DEFAULT_BLOCK_TURN_SIZE));
+    const blockDecayLambda = options.blockDecayLambda ?? BLOCK_DECAY_LAMBDA;
+    if (!Number.isFinite(blockDecayLambda) || blockDecayLambda < 0) {
+      throw new TypeError('blockDecayLambda must be a non-negative finite number');
+    }
+    this.blockDecayLambdaValue = blockDecayLambda;
     this.summarizer = options.summarizer;
     this.extractor = options.extractor;
     this.elementProjector = options.elementProjector;
@@ -224,6 +233,7 @@ export class StrataGate {
         storage,
         namespace: options.namespace,
         ...(options.blockTurnSize !== undefined ? { blockTurnSize: options.blockTurnSize } : {}),
+        ...(options.blockDecayLambda !== undefined ? { blockDecayLambda: options.blockDecayLambda } : {}),
         ...(options.summarizer ? { summarizer: options.summarizer } : {}),
         ...(options.extractor ? { extractor: options.extractor } : {}),
         ...(options.elementProjector ? { elementProjector: options.elementProjector } : {}),
@@ -243,17 +253,32 @@ export class StrataGate {
     const loaded = await options.storage.load(namespace);
     const loadedSnapshot = loaded ? normalizeSnapshot(loaded.snapshot) : null;
     let loadedRevision = loaded?.revision ?? 0;
-    if (loaded && options.blockTurnSize !== undefined) {
-      const requested = Math.max(1, Math.floor(options.blockTurnSize));
-      if (requested !== loadedSnapshot?.blockTurnSize) {
-        if (!loadedSnapshot) throw new Error('Loaded StrataGate state did not contain a snapshot');
-        loadedSnapshot.blockTurnSize = requested;
-        loadedRevision = await options.storage.save(namespace, loadedSnapshot, loadedRevision);
+    if (loaded && loadedSnapshot) {
+      let settingsChanged = false;
+      if (options.blockTurnSize !== undefined) {
+        const requested = Math.max(1, Math.floor(options.blockTurnSize));
+        if (requested !== loadedSnapshot.blockTurnSize) {
+          loadedSnapshot.blockTurnSize = requested;
+          settingsChanged = true;
+        }
       }
+      if (options.blockDecayLambda !== undefined) {
+        const requested = options.blockDecayLambda;
+        if (!Number.isFinite(requested) || requested < 0) {
+          throw new TypeError('blockDecayLambda must be a non-negative finite number');
+        }
+        if (requested !== loadedSnapshot.blockDecayLambda) {
+          loadedSnapshot.blockDecayLambda = requested;
+          settingsChanged = true;
+        }
+      }
+      if (settingsChanged) loadedRevision = await options.storage.save(namespace, loadedSnapshot, loadedRevision);
     }
     const memoryOptions: StrataGateOptions = {};
     if (loadedSnapshot) memoryOptions.blockTurnSize = loadedSnapshot.blockTurnSize;
     else if (options.blockTurnSize !== undefined) memoryOptions.blockTurnSize = options.blockTurnSize;
+    if (loadedSnapshot) memoryOptions.blockDecayLambda = loadedSnapshot.blockDecayLambda;
+    else if (options.blockDecayLambda !== undefined) memoryOptions.blockDecayLambda = options.blockDecayLambda;
     if (options.summarizer) memoryOptions.summarizer = options.summarizer;
     if (options.extractor) memoryOptions.extractor = options.extractor;
     if (options.elementProjector) memoryOptions.elementProjector = options.elementProjector;
@@ -309,6 +334,20 @@ export class StrataGate {
     return this.revision;
   }
 
+  get blockDecayLambda(): number {
+    return this.blockDecayLambdaValue;
+  }
+
+  async setBlockDecayLambda(value: number): Promise<void> {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new TypeError('blockDecayLambda must be a non-negative finite number');
+    }
+    if (value === this.blockDecayLambdaValue) return;
+    await this.commitMutation(() => {
+      this.blockDecayLambdaValue = value;
+    });
+  }
+
   listBlocks(): readonly MemoryBlock[] {
     return this.blocks;
   }
@@ -360,6 +399,7 @@ export class StrataGate {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       currentTurn: this.currentTurn,
       blockTurnSize: this.blockTurnSize,
+      blockDecayLambda: this.blockDecayLambda,
       openTail: this.openTail,
       blocks: this.blocks,
       events: this.events,
@@ -699,13 +739,22 @@ export class StrataGate {
       ? this.blocks
       : this.blocks.filter((block) => block.threadId === threadId);
     return blocks.map((block) => {
-      const currentTurn = block.threadId === undefined ? this.currentTurn : this.threadTurn(block.threadId);
-      const level = getDecayedBlockLevel(block.pointerAnchorLevel, block.pointerAnchorTurn, currentTurn);
+      const threadBlocks = this.threadBlocks(block.threadId);
+      const latestBlockPosition = threadBlocks.length;
+      const blockPosition = threadBlocks.indexOf(block) + 1;
+      const age = Math.max(0, latestBlockPosition - blockPosition);
+      const level = getDecayedBlockLevel(
+        block.pointerAnchorLevel,
+        block.pointerAnchorBlockPosition,
+        latestBlockPosition,
+        this.blockDecayLambda,
+      );
       block.pointerCurrentLevel = level;
       return {
         id: block.id,
         ...(block.threadId ? { threadId: block.threadId } : {}),
         turnRange: [block.startTurn, block.endTurn],
+        age,
         level,
         label: blockLevelLabel(level),
         content: renderBlock(block, level),
@@ -717,17 +766,24 @@ export class StrataGate {
     return this.commitMutation(() => {
       const block = this.blocks.find((candidate) => candidate.id === id);
       if (!block) throw new Error(`Unknown block: ${id}`);
-      const currentTurn = block.threadId === undefined ? this.currentTurn : this.threadTurn(block.threadId);
-      const current = getDecayedBlockLevel(block.pointerAnchorLevel, block.pointerAnchorTurn, currentTurn);
+      const latestBlockPosition = this.threadBlocks(block.threadId).length;
+      const blockPosition = this.threadBlocks(block.threadId).indexOf(block) + 1;
+      const current = getDecayedBlockLevel(
+        block.pointerAnchorLevel,
+        block.pointerAnchorBlockPosition,
+        latestBlockPosition,
+        this.blockDecayLambda,
+      );
       const level = normalizeBlockLevel(target, current);
       block.pointerCurrentLevel = level;
       block.pointerAnchorLevel = level;
-      block.pointerAnchorTurn = currentTurn;
+      block.pointerAnchorBlockPosition = latestBlockPosition;
       block.lastLiftedAt = toUtc8Iso(this.now());
       return {
         id: block.id,
         ...(block.threadId ? { threadId: block.threadId } : {}),
         turnRange: [block.startTurn, block.endTurn] as [number, number],
+        age: Math.max(0, latestBlockPosition - blockPosition),
         level,
         label: blockLevelLabel(level),
         content: renderBlock(block, level),
@@ -950,7 +1006,9 @@ export class StrataGate {
     const generated = this.summarizer ? await this.summarizer(raw) : defaultSummary(raw);
     const deterministic = deterministicBlockLayers(raw);
     const sequence = this.blocks.length + 1;
-    const previous = this.threadBlocks(threadId).at(-1);
+    const threadBlocks = this.threadBlocks(threadId);
+    const previous = threadBlocks.at(-1);
+    const blockPosition = threadBlocks.length + 1;
     const startTurn = previous ? previous.endTurn + 1 : 1;
     const endTurn = startTurn + this.blockTurnSize - 1;
     return this.commitMutation(() => {
@@ -973,7 +1031,7 @@ export class StrataGate {
         ...deterministic,
         pointerCurrentLevel: 5,
         pointerAnchorLevel: 5,
-        pointerAnchorTurn: endTurn,
+        pointerAnchorBlockPosition: blockPosition,
         lastLiftedAt: null,
       };
       const sealedIds = new Set(raw.map((message) => message.id));
@@ -1121,6 +1179,7 @@ export class StrataGate {
       throw new Error(`Snapshot blockTurnSize ${normalized.blockTurnSize} does not match ${this.blockTurnSize}`);
     }
     const copy = cloneSnapshot(normalized);
+    this.blockDecayLambdaValue = copy.blockDecayLambda;
     this.currentTurn = copy.currentTurn;
     this.openTail.splice(0, this.openTail.length, ...copy.openTail);
     this.blocks.splice(0, this.blocks.length, ...copy.blocks);

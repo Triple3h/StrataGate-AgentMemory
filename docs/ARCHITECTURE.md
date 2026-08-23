@@ -54,17 +54,18 @@ When the boundary is reached:
 2. L4 converts tool payloads into readable summaries while preserving natural-language turns.
 3. L3 applies a deterministic, bounded condensation policy.
 4. A caller-provided summarizer produces L0-L2 and a conservative `shouldExtract` decision.
-5. The block pointer starts at L5 and decays toward L0 as later turns accumulate.
+5. The block pointer starts at L5 and decays toward L0 as newer Blocks are sealed in the same thread.
 
 The block weight is:
 
 ```text
-w(t) = exp(-0.05 * t)
+w(age) = exp(-lambda_block * age)
 
-t = current turn - pointer anchor turn
+age = latest sealed Block position - pointer anchor Block position
+lambda_block = 0.30 by default
 ```
 
-The weight selects how many levels to drop from the pointer anchor. Expanding a block to L3 anchors the pointer at L3; it does not silently jump to L5.
+Open-tail turns do not change Block age. The weight selects how many levels to drop from the pointer anchor. Expanding a block to L3 anchors the pointer at L3 and at the latest sealed Block position; it does not silently jump to L5. Hosts may configure `lambda_block`; smaller values decay more slowly, and values above `0.4` are not recommended.
 
 ## Deterministic L3 policy
 
@@ -226,4 +227,4 @@ The adapter preserves these invariants:
 - forget is reversible unless an application explicitly implements irreversible deletion;
 - usage receipts are idempotent for one answer turn through a unique `receiptId`.
 
-SQLite schema v5 includes normalized element, fact, provenance, projection-job, ingestion-receipt, usage-audit, and optional thread ownership for messages and Blocks. Usage receipts can carry the DSH session, turn, retrieval batch, assessment, and exact evidence references that led to an answer. Opening a schema-v1 through v4 database migrates it in one transaction and preserves existing namespaces, blocks, events, jobs, and receipts. Pre-v5 Blocks retain no inferred thread ownership, so they remain archival provenance without being attached to a new session. SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.
+SQLite schema v6 includes normalized element, fact, provenance, projection-job, ingestion-receipt, usage-audit, optional thread ownership for messages and Blocks, and persisted Block-decay settings and anchors. Usage receipts can carry the DSH session, turn, retrieval batch, assessment, and exact evidence references that led to an answer. Opening a schema-v1 through v5 database migrates it in one transaction and preserves existing namespaces, blocks, events, jobs, and receipts. Schema-v5 turn anchors are converted to per-thread Block positions. Pre-v5 Blocks retain no inferred thread ownership, so they remain archival provenance without being attached to a new session. SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.

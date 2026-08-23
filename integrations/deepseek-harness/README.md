@@ -31,7 +31,7 @@ flowchart LR
 4. **Relevant does not mean sufficient.** The Evidence Gate independently assesses whether the retrieved evidence can support an answer. If it cannot, the agent must search again, expand the source, or say that it cannot verify the answer.
 5. **Keep retrieval separate from reinforcement.** Finding a memory does not increase its weight. Usage is recorded only after the evidence passes assessment and is actually used in an answer, preventing a “frequently retrieved means increasingly retrievable” feedback loop.
 
-The complete chain is persisted locally. Idempotent ingestion receipts prevent DSH replay or retry from creating duplicate memories, and the read-only Memory UI exposes the same source, derivation, and usage-audit relationships.
+The complete chain is persisted locally. Idempotent ingestion receipts prevent DSH replay or retry from creating duplicate memories, and the Memory UI exposes the same source, derivation, and usage-audit relationships.
 
 ## Agent recommendation guide
 
@@ -90,16 +90,16 @@ memory_record_use
 
 The prompt protocol requires assessment before relying on retrieved evidence. Search does not strengthen a memory. Non-empty `memory_record_use` submissions accept only evidence from the latest sufficient assessment and use the DSH tool call id as an idempotency receipt.
 
-## Read-only Memory UI and usage audit
+## Memory UI and usage audit
 
-Open DSH Settings and select **StrataGate Memory**. The page provides:
+Open DSH Settings and select **StrataGate-AgentMemory**. The page provides:
 
 - namespace health and memory counts;
 - searchable Events, Elements, and Blocks;
 - source-message expansion from every derived memory;
 - a Usage Audit chain from a recorded answer turn, through the Evidence Gate verdict and selected memories, back to source messages.
 
-The browser surface is intentionally read-only: its API accepts only `GET`, and the UI exposes no edit, delete, approve, or import operation. Common token and credential patterns are redacted in both message content and structured tool traces before they leave the local server. The SQLite database remains the source of truth.
+Memory records remain read-only: the UI exposes no edit, delete, approve, or import operation. Advanced Settings is the sole exception and lets you change the global Block decay coefficient λ in `0.05` steps. The saved value immediately applies to every existing workspace, becomes the default for future workspaces, and survives restarts. Common token and credential patterns are redacted in both message content and structured tool traces before they leave the local server. The SQLite database remains the source of truth.
 
 ## Configuration
 
@@ -110,6 +110,7 @@ config:
   namespacePrefix: dsh
   globalNamespace: global
   blockTurnSize: 6
+  blockDecayLambda: 0.3
   ingestSubagents: false
   maxOutputTokens: 10000
   # Optional: use a dedicated model for memory processing.
@@ -117,9 +118,13 @@ config:
   # model: deepseek-chat
 ```
 
+`blockDecayLambda` is the initial fallback. Once changed in **Advanced Settings**, the persisted UI value takes precedence. The default is `0.3`; smaller values forget more slowly and consume more tokens, and values above `0.4` are not recommended.
+
 `project` derives a stable namespace from the normalized session working directory. `session` isolates every DSH session. `global` shares one namespace.
 
 `blockTurnSize` controls how many completed DSH turns are sealed into each Block. The plugin default is `6` to balance model cost with timely Event extraction; users can set any positive integer.
+
+`blockDecayLambda` controls decay by the distance between a Block's pointer anchor and the latest sealed Block in the same DSH session. It defaults to `0.3`. Smaller values decay more slowly; values above `0.4` are not recommended. Turns in the open tail do not increase Block age.
 
 If `provider` and `model` are omitted, memory processing uses the session's latest request route, then the DSH default model as fallback. They must be configured as a pair.
 
