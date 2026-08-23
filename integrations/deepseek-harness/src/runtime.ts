@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { basename, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
@@ -50,6 +50,11 @@ interface RankedElementFact extends ElementSearchResult {
 function projectKey(cwd: string | undefined): string {
   const canonical = resolve(cwd ?? process.cwd()).replaceAll('\\', '/').toLowerCase()
   return createHash('sha256').update(canonical).digest('hex').slice(0, 20)
+}
+
+function workspaceDisplayName(cwd: string | undefined): string {
+  const canonical = (cwd ?? process.cwd()).replace(/[\\/]+$/, '')
+  return canonical.split(/[\\/]/).at(-1) || '当前工作区'
 }
 
 export class StrataGateRuntime {
@@ -446,7 +451,7 @@ export class StrataGateRuntime {
   }
 
   private rememberWorkspace(namespace: string, cwd: string | undefined): void {
-    const name = basename(resolve(cwd ?? process.cwd())) || '当前工作区'
+    const name = workspaceDisplayName(cwd)
     this.workspaceNames.set(namespace, name)
     if (this.config.database === ':memory:') return
     try {
