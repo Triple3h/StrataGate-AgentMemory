@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.19 - 2026-08-23
+
+- Make the global Block decay coefficient λ editable in Advanced Settings with `0.05` steps, immediate application to existing workspaces, persistence across restarts, and inheritance by future workspaces.
+- Show actual workspace names instead of internal namespace hashes and rename the current-project label to current workspace.
+- Unify the settings page branding as `StrataGate-AgentMemory`, restore the mascot, and show a right-aligned genuine memory-use count with a GitHub Star link.
+
+## 0.2.18 - 2026-08-23
+
+- Match the Memory settings UI to DSH's resolved light, dark, or system appearance through the official semantic theme tokens.
+- Remove the independent dark palette so the plugin background and controls no longer differ from the surrounding DSH settings panel.
+
+## 0.2.17 - 2026-08-23
+
+- Define Block age as the per-session distance from the latest sealed Block, so open-tail turns no longer decay Block detail.
+- Add the configurable `blockDecayLambda` setting with a default of `0.3`; smaller values decay more slowly, and values above `0.4` are not recommended.
+- Migrate SQLite storage to schema v6 and convert legacy turn anchors to per-thread Block positions without deleting existing memory.
+
 ## 0.2.16 - 2026-08-21
 
 - Isolate open tails, Block sealing, decay, and automatic Block context by DSH session while keeping Events and Elements project-scoped for cross-session recall.

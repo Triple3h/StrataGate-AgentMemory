@@ -152,4 +152,36 @@ describe('StrataGate lifecycle', () => {
     expect(extractionPairs).not.toContainEqual(['session-a', 'session-b']);
     expect(extractionPairs).not.toContainEqual(['session-b', 'session-a']);
   });
+
+  it('ages blocks only when a newer block is sealed in the same thread', async () => {
+    const memory = StrataGate.inMemory({
+      blockTurnSize: 2,
+      blockDecayLambda: 0.3,
+      summarizer,
+      idFactory: ids(),
+    });
+
+    await memory.appendTurn({ user: 'A1', assistant: 'A1 reply', threadId: 'session-a' });
+    await memory.appendTurn({ user: 'A2', assistant: 'A2 reply', threadId: 'session-a' });
+    expect(memory.getBlockContext('session-a')).toMatchObject([{ age: 0, level: 5 }]);
+
+    await memory.appendTurn({ user: 'A3', assistant: 'A3 reply', threadId: 'session-a' });
+    await memory.appendTurn({ user: 'B1', assistant: 'B1 reply', threadId: 'session-b' });
+    await memory.appendTurn({ user: 'B2', assistant: 'B2 reply', threadId: 'session-b' });
+    expect(memory.getBlockContext('session-a')).toMatchObject([{ age: 0, level: 5 }]);
+
+    await memory.appendTurn({ user: 'A4', assistant: 'A4 reply', threadId: 'session-a' });
+    expect(memory.getBlockContext('session-a')).toMatchObject([
+      { age: 1, level: 5 },
+      { age: 0, level: 5 },
+    ]);
+
+    await memory.appendTurn({ user: 'A5', assistant: 'A5 reply', threadId: 'session-a' });
+    await memory.appendTurn({ user: 'A6', assistant: 'A6 reply', threadId: 'session-a' });
+    expect(memory.getBlockContext('session-a')).toMatchObject([
+      { age: 2, level: 4 },
+      { age: 1, level: 5 },
+      { age: 0, level: 5 },
+    ]);
+  });
 });

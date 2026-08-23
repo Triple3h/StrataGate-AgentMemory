@@ -43,6 +43,7 @@ interface SpaceRow {
   revision: number;
   current_turn: number;
   block_turn_size: number;
+  block_decay_lambda: number;
 }
 
 interface MessageRow {
@@ -72,7 +73,7 @@ interface BlockRow {
   l4_readable: string;
   pointer_current_level: number;
   pointer_anchor_level: number;
-  pointer_anchor_turn: number;
+  pointer_anchor_block_position: number;
   last_lifted_at: string | null;
 }
 
@@ -198,6 +199,7 @@ CREATE TABLE IF NOT EXISTS memory_spaces (
   revision INTEGER NOT NULL,
   current_turn INTEGER NOT NULL,
   block_turn_size INTEGER NOT NULL,
+  block_decay_lambda REAL NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
@@ -219,7 +221,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   l4_readable TEXT NOT NULL,
   pointer_current_level INTEGER NOT NULL,
   pointer_anchor_level INTEGER NOT NULL,
-  pointer_anchor_turn INTEGER NOT NULL,
+  pointer_anchor_block_position INTEGER NOT NULL,
   last_lifted_at TEXT,
   PRIMARY KEY (namespace, id),
   UNIQUE (namespace, sequence),
@@ -443,7 +445,7 @@ export class SqliteStorage implements StorageAdapter {
     this.assertOpen();
     const key = nonEmptyNamespace(namespace);
     const space = this.database.prepare(`
-      SELECT schema_version, revision, current_turn, block_turn_size
+      SELECT schema_version, revision, current_turn, block_turn_size, block_decay_lambda
       FROM memory_spaces WHERE namespace = ?
     `).get(key) as SpaceRow | undefined;
     if (!space) return null;
@@ -494,7 +496,7 @@ export class SqliteStorage implements StorageAdapter {
       l5Raw: messagesByBlock.get(row.id) ?? [],
       pointerCurrentLevel: row.pointer_current_level as BlockLevel,
       pointerAnchorLevel: row.pointer_anchor_level as BlockLevel,
-      pointerAnchorTurn: row.pointer_anchor_turn,
+      pointerAnchorBlockPosition: row.pointer_anchor_block_position,
       lastLiftedAt: row.last_lifted_at,
     }));
 
@@ -673,6 +675,7 @@ export class SqliteStorage implements StorageAdapter {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       currentTurn: space.current_turn,
       blockTurnSize: space.block_turn_size,
+      blockDecayLambda: space.block_decay_lambda,
       openTail,
       blocks,
       events,
@@ -716,27 +719,29 @@ export class SqliteStorage implements StorageAdapter {
     if (current) {
       this.database.prepare(`
         UPDATE memory_spaces
-        SET schema_version = ?, revision = ?, current_turn = ?, block_turn_size = ?, updated_at = ?
+        SET schema_version = ?, revision = ?, current_turn = ?, block_turn_size = ?, block_decay_lambda = ?, updated_at = ?
         WHERE namespace = ?
       `).run(
         snapshot.schemaVersion,
         nextRevision,
         snapshot.currentTurn,
         snapshot.blockTurnSize,
+        snapshot.blockDecayLambda,
         updatedAt,
         namespace,
       );
     } else {
       this.database.prepare(`
         INSERT INTO memory_spaces (
-          namespace, schema_version, revision, current_turn, block_turn_size, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          namespace, schema_version, revision, current_turn, block_turn_size, block_decay_lambda, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         namespace,
         snapshot.schemaVersion,
         nextRevision,
         snapshot.currentTurn,
         snapshot.blockTurnSize,
+        snapshot.blockDecayLambda,
         updatedAt,
         updatedAt,
       );
@@ -746,7 +751,7 @@ export class SqliteStorage implements StorageAdapter {
       INSERT INTO blocks (
         namespace, id, thread_id, sequence, start_turn, end_turn, created_at, should_extract,
         l0_title, l0_tags_json, l1_summary, l2_keypoints_json, l3_condensed, l4_readable,
-        pointer_current_level, pointer_anchor_level, pointer_anchor_turn, last_lifted_at
+        pointer_current_level, pointer_anchor_level, pointer_anchor_block_position, last_lifted_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
         thread_id = excluded.thread_id,
@@ -763,7 +768,7 @@ export class SqliteStorage implements StorageAdapter {
         l4_readable = excluded.l4_readable,
         pointer_current_level = excluded.pointer_current_level,
         pointer_anchor_level = excluded.pointer_anchor_level,
-        pointer_anchor_turn = excluded.pointer_anchor_turn,
+        pointer_anchor_block_position = excluded.pointer_anchor_block_position,
         last_lifted_at = excluded.last_lifted_at
     `);
     for (const block of snapshot.blocks) {
@@ -784,7 +789,7 @@ export class SqliteStorage implements StorageAdapter {
         block.l4Readable,
         block.pointerCurrentLevel,
         block.pointerAnchorLevel,
-        block.pointerAnchorTurn,
+        block.pointerAnchorBlockPosition,
         block.lastLiftedAt,
       );
     }
@@ -1064,8 +1069,9 @@ export class SqliteStorage implements StorageAdapter {
         this.database.exec(THREAD_INDEXES);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
-    } else if (version === 1 || version === 2 || version === 3 || version === 4) {
+    } else if (version === 1 || version === 2 || version === 3 || version === 4 || version === 5) {
       this.immediateTransaction(() => {
+        this.database.exec(SCHEMA);
         if (version === 1) {
           const receiptColumns = this.database.prepare("PRAGMA table_info('usage_receipts')").all() as unknown as Array<{ name: string }>;
           if (!receiptColumns.some(({ name }) => name === 'element_ids_json')) {
@@ -1076,10 +1082,25 @@ export class SqliteStorage implements StorageAdapter {
         if (!receiptColumns.some(({ name }) => name === 'audit_json')) {
           this.database.exec("ALTER TABLE usage_receipts ADD COLUMN audit_json TEXT NOT NULL DEFAULT '{}'");
         }
-        this.database.exec(SCHEMA);
+        const spaceColumns = this.database.prepare("PRAGMA table_info('memory_spaces')").all() as unknown as Array<{ name: string }>;
+        if (!spaceColumns.some(({ name }) => name === 'block_decay_lambda')) {
+          this.database.exec('ALTER TABLE memory_spaces ADD COLUMN block_decay_lambda REAL NOT NULL DEFAULT 0.3');
+        }
         const blockColumns = this.database.prepare("PRAGMA table_info('blocks')").all() as unknown as Array<{ name: string }>;
         if (!blockColumns.some(({ name }) => name === 'thread_id')) {
           this.database.exec('ALTER TABLE blocks ADD COLUMN thread_id TEXT');
+        }
+        if (!blockColumns.some(({ name }) => name === 'pointer_anchor_block_position')) {
+          this.database.exec('ALTER TABLE blocks RENAME COLUMN pointer_anchor_turn TO pointer_anchor_block_position');
+          this.database.exec(`
+            UPDATE blocks AS target
+            SET pointer_anchor_block_position = MAX(1, (
+              SELECT COUNT(*) FROM blocks AS candidate
+              WHERE candidate.namespace = target.namespace
+                AND candidate.thread_id IS target.thread_id
+                AND candidate.end_turn <= target.pointer_anchor_block_position
+            ))
+          `);
         }
         const messageColumns = this.database.prepare("PRAGMA table_info('messages')").all() as unknown as Array<{ name: string }>;
         if (!messageColumns.some(({ name }) => name === 'thread_id')) {

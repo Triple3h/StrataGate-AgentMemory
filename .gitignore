@@ -5,6 +5,7 @@ coverage/
 .env.*
 !.env.example
 *.log
+*.tgz
 .DS_Store
 Thumbs.db
 .idea/

@@ -6,9 +6,10 @@ import { handleAdminRequest, type WebResponse } from '../src/web.js'
 const fullFailure = 'StrataGate model response was not valid JSON\nRaw response (full):\n' + 'x'.repeat(600)
 
 const snapshot: StrataGateSnapshot = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   currentTurn: 8,
   blockTurnSize: 4,
+  blockDecayLambda: 0.3,
   openTail: [],
   blocks: [{
     id: 'blk_1',
@@ -32,7 +33,7 @@ const snapshot: StrataGateSnapshot = {
     }],
     pointerCurrentLevel: 5,
     pointerAnchorLevel: 5,
-    pointerAnchorTurn: 4,
+    pointerAnchorBlockPosition: 1,
     lastLiftedAt: null,
   }],
   events: [{
@@ -96,9 +97,15 @@ const snapshot: StrataGateSnapshot = {
   ingestionReceipts: [],
 }
 
+let updatedLambda: number | null = null
 const runtime = {
   adminNamespaces: async () => ['dsh:project:test'],
   adminSnapshot: async (namespace: string) => namespace === 'dsh:project:test' ? snapshot : null,
+  adminWorkspaceName: () => 'StrataGate',
+  adminSetBlockDecayLambda: async (value: number) => {
+    updatedLambda = value
+    return value
+  },
 } as unknown as StrataGateRuntime
 
 const waitingRuntime = {
@@ -127,7 +134,7 @@ async function request(url: string, method = 'GET', targetRuntime = runtime): Pr
   return { status: response.statusCode, body: JSON.parse(text), headers }
 }
 
-describe('StrataGate read-only admin routes', () => {
+describe('StrataGate admin routes', () => {
   it('does not label a block without an extraction job as actively processing', async () => {
     const result = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Awaiting&kind=blocks', 'GET', waitingRuntime)
     expect(result.body.items[0]).toMatchObject({ status: 'waiting', eventExtraction: null })
@@ -140,13 +147,17 @@ describe('StrataGate read-only admin routes', () => {
     expect(overview.status).toBe(200)
     expect(overview.body).toMatchObject({
       readonly: true,
+      settingsWritable: true,
       namespaces: [{
+        workspaceName: 'StrataGate',
         blockTurnSize: 4,
+        blockDecayLambda: 0.3,
         events: 1,
-      usageReceipts: 1,
-      failedJobs: 1,
-      processingJobs: 0,
-      failedJobDetails: [{
+        usageReceipts: 1,
+        memoryUseCount: 1,
+        failedJobs: 1,
+        processingJobs: 0,
+        failedJobDetails: [{
           kind: 'event-extraction',
           attempts: 2,
           lastError: fullFailure.slice(0, 500),
@@ -194,7 +205,15 @@ describe('StrataGate read-only admin routes', () => {
     })
   })
 
-  it('rejects every browser write method', async () => {
+  it('updates the global Block decay setting while memory routes remain read-only', async () => {
+    updatedLambda = null
+    const settings = await request('/api/stratagate/settings?blockDecayLambda=0.15', 'PATCH')
+    expect(settings).toMatchObject({ status: 200, body: { blockDecayLambda: 0.15 } })
+    expect(updatedLambda).toBe(0.15)
+
+    const invalid = await request('/api/stratagate/settings?blockDecayLambda=nope', 'PATCH')
+    expect(invalid).toMatchObject({ status: 400, body: { error: expect.stringContaining('blockDecayLambda') } })
+
     const result = await request('/api/stratagate/memories', 'POST')
     expect(result).toMatchObject({ status: 405, body: { error: expect.stringContaining('read-only') } })
   })

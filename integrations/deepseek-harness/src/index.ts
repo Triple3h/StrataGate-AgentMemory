@@ -40,7 +40,7 @@ export async function apply(ctx: Context, config: StrataGateConfig): Promise<() 
   const runtime = new StrataGateRuntime(resolved, models, (error) => {
     ctx.logger.error(`stratagate-memory ingestion failed: ${renderError(error)}`)
   })
-  await runtime.syncConfiguredBlockTurnSize()
+  await runtime.syncConfiguredSettings()
 
   ctx.systemPrompt.section({ name: 'tool:stratagate-memory', order: 113, text: MEMORY_PROTOCOL })
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {

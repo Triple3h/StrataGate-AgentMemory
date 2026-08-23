@@ -35,13 +35,14 @@ describe('progressive conversation blocks', () => {
 
   it('decays through six levels and expands only to the requested level', () => {
     expect(getDecayedBlockLevel(5, 0, 0)).toBe(5);
-    expect(getDecayedBlockLevel(5, 0, 12)).toBe(4);
-    expect(getDecayedBlockLevel(5, 0, 24)).toBe(3);
-    expect(getDecayedBlockLevel(5, 0, 36)).toBe(2);
-    expect(getDecayedBlockLevel(5, 0, 48)).toBe(1);
-    expect(getDecayedBlockLevel(5, 0, 60)).toBe(0);
+    expect(getDecayedBlockLevel(5, 0, 2)).toBe(4);
+    expect(getDecayedBlockLevel(5, 0, 3)).toBe(3);
+    expect(getDecayedBlockLevel(5, 0, 5)).toBe(2);
+    expect(getDecayedBlockLevel(5, 0, 7)).toBe(1);
+    expect(getDecayedBlockLevel(5, 0, 9)).toBe(0);
+    expect(getDecayedBlockLevel(5, 0, 4, 0.1)).toBe(4);
     expect(normalizeBlockLevel('next', 2)).toBe(3);
     expect(normalizeBlockLevel('raw', 2)).toBe(5);
-    expect(getBlockWeight(0, 12)).toBeCloseTo(Math.exp(-0.6), 8);
+    expect(getBlockWeight(0, 2)).toBeCloseTo(Math.exp(-0.6), 8);
   });
 });

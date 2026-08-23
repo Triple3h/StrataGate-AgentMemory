@@ -1,6 +1,7 @@
+import { BLOCK_DECAY_LAMBDA } from './blocks.js';
 import type { ElementCard, EventCard, MemoryBlock, RawMessage } from './types.js';
 
-export const STRATAGATE_STORAGE_SCHEMA_VERSION = 5;
+export const STRATAGATE_STORAGE_SCHEMA_VERSION = 6;
 
 export type ExtractionJobStatus = 'running' | 'succeeded' | 'skipped' | 'failed';
 
@@ -63,6 +64,7 @@ export interface StrataGateSnapshot {
   schemaVersion: typeof STRATAGATE_STORAGE_SCHEMA_VERSION;
   currentTurn: number;
   blockTurnSize: number;
+  blockDecayLambda: number;
   openTail: RawMessage[];
   blocks: MemoryBlock[];
   events: EventCard[];
@@ -100,22 +102,40 @@ export function cloneSnapshot(snapshot: StrataGateSnapshot): StrataGateSnapshot 
   return structuredClone(snapshot);
 }
 
-interface LegacySnapshotV1 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'elements' | 'elementProjectionJobs' | 'usageReceipts' | 'ingestionReceipts'> {
+type LegacyMemoryBlock = Omit<MemoryBlock, 'pointerAnchorBlockPosition'> & { pointerAnchorTurn: number };
+type LegacySnapshotBase = Omit<StrataGateSnapshot, 'schemaVersion' | 'blockDecayLambda' | 'blocks'> & {
+  blocks: LegacyMemoryBlock[];
+};
+
+interface LegacySnapshotV1 extends Omit<LegacySnapshotBase, 'elements' | 'elementProjectionJobs' | 'usageReceipts' | 'ingestionReceipts'> {
   schemaVersion: 1;
   usageReceipts: Array<Omit<UsageReceipt, 'elementIds'>>;
 }
 
-interface LegacySnapshotV2 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'ingestionReceipts'> {
+interface LegacySnapshotV2 extends Omit<LegacySnapshotBase, 'ingestionReceipts'> {
   schemaVersion: 2;
 }
 
-interface LegacySnapshotV3 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'usageReceipts'> {
+interface LegacySnapshotV3 extends Omit<LegacySnapshotBase, 'usageReceipts'> {
   schemaVersion: 3;
   usageReceipts: Array<Omit<UsageReceipt, 'audit'>>;
 }
 
-interface LegacySnapshotV4 extends Omit<StrataGateSnapshot, 'schemaVersion'> {
+interface LegacySnapshotV4 extends LegacySnapshotBase {
   schemaVersion: 4;
+}
+
+interface LegacySnapshotV5 extends LegacySnapshotBase {
+  schemaVersion: 5;
+}
+
+function migrateLegacyBlocks(blocks: readonly LegacyMemoryBlock[]): MemoryBlock[] {
+  return blocks.map((block) => {
+    const { pointerAnchorTurn, ...current } = block;
+    const position = blocks.filter((candidate) =>
+      candidate.threadId === block.threadId && candidate.endTurn <= pointerAnchorTurn).length;
+    return { ...current, pointerAnchorBlockPosition: Math.max(1, position) };
+  });
 }
 
 export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
@@ -127,6 +147,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
     snapshot = {
       ...structuredClone(legacy),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blockDecayLambda: BLOCK_DECAY_LAMBDA,
+      blocks: migrateLegacyBlocks(legacy.blocks),
       elements: [],
       elementProjectionJobs: [],
       usageReceipts: Array.isArray(legacy.usageReceipts)
@@ -135,20 +157,37 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       ingestionReceipts: [],
     };
   } else if (schemaVersion === 2) {
+    const legacy = value as LegacySnapshotV2;
     snapshot = {
-      ...structuredClone(value as LegacySnapshotV2),
+      ...structuredClone(legacy),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blockDecayLambda: BLOCK_DECAY_LAMBDA,
+      blocks: migrateLegacyBlocks(legacy.blocks),
       ingestionReceipts: [],
     };
   } else if (schemaVersion === 3) {
+    const legacy = value as LegacySnapshotV3;
     snapshot = {
-      ...structuredClone(value as LegacySnapshotV3),
+      ...structuredClone(legacy),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blockDecayLambda: BLOCK_DECAY_LAMBDA,
+      blocks: migrateLegacyBlocks(legacy.blocks),
     };
   } else if (schemaVersion === 4) {
+    const legacy = value as LegacySnapshotV4;
     snapshot = {
-      ...structuredClone(value as LegacySnapshotV4),
+      ...structuredClone(legacy),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blockDecayLambda: BLOCK_DECAY_LAMBDA,
+      blocks: migrateLegacyBlocks(legacy.blocks),
+    };
+  } else if (schemaVersion === 5) {
+    const legacy = value as LegacySnapshotV5;
+    snapshot = {
+      ...structuredClone(legacy),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blockDecayLambda: BLOCK_DECAY_LAMBDA,
+      blocks: migrateLegacyBlocks(legacy.blocks),
     };
   } else if (schemaVersion === STRATAGATE_STORAGE_SCHEMA_VERSION) {
     snapshot = structuredClone(value) as StrataGateSnapshot;
@@ -161,10 +200,18 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   if (!Number.isSafeInteger(snapshot.blockTurnSize) || (snapshot.blockTurnSize ?? 0) < 1) {
     throw new TypeError('Invalid StrataGate snapshot: blockTurnSize must be a positive integer');
   }
+  if (!Number.isFinite(snapshot.blockDecayLambda) || snapshot.blockDecayLambda < 0) {
+    throw new TypeError('Invalid StrataGate snapshot: blockDecayLambda must be a non-negative finite number');
+  }
   for (const key of ['openTail', 'blocks', 'events', 'elements', 'extractionJobs', 'elementProjectionJobs', 'usageReceipts', 'ingestionReceipts'] as const) {
     if (!Array.isArray(snapshot[key])) throw new TypeError(`Invalid StrataGate snapshot: ${key} must be an array`);
   }
   if (!Array.isArray(snapshot.successfulModelResponses)) snapshot.successfulModelResponses = [];
+  for (const block of snapshot.blocks) {
+    if (!Number.isSafeInteger(block.pointerAnchorBlockPosition) || block.pointerAnchorBlockPosition < 1) {
+      throw new TypeError('Invalid StrataGate snapshot: pointerAnchorBlockPosition must be a positive integer');
+    }
+  }
   if (snapshot.successfulModelResponses.length > 5) {
     snapshot.successfulModelResponses = snapshot.successfulModelResponses.slice(-5);
   }

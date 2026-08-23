@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
@@ -22,6 +22,7 @@ import { SqliteStorage } from '@diqier/stratagate/sqlite'
 import type { ResolvedConfig } from './config.js'
 import { TurnFolder } from './fold.js'
 import { DshModelBridge } from './llm.js'
+import { DshMetadataStore } from './metadata.js'
 
 interface EvidenceTarget {
   eventIds: string[]
@@ -57,16 +58,21 @@ export class StrataGateRuntime {
   private readonly batches = new Map<string, RetrievalBatch>()
   private readonly adopted = new Map<string, AdoptedEvidence>()
   private readonly pendingUse = new Set<string>()
+  private readonly workspaceNames = new Map<string, string>()
   private ingestTail: Promise<void> = Promise.resolve()
+  private settingsTail: Promise<void> = Promise.resolve()
   private batchSequence = 0
   private closed = false
   private ingestError: unknown
+  private blockDecayLambda: number
 
   constructor(
     private readonly config: ResolvedConfig,
     private readonly models: DshModelBridge,
     private readonly onIngestError: (error: unknown) => void = () => {},
-  ) {}
+  ) {
+    this.blockDecayLambda = config.blockDecayLambda
+  }
 
   acceptEvent(session: Session, event: SessionEvent): void {
     if (this.closed) return
@@ -311,16 +317,26 @@ export class StrataGateRuntime {
     }
   }
 
-  async syncConfiguredBlockTurnSize(): Promise<void> {
+  async syncConfiguredSettings(): Promise<void> {
     if (this.config.database === ':memory:' || !existsSync(this.config.database)) return
+    const metadata = new DshMetadataStore(this.config.database)
+    try {
+      this.blockDecayLambda = metadata.blockDecayLambda() ?? this.config.blockDecayLambda
+    } finally {
+      metadata.close()
+    }
     const storage = new SqliteStorage({ filename: this.config.database })
     try {
       for (const namespace of storage.listNamespaces()) {
         const loaded = await storage.load(namespace)
-        if (!loaded || loaded.snapshot.blockTurnSize === this.config.blockTurnSize) continue
+        if (!loaded || (
+          loaded.snapshot.blockTurnSize === this.config.blockTurnSize
+          && loaded.snapshot.blockDecayLambda === this.blockDecayLambda
+        )) continue
         await storage.save(namespace, {
           ...loaded.snapshot,
           blockTurnSize: this.config.blockTurnSize,
+          blockDecayLambda: this.blockDecayLambda,
         }, loaded.revision)
       }
     } finally {
@@ -340,14 +356,71 @@ export class StrataGateRuntime {
     }
   }
 
+  adminWorkspaceName(namespace: string): string | null {
+    const remembered = this.workspaceNames.get(namespace)
+    if (remembered) return remembered
+    if (this.config.database === ':memory:' || !existsSync(this.config.database)) return null
+    const metadata = new DshMetadataStore(this.config.database)
+    try {
+      return metadata.workspaceName(namespace)
+    } finally {
+      metadata.close()
+    }
+  }
+
+  async adminSetBlockDecayLambda(value: number): Promise<number> {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new TypeError('blockDecayLambda must be a non-negative finite number')
+    }
+    const update = this.settingsTail.catch(() => {}).then(() => this.applyBlockDecayLambda(value))
+    this.settingsTail = update.then(() => {}, () => {})
+    await update
+    return value
+  }
+
+  private async applyBlockDecayLambda(value: number): Promise<void> {
+    await this.flush()
+    this.blockDecayLambda = value
+    if (this.config.database !== ':memory:') {
+      const metadata = new DshMetadataStore(this.config.database)
+      try {
+        metadata.setBlockDecayLambda(value)
+      } finally {
+        metadata.close()
+      }
+    }
+
+    const openNamespaces = new Set<string>()
+    for (const [namespace, opening] of this.spaces) {
+      const memory = await opening
+      await memory.setBlockDecayLambda(value)
+      openNamespaces.add(namespace)
+    }
+    if (this.config.database !== ':memory:' && existsSync(this.config.database)) {
+      const storage = new SqliteStorage({ filename: this.config.database })
+      try {
+        for (const namespace of storage.listNamespaces()) {
+          if (openNamespaces.has(namespace)) continue
+          const loaded = await storage.load(namespace)
+          if (!loaded || loaded.snapshot.blockDecayLambda === value) continue
+          await storage.save(namespace, { ...loaded.snapshot, blockDecayLambda: value }, loaded.revision)
+        }
+      } finally {
+        await storage.close()
+      }
+    }
+  }
+
   private space(session: Session): Promise<StrataGate> {
     const namespace = this.namespaceFor(session)
+    this.rememberWorkspace(namespace, session.header.cwd)
     let opening = this.spaces.get(namespace)
     if (!opening) {
       opening = StrataGate.open({
         database: this.config.database,
         namespace,
         blockTurnSize: this.config.blockTurnSize,
+        blockDecayLambda: this.blockDecayLambda,
         summarizer: this.models.summarizer,
         extractor: this.models.extractor,
         elementProjector: this.models.projector,
@@ -370,6 +443,22 @@ export class StrataGateRuntime {
       })
     }
     return opening
+  }
+
+  private rememberWorkspace(namespace: string, cwd: string | undefined): void {
+    const name = basename(resolve(cwd ?? process.cwd())) || '当前工作区'
+    this.workspaceNames.set(namespace, name)
+    if (this.config.database === ':memory:') return
+    try {
+      const metadata = new DshMetadataStore(this.config.database)
+      try {
+        metadata.rememberWorkspace(namespace, name)
+      } finally {
+        metadata.close()
+      }
+    } catch (error) {
+      this.onIngestError(error)
+    }
   }
 
   private async persistSuccessfulResponses(memory: StrataGate): Promise<void> {
@@ -438,7 +527,7 @@ function renderMessages(messages: readonly RawMessage[]): string {
 function renderBlocks(blocks: ReturnType<StrataGate['getBlockContext']>): string {
   if (blocks.length === 0) return '(no sealed blocks)'
   return blocks.map((block) => [
-    `block ${block.id} | turns ${block.turnRange[0]}-${block.turnRange[1]} | L${block.level}`,
+    `block ${block.id} | turns ${block.turnRange[0]}-${block.turnRange[1]} | age ${block.age} | L${block.level}`,
     block.content,
   ].join('\n')).join('\n\n')
 }

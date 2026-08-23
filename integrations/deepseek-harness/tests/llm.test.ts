@@ -92,6 +92,7 @@ function modelBridge(responses: Array<{ text?: string; tool?: unknown; toolName?
     namespacePrefix: 'test',
     globalNamespace: 'global',
     blockTurnSize: 1,
+    blockDecayLambda: 0.3,
     ingestSubagents: false,
     maxOutputTokens: 256,
   })
@@ -151,7 +152,7 @@ describe('DeepSeek Harness model JSON retries', () => {
     } as unknown as Context
     const bridge = new DshModelBridge(ctx, {
       database: ':memory:', namespaceMode: 'session', namespacePrefix: 'test', globalNamespace: 'global',
-      blockTurnSize: 1, ingestSubagents: false, maxOutputTokens: 256,
+      blockTurnSize: 1, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 256,
     })
     const session = { id: 'reasoning-test', requestHeader: () => ({ config: { provider: 'test', model: 'test' } }) } as unknown as Session
 
@@ -180,7 +181,7 @@ describe('DeepSeek Harness model JSON retries', () => {
       l3Condensed: 'target condensed', l4Readable: 'target readable',
       l5Raw: [{ id: 'msg_target', role: 'user', content: 'target message', createdAt: '2026-01-01T00:00:00.000Z' }],
       shouldExtract: true, pointerCurrentLevel: 5, pointerAnchorLevel: 5,
-      pointerAnchorTurn: 4, lastLiftedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
+      pointerAnchorBlockPosition: 1, lastLiftedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
     } as MemoryBlock
     const next = {
       ...target, id: 'blk_next', sequence: 3, startTurn: 5, endTurn: 6,
@@ -210,7 +211,7 @@ describe('DeepSeek Harness model JSON retries', () => {
       l0Title: 'target', l0Tags: [], l1Summary: '', l2Keypoints: [], l3Condensed: '', l4Readable: '',
       l5Raw: [{ id: 'msg_target', role: 'user', content: 'target message', createdAt: '2026-01-01T00:00:00.000Z' }],
       shouldExtract: true, pointerCurrentLevel: 5, pointerAnchorLevel: 5,
-      pointerAnchorTurn: 2, lastLiftedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
+      pointerAnchorBlockPosition: 1, lastLiftedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
     } as MemoryBlock
     const { bridge, session } = modelBridge([{
       tool: { shouldExtract: true, reason: 'wrong block', events: [{

@@ -167,15 +167,19 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
     ].sort()
     rows.push({
       namespace,
+      workspaceName: runtime.adminWorkspaceName(namespace) ?? '当前工作区',
       schemaVersion: snapshot.schemaVersion,
       currentTurn: snapshot.currentTurn,
       blockTurnSize: snapshot.blockTurnSize,
+      blockDecayLambda: snapshot.blockDecayLambda,
       blocks: snapshot.blocks.length,
       openTailMessages: snapshot.openTail.length,
       events: snapshot.events.length,
       activeEvents: snapshot.events.filter(({ status }) => status === 'active').length,
       elements: snapshot.elements.length,
       usageReceipts: snapshot.usageReceipts.length,
+      memoryUseCount: snapshot.usageReceipts.filter((receipt) =>
+        receipt.eventIds.length > 0 || receipt.elementIds.length > 0).length,
       failedJobs,
       processingJobs,
       failedJobDetails,
@@ -183,7 +187,16 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
       lastActivityAt: timestamps.at(-1) ?? null,
     })
   }
-  return { readonly: true, namespaces: rows }
+  return { readonly: true, settingsWritable: true, namespaces: rows }
+}
+
+async function updateSettings(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
+  const raw = url.searchParams.get('blockDecayLambda')?.trim() ?? ''
+  const value = Number(raw)
+  if (!raw || !Number.isFinite(value) || value < 0) {
+    throw new AdminHttpError(400, 'blockDecayLambda must be a non-negative finite number')
+  }
+  return { blockDecayLambda: await runtime.adminSetBlockDecayLambda(value) }
 }
 
 async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
@@ -322,10 +335,13 @@ async function audit(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
 
 export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebRequest, res: WebResponse): Promise<void> {
   try {
-    if (req.method !== 'GET') throw new AdminHttpError(405, 'StrataGate Memory UI is read-only')
     const url = new URL(req.url ?? '/', 'http://localhost')
     const path = url.pathname.replace(/\/$/, '')
-    if (path === '/api/stratagate/overview') sendJson(res, 200, await overview(runtime))
+    if (path === '/api/stratagate/settings') {
+      if (req.method !== 'PATCH') throw new AdminHttpError(405, 'StrataGate settings require PATCH')
+      sendJson(res, 200, await updateSettings(runtime, url))
+    } else if (req.method !== 'GET') throw new AdminHttpError(405, 'StrataGate memory data is read-only')
+    else if (path === '/api/stratagate/overview') sendJson(res, 200, await overview(runtime))
     else if (path === '/api/stratagate/memories') sendJson(res, 200, await memories(runtime, url))
     else if (path === '/api/stratagate/sources') sendJson(res, 200, await sources(runtime, url))
     else if (path === '/api/stratagate/audit') sendJson(res, 200, await audit(runtime, url))
