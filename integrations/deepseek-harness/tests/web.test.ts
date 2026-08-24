@@ -6,7 +6,7 @@ import { handleAdminRequest, type WebResponse } from '../src/web.js'
 const fullFailure = 'StrataGate model response was not valid JSON\nRaw response (full):\n' + 'x'.repeat(600)
 
 const snapshot: StrataGateSnapshot = {
-  schemaVersion: 6,
+  schemaVersion: 7,
   currentTurn: 8,
   blockTurnSize: 4,
   blockDecayLambda: 0.3,
@@ -35,6 +35,7 @@ const snapshot: StrataGateSnapshot = {
     pointerAnchorLevel: 5,
     pointerAnchorBlockPosition: 1,
     lastLiftedAt: null,
+    lastLiftedBy: null,
   }],
   events: [{
     id: 'evt_1',
@@ -98,6 +99,7 @@ const snapshot: StrataGateSnapshot = {
 }
 
 let updatedLambda: number | null = null
+let expandedBlock: { namespace: string; id: string; target: string | number } | null = null
 const runtime = {
   adminNamespaces: async () => ['dsh:project:test'],
   adminSnapshot: async (namespace: string) => namespace === 'dsh:project:test' ? snapshot : null,
@@ -105,6 +107,10 @@ const runtime = {
   adminSetBlockDecayLambda: async (value: number) => {
     updatedLambda = value
     return value
+  },
+  adminExpandBlock: async (namespace: string, id: string, target: string | number) => {
+    expandedBlock = { namespace, id, target }
+    return { id, level: Number(String(target).replace(/^L/i, '')) }
   },
 } as unknown as StrataGateRuntime
 
@@ -171,13 +177,91 @@ describe('StrataGate admin routes', () => {
     expect(memories.body).toMatchObject({ total: 1, items: [{ id: 'evt_1', title: 'Use pnpm', relatedElements: [{ id: 'el_1', name: 'pnpm' }] }] })
 
     const blocks = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=blocks')
-    expect(blocks.body).toMatchObject({ items: [{
-      id: 'blk_1',
-      status: 'organized',
-      eventExtraction: { status: 'succeeded' },
-      relatedEvents: [{ id: 'evt_1' }],
-      relatedElements: [{ id: 'el_1' }],
-    }] })
+    expect(blocks.body).toMatchObject({
+      activeThreadId: '__legacy__',
+      conversations: [{ id: '__legacy__', label: '历史对话', blocks: 1 }],
+      openBlock: { turnRange: null, status: 'open' },
+      items: [{
+        id: 'blk_1',
+        currentLevel: 5,
+        distanceFromLatest: 0,
+        expansionSource: null,
+        status: 'organized',
+        eventExtraction: { status: 'succeeded' },
+        relatedEvents: [{ id: 'evt_1' }],
+        relatedElements: [{ id: 'el_1' }],
+      }],
+    })
+  })
+
+  it('filters short-term Blocks and the open tail by the selected conversation', async () => {
+    const first = {
+      ...snapshot.blocks[0]!,
+      threadId: 'thread-a',
+      l5Raw: snapshot.blocks[0]!.l5Raw.map((message) => ({ ...message, threadId: 'thread-a' })),
+    }
+    const second = {
+      ...snapshot.blocks[0]!,
+      id: 'blk_2',
+      threadId: 'thread-b',
+      sequence: 2,
+      l0Title: 'Second conversation',
+      l5Raw: [{ ...snapshot.blocks[0]!.l5Raw[0]!, id: 'msg_2', threadId: 'thread-b', content: 'Second conversation prompt' }],
+    }
+    const threadedRuntime = {
+      adminSnapshot: async () => ({
+        ...snapshot,
+        blocks: [first, second],
+        openTail: [{ id: 'open_1', threadId: 'thread-b', role: 'user' as const, content: 'Continue second conversation', createdAt: '2026-08-19T00:00:00.000Z' }],
+      }),
+    } as unknown as StrataGateRuntime
+
+    const firstResult = await request('/api/stratagate/memories?namespace=threaded&kind=blocks&threadId=thread-a', 'GET', threadedRuntime)
+    expect(firstResult.body).toMatchObject({ activeThreadId: 'thread-a', items: [{ id: 'blk_1' }], openBlock: { turnRange: null } })
+    expect(firstResult.body.items).toHaveLength(1)
+
+    const secondResult = await request('/api/stratagate/memories?namespace=threaded&kind=blocks&threadId=thread-b', 'GET', threadedRuntime)
+    expect(secondResult.body).toMatchObject({ activeThreadId: 'thread-b', items: [{ id: 'blk_2' }], openBlock: { turnRange: [5, 5] } })
+    expect(secondResult.body.conversations.map(({ id }: { id: string }) => id)).toEqual(['thread-b', 'thread-a'])
+  })
+
+  it('recovers legacy conversation boundaries from ingestion receipts without rewriting mixed Blocks', async () => {
+    const mixed = {
+      ...snapshot.blocks[0]!,
+      l5Raw: [
+        { id: 'a-user', role: 'user' as const, content: 'Alpha question', createdAt: '2026-08-18T00:00:00.000Z' },
+        { id: 'a-assistant', role: 'assistant' as const, content: 'Alpha answer', createdAt: '2026-08-18T00:00:00.000Z' },
+        { id: 'b-user', role: 'user' as const, content: 'Beta question', createdAt: '2026-08-18T01:00:00.000Z' },
+        { id: 'b-assistant', role: 'assistant' as const, content: 'Beta answer', createdAt: '2026-08-18T01:00:00.000Z' },
+      ],
+    }
+    const recoveredRuntime = {
+      adminSnapshot: async () => ({
+        ...snapshot,
+        blocks: [mixed],
+        openTail: [],
+        ingestionReceipts: [
+          { id: 'dsh:session-alpha:turn:1', createdAt: '2026-08-18T00:00:00.000Z' },
+          { id: 'dsh:session-beta:turn:1', createdAt: '2026-08-18T01:00:00.000Z' },
+        ],
+      }),
+    } as unknown as StrataGateRuntime
+
+    const alpha = await request('/api/stratagate/memories?namespace=recovered&kind=blocks&threadId=session-alpha', 'GET', recoveredRuntime)
+    expect(alpha.body).toMatchObject({
+      activeThreadId: 'session-alpha',
+      items: [{ id: expect.stringContaining('virtual:blk_1:'), threadId: 'session-alpha', virtual: true, turnRange: [1, 1] }],
+    })
+    expect(alpha.body.conversations.map(({ id }: { id: string }) => id)).toEqual(['session-beta', 'session-alpha'])
+    expect(alpha.body.conversations.some(({ id }: { id: string }) => id === '__legacy__')).toBe(false)
+
+    const detail = await request(`/api/stratagate/sources?namespace=recovered&blockId=${encodeURIComponent(alpha.body.items[0].id)}`, 'GET', recoveredRuntime)
+    expect(detail.body).toMatchObject({ virtual: true, messages: [{ id: 'a-user' }, { id: 'a-assistant' }] })
+    expect(detail.body.layers[5].content).toContain('Alpha question')
+    expect(detail.body.layers[5].content).not.toContain('Beta question')
+
+    const emptyHostSession = await request('/api/stratagate/memories?namespace=recovered&kind=blocks&threadId=session-without-memory', 'GET', recoveredRuntime)
+    expect(emptyHostSession.body).toMatchObject({ activeThreadId: 'session-without-memory', items: [], openBlock: { messages: 0 } })
   })
 
   it('expands source evidence with server-side secret redaction', async () => {
@@ -193,7 +277,25 @@ describe('StrataGate admin routes', () => {
       events: [{ id: 'evt_1' }],
       elements: [{ id: 'el_1' }],
       messages: [{ id: 'msg_1' }],
+      layers: [
+        { level: 0, content: expect.stringContaining('Package manager') },
+        { level: 1, content: 'Use pnpm for this project.' },
+        { level: 2, content: '• pnpm' },
+        { level: 3, content: 'Use pnpm.' },
+        { level: 4, content: 'Use pnpm.' },
+        { level: 5, content: 'user: Use pnpm. api_key=[REDACTED]' },
+      ],
     })
+  })
+
+  it('actively lifts a Block to one requested layer', async () => {
+    expandedBlock = null
+    const result = await request('/api/stratagate/blocks/expand?namespace=dsh%3Aproject%3Atest&blockId=blk_1&level=L4', 'PATCH')
+    expect(result).toMatchObject({ status: 200, body: { id: 'blk_1', level: 4 } })
+    expect(expandedBlock).toEqual({ namespace: 'dsh:project:test', id: 'blk_1', target: 'L4' })
+
+    const invalid = await request('/api/stratagate/blocks/expand?namespace=dsh%3Aproject%3Atest&blockId=blk_1&level=L9', 'PATCH')
+    expect(invalid).toMatchObject({ status: 400, body: { error: expect.stringContaining('L0 through L5') } })
   })
 
   it('links answer audit records to events and original messages', async () => {

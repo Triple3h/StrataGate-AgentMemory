@@ -1,7 +1,7 @@
 import { BLOCK_DECAY_LAMBDA } from './blocks.js';
 import type { ElementCard, EventCard, MemoryBlock, RawMessage } from './types.js';
 
-export const STRATAGATE_STORAGE_SCHEMA_VERSION = 6;
+export const STRATAGATE_STORAGE_SCHEMA_VERSION = 7;
 
 export type ExtractionJobStatus = 'running' | 'succeeded' | 'skipped' | 'failed';
 
@@ -102,7 +102,7 @@ export function cloneSnapshot(snapshot: StrataGateSnapshot): StrataGateSnapshot 
   return structuredClone(snapshot);
 }
 
-type LegacyMemoryBlock = Omit<MemoryBlock, 'pointerAnchorBlockPosition'> & { pointerAnchorTurn: number };
+type LegacyMemoryBlock = Omit<MemoryBlock, 'pointerAnchorBlockPosition' | 'lastLiftedBy'> & { pointerAnchorTurn: number };
 type LegacySnapshotBase = Omit<StrataGateSnapshot, 'schemaVersion' | 'blockDecayLambda' | 'blocks'> & {
   blocks: LegacyMemoryBlock[];
 };
@@ -129,12 +129,17 @@ interface LegacySnapshotV5 extends LegacySnapshotBase {
   schemaVersion: 5;
 }
 
+interface LegacySnapshotV6 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'blocks'> {
+  schemaVersion: 6;
+  blocks: Array<Omit<MemoryBlock, 'lastLiftedBy'>>;
+}
+
 function migrateLegacyBlocks(blocks: readonly LegacyMemoryBlock[]): MemoryBlock[] {
   return blocks.map((block) => {
     const { pointerAnchorTurn, ...current } = block;
     const position = blocks.filter((candidate) =>
       candidate.threadId === block.threadId && candidate.endTurn <= pointerAnchorTurn).length;
-    return { ...current, pointerAnchorBlockPosition: Math.max(1, position) };
+    return { ...current, pointerAnchorBlockPosition: Math.max(1, position), lastLiftedBy: null };
   });
 }
 
@@ -189,6 +194,13 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
     };
+  } else if (schemaVersion === 6) {
+    const legacy = value as LegacySnapshotV6;
+    snapshot = {
+      ...structuredClone(legacy),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blocks: legacy.blocks.map((block) => ({ ...structuredClone(block), lastLiftedBy: null })),
+    };
   } else if (schemaVersion === STRATAGATE_STORAGE_SCHEMA_VERSION) {
     snapshot = structuredClone(value) as StrataGateSnapshot;
   } else {
@@ -210,6 +222,9 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   for (const block of snapshot.blocks) {
     if (!Number.isSafeInteger(block.pointerAnchorBlockPosition) || block.pointerAnchorBlockPosition < 1) {
       throw new TypeError('Invalid StrataGate snapshot: pointerAnchorBlockPosition must be a positive integer');
+    }
+    if (block.lastLiftedBy !== null && block.lastLiftedBy !== 'user' && block.lastLiftedBy !== 'agent') {
+      throw new TypeError('Invalid StrataGate snapshot: lastLiftedBy must be user, agent, or null');
     }
   }
   if (snapshot.successfulModelResponses.length > 5) {

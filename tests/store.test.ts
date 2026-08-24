@@ -184,4 +184,13 @@ describe('StrataGate lifecycle', () => {
       { age: 0, level: 5 },
     ]);
   });
+
+  it('records whether a Block lift came from an Agent or the user', async () => {
+    const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer, idFactory: ids() });
+    const first = await memory.appendTurn({ user: 'First', assistant: 'Stored' });
+    await memory.expandBlock(first.sealedBlock!.id, 4);
+    expect(memory.listBlocks()[0]?.lastLiftedBy).toBe('agent');
+    await memory.expandBlock(first.sealedBlock!.id, 5, 'user');
+    expect(memory.listBlocks()[0]?.lastLiftedBy).toBe('user');
+  });
 });

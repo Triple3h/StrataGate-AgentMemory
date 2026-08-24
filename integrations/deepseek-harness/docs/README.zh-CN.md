@@ -6,6 +6,16 @@
 
 该插件负责将 DSH 会话事件接入现有的 StrataGate 记忆引擎，并不会实现另一套独立的记忆系统。
 
+## 界面预览
+
+### 分层短期记忆
+
+![StrataGate 分层短期记忆界面](assets/stratagate-short-term-memory.png)
+
+### 记忆结构与诊断
+
+![StrataGate 记忆结构与诊断界面](assets/stratagate-memory-structure.png)
+
 ## 它是怎么设计的
 
 StrataGate 不把“记忆”当作一段不断改写的摘要，而是把**原始证据、派生记忆、检索判断和使用反馈**分开处理：

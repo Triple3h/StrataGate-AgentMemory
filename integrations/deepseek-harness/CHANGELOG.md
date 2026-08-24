@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.21 - 2026-08-24
+
+- Use the current DSH Workspace session list and latest persisted DSH titles as the conversation selector source of truth.
+- Recover pre-thread legacy conversation boundaries from ingestion receipts and render mixed legacy Blocks as read-only virtual fragments without rewriting SQLite.
+- Add More → Feedback & Support with privacy-safe diagnostics, opt-in logs and memory data, GitHub Issue/Feature Request links, and Discussion Q&A.
+- Retry transient read-only browser fetch failures and identify the failed StrataGate endpoint in diagnostics.
+
+## 0.2.20 - 2026-08-24
+
+- Redesign Short-term Memory around a per-conversation oldest-to-newest Block distribution, a dedicated horizontal rail, sealed Block distances, and a distinct open Block state.
+- Expand Blocks inline into ordered L0–L5 previews with current-level highlighting and viewport-level, scrollable full-content hover cards that are not clipped by Settings.
+- Keep only one layer menu open, offer expansion only for deeper layers, and distinguish user, Agent, and legacy expansion markers.
+- Migrate storage to schema v7 to persist the source of each Block lift without mislabeling Agent retrieval as a user action.
+
 ## 0.2.19 - 2026-08-23
 
 - Make the global Block decay coefficient λ editable in Advanced Settings with `0.05` steps, immediate application to existing workspaces, persistence across restarts, and inheritance by future workspaces.
