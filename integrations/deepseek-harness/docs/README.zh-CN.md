@@ -25,7 +25,7 @@ flowchart LR
   A[DSH 已完成的对话轮次] --> B[L5 原始消息与工具记录]
   B --> C[L0–L4 分层压缩视图]
   B --> D[Event：发生过什么]
-  D --> E[Element：当前是什么状态]
+  D --> E[Knowledge Graph：当前世界模型]
   C --> F[搜索并按需展开]
   D --> F
   E --> F
@@ -36,8 +36,8 @@ flowchart LR
 ```
 
 1. **先保存来源，再生成摘要。** 每个已完成的 DSH 对话轮次先以原始消息和工具轨迹写入本地 SQLite。L0–L4 只是同一来源的不同压缩视图，不会覆盖 L5 原文；任何派生记忆都可以沿来源链路回到原始消息。
-2. **把历史事实与当前状态分开。** Event 是不可变的历史记录，用来回答“发生过什么”；Element 是可根据 Events 重建的实体视图，用来回答“这个用户、项目或工具目前是什么状态”。状态发生变化时保留前一状态的有效时间，而不是直接删除。
-3. **先看索引，再按需展开。** 检索首先返回较小的 Event、Element 事实或 Block 视图；只有需要核对细节时才展开到更深层，避免把全部历史一次性塞进模型上下文。
+2. **把历史事实与当前状态分开。** Event 是可追溯的事实账本，用来回答“发生过什么”；可重建的 Graph Node 与 Graph Edge 用来回答“现在是什么样”。
+3. **先看索引，再按需展开。** 检索首先返回较小的 Event、Graph 事实或 Block 视图；只有需要核对细节时才展开到更深层。
 4. **相关不代表足以回答。** Evidence Gate 会单独判断当前证据是否充分。证据不足时，Agent 必须继续搜索、展开来源或明确说明无法确认，而不能把相似结果直接当成答案。
 5. **检索与强化彼此分离。** 搜到一条记忆不会自动提高它的权重；只有证据通过评估并真正用于回答后，才会记录使用情况。这样可以避免“越常被搜到，就越容易继续被搜到”的自我强化循环。
 
@@ -50,7 +50,7 @@ flowchart LR
 - 自动跨会话记录已完成的对话和工具结果；
 - 使用本地 SQLite 存储，无需另行部署记忆服务器；
 - 默认按项目隔离记忆，也可选择按会话隔离或全局共享；
-- 使用分层的 Event 和 Element 卡片，而非无结构的对话归档；
+- 使用可追溯的 Block → Event → Knowledge Graph 链路，而非无结构的对话归档；
 - 找回的记忆可以展开并追溯到原始对话与工具输出；
 - 在使用检索到的记忆回答前，先判断证据是否充分。
 
@@ -79,24 +79,27 @@ DSH_HOME/stratagate/memory.db
 - StrataGate 自身的 `memory_*` 调用和结果不会写入工具轨迹，避免找回的记忆被重新当作新证据保存。
 - 默认不保存子 Agent 的对话轮次；同一项目中的子 Agent 仍然可以读取项目记忆。
 - 每个 DSH 对话轮次都有持久化的写入回执，因此重放或重试不会导致重复保存。
-- StrataGate 会执行现有的 Block 摘要、Event 提取、Element 投影、搜索、Evidence Gate（证据门控）以及仅在使用后触发的强化。
-- 每次主模型调用前，插件只会注入当前会话的 open tail 与已封 Block，并额外注入最多 4 条项目级激活 Event 和 4 条 active ElementFact。Block 仍会作为来源证据持久化，但绝不会自动带入其他会话。
+- StrataGate 会执行 Block 摘要、Event 提取、版本化 Knowledge Graph 投影、搜索、Evidence Gate（证据门控）以及仅在使用后触发的强化。
+- Block 封存后，插件使用 DSH 原生 surface `replace`，以该 Block 当前衰减得到的 L0–L5 表示替换对应的原始 surface 消息。后续模型请求前，如果衰减、手动提升或 λ 调整改变了当前层级，插件会再次替换该 checkpoint。尚未封存的 open tail 与完整工具调用/结果链继续作为 DSH 原生消息保留。
+- 每次主模型调用前，动态系统上下文只注入最多 4 条项目级激活 Event 和 4 个 active Graph Node，不再序列化 Current conversation、open tail、已封 Block 或 tool calls。
 
 激活查询由当前人类消息和当前会话 open tail 的最近两个 turn 组成。现有 BM25 搜索继续作为词面相关性门槛，只有 pinned 和 safety 记忆可以例外进入候选；现有记忆权重提供第二路排序，再由 RRF 融合相关性与权重排序。激活区固定使用约 900 tokens 的预算，不会随数据库增大而增长。
 
-自动上下文只包含精简的 Event 与 fact 字段，并明确标注为历史背景而非指令。构建自动上下文不会调用 `recordMemoryUse`，不会增加 `mentionCount`，也不会更新 `lastAdoptedTurn`。现有 `memory_*` 工具仍用于更深入、经过 Evidence Gate 的主动检索，也是触发采用强化的唯一入口。
+自动上下文只包含来自其他会话的精简 Event 与 fact 字段，并明确标注为历史背景而非指令。当前会话 Block 的证据会被排除，因为每个 Block 当前衰减层级的表示已存在于 DSH 原生历史中。构建自动上下文不会调用 `recordMemoryUse`，不会增加 `mentionCount`，也不会更新 `lastAdoptedTurn`。现有 `memory_*` 工具仍用于更深入、经过 Evidence Gate 的主动检索，也是触发采用强化的唯一入口。
 
-每个主动检索批次都必须通过 `memory_record_use` 结算。模型需要传入回答中实际使用的 `evidence_refs`；若一条也没有使用，则传入 `[]`。被选中的 Event 或 Element 卡各强化一次，空数组会写入一条零强化回执。DSH 的 turn-stopping 钩子会阻止尚未结算的检索直接结束，因此不再只依赖模型记住提示词要求。
+每个主动检索批次都必须通过 `memory_record_use` 结算。模型需要传入回答中实际使用的 `evidence_refs`；若一条也没有使用，则传入 `[]`。被选中的 Event 证据会强化一次，空数组会写入一条零强化回执。
 
 插件注册以下工具：
 
 ```text
 memory_search_events   memory_expand_event
-memory_search_elements memory_expand_element
+memory_search_graph    memory_expand_graph_node
 memory_search_raw      memory_get_blocks
 memory_expand_block    memory_assess
 memory_record_use
 ```
+
+旧 Element 工具名仅作为已有安装的兼容接口保留。
 
 提示词协议要求模型在依赖检索证据前完成评估。仅搜索不会强化记忆。非空的 `memory_record_use` 只接受最近一次“证据充分”评估中的证据，并使用 DSH 工具调用 ID 作为幂等回执。
 
@@ -105,7 +108,7 @@ memory_record_use
 打开 DSH 设置并选择 **StrataGate-AgentMemory**。该页面提供：
 
 - 命名空间健康状态和各类记忆数量；
-- Events、Elements 和 Blocks 搜索；
+- Events、Knowledge Graph Nodes 和 Blocks 搜索；
 - 从每条派生记忆展开查看来源消息；
 - Usage Audit（使用审计）链路：从已记录的回答轮次出发，经由 Evidence Gate 的判断与选中的记忆，追溯到来源消息。
 
@@ -140,7 +143,7 @@ config:
 
 ## 隐私与故障处理
 
-记忆保存在配置指定的本地 SQLite 文件中。只有当 StrataGate 封存 Block、提取 Event 或投影 Element 时，才会通过 DSH 正常的模型供应商调用来处理记忆。L5 层会保留原始来源消息，供后续核验。
+记忆保存在配置指定的本地 SQLite 文件中。图谱升级会按优先级小批量处理、逐批保存并在中断后续跑。L5 层会保留原始来源消息，供后续核验。
 
 为便于诊断，每个命名空间会保留最近 5 次成功的记忆模型响应。失败响应会保留完整错误详情；Memory 界面只显示有限长度的预览，并提供复制完整文本的操作。
 

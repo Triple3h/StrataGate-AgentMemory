@@ -23,7 +23,7 @@ const MEMORY_PROTOCOL = `[StrataGate memory protocol]
 StrataGate provides durable, evidence-gated memory through memory_* tools.
 
 - Search memory when the current task could depend on prior project decisions, user preferences, people, tools, historical outcomes, or unresolved work. Do not search for facts already established in the current conversation.
-- Start with memory_search_events for decisions and history, or memory_search_elements for the current state of a person/project/tool/place/organization.
+- Start with memory_search_events for decisions and history, or memory_search_graph for the current state of a person/project/tool/place/organization.
 - Every retrieval replaces the latest batch. Call memory_assess after each batch before relying on it. Cite only evidenceRefs returned by that exact latest batch.
 - If assessment is partial or wrong, follow nextStrategy: refine the search, expand an Element/block, or search raw memory. Do not present uncertain memory as fact.
 - Every retrieval batch must be closed with memory_record_use before the turn can end. Pass evidence_refs containing exactly the refs actually used, or [] when no retrieved evidence was used. Non-empty refs require a sufficient assessment of that latest batch. Never use a numeric increment; StrataGate applies one reinforcement per selected card.
@@ -39,6 +39,8 @@ export async function apply(ctx: Context, config: StrataGateConfig): Promise<() 
   const models = new DshModelBridge(ctx, resolved)
   const runtime = new StrataGateRuntime(resolved, models, (error) => {
     ctx.logger.error(`stratagate-memory ingestion failed: ${renderError(error)}`)
+  }, async (session) => {
+    await ctx.sessions.flush(session)
   })
   await runtime.syncConfiguredSettings()
 

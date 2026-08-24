@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
         --sg-warn-soft:var(--dsw-alias-state-warn-tertiary,#fef5e7);
         --sg-danger:var(--dsw-alias-state-error-primary,#ec1313);
         --sg-danger-soft:var(--dsw-alias-interactive-bg-hover-danger,rgba(236,19,19,.05));
-        box-sizing:border-box;width:100%;max-width:680px;min-width:0;margin:0 auto;padding:16px 18px 32px;
+        box-sizing:border-box;width:100%;max-width:1200px;min-width:0;margin:0 auto;padding:16px 18px 32px;
         background:var(--sg-page);color:var(--sg-text);font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
         letter-spacing:0;overflow-wrap:anywhere;
       }
@@ -57,6 +57,15 @@ window.__ModuleLoader__.load({
       .sg-block-list{position:relative;border:1px solid var(--sg-border);border-radius:9px;background:color-mix(in srgb,var(--sg-surface) 52%,transparent)}.sg-block-header,.sg-block-toggle{display:grid;grid-template-columns:88px 98px minmax(128px,1fr) 116px 24px;align-items:center;gap:8px;width:100%;min-width:0}.sg-block-header{padding:8px 12px;border-bottom:1px solid var(--sg-border);color:var(--sg-muted);font-size:11px}.sg-block-unit+.sg-block-unit{border-top:1px solid var(--sg-border)}.sg-block-toggle{padding:9px 12px;border:0;background:transparent;text-align:left;cursor:pointer}.sg-block-toggle:hover{background:color-mix(in srgb,var(--sg-accent) 5%,transparent)}.sg-level-cell{display:flex;align-items:center;gap:6px;min-width:0}.sg-level-badge{display:inline-grid;place-items:center;min-width:38px;height:25px;padding:0 8px;border:1px solid color-mix(in srgb,var(--sg-accent) 42%,var(--sg-border));border-radius:5px;font-weight:720}.sg-lifted{padding:1px 5px;border:1px solid var(--sg-border);border-radius:999px;color:var(--sg-muted);font-size:10px;white-space:nowrap}.sg-block-name{font-weight:670}.sg-block-distance,.sg-block-turn{color:var(--sg-muted);font-size:12px}.sg-row-chevron{color:var(--sg-muted);font-size:17px;text-align:right}.sg-open-row{cursor:default}.sg-open-row:hover{background:transparent}.sg-open-badge{display:inline-flex;align-items:center;height:25px;padding:0 8px;border:1px dashed var(--sg-muted);border-radius:5px;white-space:nowrap}.sg-block-expanded{padding:0 10px 11px}.sg-layer-panel{padding:10px;border:1px solid var(--sg-border);border-radius:8px;background:color-mix(in srgb,var(--sg-page) 82%,var(--sg-surface))}.sg-layer-heading{display:flex;justify-content:space-between;gap:10px;margin-bottom:8px}.sg-layer-heading strong{font-size:13px}.sg-layer-heading span{color:var(--sg-muted);font-size:11px}.sg-layer-stack{display:flex;flex-direction:column;gap:5px}.sg-layer-hover{position:relative}.sg-layer-hover:after{content:"";position:absolute;left:100%;top:0;width:12px;height:100%}.sg-layer-item{position:relative;display:grid;grid-template-columns:39px minmax(0,1fr) 30px;align-items:stretch;min-height:39px;border:1px solid var(--sg-border);border-radius:6px;background:color-mix(in srgb,var(--sg-soft) 55%,transparent);color:var(--sg-muted)}.sg-layer-item.current{border-color:color-mix(in srgb,var(--sg-accent) 72%,var(--sg-border));color:var(--sg-text);box-shadow:inset 2px 0 0 var(--sg-accent)}.sg-layer-label{display:grid;place-items:center;border-right:1px solid var(--sg-border);font-weight:720;color:inherit}.sg-layer-preview{padding:8px 10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px}.sg-layer-more{width:30px;border:0;border-left:1px solid transparent;border-radius:0 6px 6px 0;background:transparent;color:inherit;cursor:pointer;font-weight:800;letter-spacing:1px}.sg-layer-more:hover,.sg-layer-more[aria-expanded="true"]{background:color-mix(in srgb,var(--sg-accent) 14%,transparent)}.sg-layer-menu{position:absolute;right:3px;top:34px;z-index:14;min-width:132px;padding:4px;border:1px solid var(--sg-border);border-radius:7px;background:var(--sg-surface);box-shadow:0 8px 24px rgba(0,0,0,.24)}.sg-layer-menu button{width:100%;padding:7px 9px;border:0;border-radius:5px;background:transparent;text-align:left;cursor:pointer;white-space:nowrap}.sg-layer-menu button:hover:not(:disabled){background:var(--sg-soft);color:var(--sg-accent)}.sg-layer-menu button:disabled{cursor:not-allowed;opacity:.45}.sg-layer-popover{position:absolute;left:calc(100% + 11px);top:-7px;z-index:12;width:min(360px,46vw);max-height:340px;padding:12px;overflow:auto;border:1px solid color-mix(in srgb,var(--sg-accent) 32%,var(--sg-border));border-radius:9px;background:var(--sg-surface);box-shadow:0 14px 36px rgba(0,0,0,.28);visibility:hidden;opacity:0;transform:translateX(-4px);transition:opacity .12s ease,transform .12s ease,visibility .12s}.sg-layer-hover:hover .sg-layer-popover,.sg-layer-item:focus-visible + .sg-layer-popover{visibility:visible;opacity:1;transform:translateX(0)}.sg-layer-popover strong{display:block;margin-bottom:7px}.sg-layer-full{margin:0;white-space:pre-wrap;font:12px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}.sg-inline-error{padding:7px 9px;margin-bottom:7px;border-radius:6px;background:var(--sg-danger-soft);color:var(--sg-danger);font-size:12px}
       .sg-loading{padding:32px 0}.sg-skeleton{height:12px;margin:10px 0;border-radius:4px;background:var(--sg-soft)}.sg-skeleton:nth-child(2){width:72%}.sg-empty{padding:34px 14px;text-align:center;color:var(--sg-muted)}.sg-empty strong{display:block;margin-bottom:5px;color:var(--sg-text)}.sg-error{padding:13px;margin-bottom:16px;border:1px solid color-mix(in srgb,var(--sg-danger) 28%,var(--sg-border));border-radius:8px;background:var(--sg-danger-soft)}.sg-error-title{font-weight:700;color:var(--sg-danger)}.sg-error details{margin-top:7px;font-size:12px}
       .sg-muted{color:var(--sg-muted);font-size:12px}
+      .sg-long-tabs{display:flex;gap:4px;width:max-content;margin:0 0 14px;padding:4px;border:1px solid var(--sg-border);border-radius:999px;background:color-mix(in srgb,var(--sg-surface) 62%,transparent)}.sg-long-tabs button{padding:7px 19px;border:0;border-radius:999px;background:transparent;color:var(--sg-muted);cursor:pointer}.sg-long-tabs button.active{background:var(--sg-soft);color:var(--sg-accent)}
+      .sg-migration{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;margin:0 0 10px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--sg-accent) 28%,var(--sg-border));border-radius:8px;background:color-mix(in srgb,var(--sg-accent) 7%,transparent);font-size:12px}.sg-migration small{color:var(--sg-muted)}
+      .sg-long-explorer{position:relative}.sg-long-explorer.fullscreen{position:fixed;inset:12px;z-index:2147482000;display:flex;flex-direction:column;max-width:none;padding:18px;border:1px solid var(--sg-border);border-radius:12px;background:var(--sg-page);box-shadow:0 24px 80px rgba(0,0,0,.48)}.sg-long-explorer.fullscreen .sg-long-layout{flex:1;height:auto;min-height:0}.sg-long-explorer.fullscreen .sg-long-tabs{flex:0 0 auto}.sg-long-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}.sg-long-toolbar .sg-search{flex:1;margin:0}.sg-toolbar-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:39px;padding:0 13px;border:1px solid var(--sg-border);border-radius:7px;background:var(--sg-surface);color:var(--sg-text);cursor:pointer;white-space:nowrap}.sg-toolbar-button:hover,.sg-toolbar-button[aria-expanded="true"]{border-color:var(--sg-accent);color:var(--sg-accent)}.sg-toolbar-count{color:var(--sg-muted);font-size:11px;white-space:nowrap}.sg-long-layout{display:grid;grid-template-columns:minmax(0,1.72fr) minmax(280px,.9fr);height:min(680px,calc(100vh - 320px));min-height:480px;border:1px solid var(--sg-border);border-radius:9px;overflow:hidden;background:color-mix(in srgb,var(--sg-page) 74%,transparent)}.sg-summary-layout{grid-template-columns:minmax(0,1fr)}
+      .sg-filterbar{display:flex;gap:7px;margin:0 0 8px;padding:8px;border:1px solid var(--sg-border);border-radius:7px;background:color-mix(in srgb,var(--sg-surface) 62%,transparent);flex-wrap:wrap}.sg-filterbar select{min-width:112px;padding:6px 25px 6px 8px;border:1px solid var(--sg-border);border-radius:6px;background:var(--sg-surface);color:var(--sg-text);font-size:11px}.sg-active-filter-count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--sg-accent);color:white;font-size:10px}
+      .sg-graph-canvas{position:relative;min-width:0;overflow:hidden;background-image:radial-gradient(circle at center,color-mix(in srgb,var(--sg-accent) 6%,transparent),transparent 62%)}.sg-graph-canvas svg{display:block;width:100%;height:calc(100% - 38px)}.sg-graph-edge{stroke:color-mix(in srgb,var(--sg-muted) 58%,transparent);stroke-width:1.25}.sg-edge-label{fill:var(--sg-text);paint-order:stroke;stroke:var(--sg-page);stroke-width:4px;font-size:11px}.sg-graph-node{cursor:pointer;outline:none}.sg-graph-node:hover circle,.sg-graph-node.selected circle{filter:drop-shadow(0 0 9px rgba(86,145,255,.35))}.sg-node-name{fill:var(--sg-text);font-size:13px;font-weight:720;pointer-events:none}.sg-node-type{fill:color-mix(in srgb,var(--sg-text) 70%,transparent);font-size:10px;pointer-events:none}.sg-graph-legend{position:absolute;left:14px;bottom:10px;display:flex;gap:14px;flex-wrap:wrap;color:var(--sg-muted);font-size:11px}.sg-graph-legend span{display:flex;align-items:center;gap:5px}.sg-graph-legend i{width:9px;height:9px;border-radius:50%}.sg-node-bubble{position:absolute;z-index:8;width:min(310px,42%);padding:12px;border:1px solid color-mix(in srgb,var(--sg-accent) 38%,var(--sg-border));border-radius:9px;background:color-mix(in srgb,var(--sg-surface) 94%,transparent);box-shadow:0 14px 34px rgba(0,0,0,.3);transform:translate(35px,-50%)}.sg-node-bubble.flip{transform:translate(calc(-100% - 35px),-50%)}.sg-node-bubble h3{margin:0;font-size:14px}.sg-node-bubble-head,.sg-node-bubble-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}.sg-node-bubble-state{margin:7px 0;color:var(--sg-muted);font-size:11px}.sg-node-bubble ul{margin:7px 0;padding-left:17px;font-size:11px;line-height:1.55}.sg-node-bubble-foot{padding-top:8px;border-top:1px solid var(--sg-border);color:var(--sg-muted);font-size:11px}.sg-node-bubble button{border:0;background:transparent;color:var(--sg-accent);cursor:pointer;font-weight:680}
+      .sg-long-detail{min-width:0;padding:16px;overflow:auto;border-left:1px solid var(--sg-border);background:color-mix(in srgb,var(--sg-surface) 70%,transparent)}.sg-placeholder-detail{display:grid;place-items:center;color:var(--sg-muted);text-align:center}.sg-long-detail h2{margin:0;font-size:17px}.sg-long-detail section{padding:13px 0;border-top:1px solid var(--sg-border)}.sg-long-detail section:first-of-type{margin-top:13px}.sg-long-detail h3{margin:0 0 8px;font-size:13px}.sg-long-detail ul{margin:0;padding-left:18px;font-size:12px;line-height:1.65}.sg-detail-copy{margin:0;color:var(--sg-muted);font-size:12px;line-height:1.65;white-space:pre-wrap}.sg-node-head{display:flex;align-items:center;gap:10px}.sg-node-avatar{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;color:white;font-size:20px}.sg-status-dot{color:var(--sg-good);font-size:12px}.sg-relation-row{display:grid;grid-template-columns:68px 1fr auto;gap:7px;padding:7px 0;border-bottom:1px solid color-mix(in srgb,var(--sg-border) 65%,transparent);font-size:12px}.sg-relation-row span,.sg-relation-row small{color:var(--sg-muted)}.sg-support-event{display:flex;align-items:center;justify-content:space-between;width:100%;margin:5px 0;padding:9px;border:1px solid var(--sg-border);border-radius:7px;background:transparent;color:var(--sg-text);text-align:left;cursor:pointer}.sg-support-event:hover{border-color:var(--sg-accent)}
+      .sg-timeline-layout{grid-template-columns:minmax(420px,1.35fr) minmax(320px,.9fr)}.sg-timeline{position:relative;padding:10px 20px 18px;overflow:auto}.sg-time-group{position:relative}.sg-time-group>h3{margin:7px 0 8px;padding-left:17px;font-size:13px}.sg-time-group:before{content:"";position:absolute;left:5px;top:30px;bottom:-12px;width:1px;background:var(--sg-border)}.sg-timeline-card{position:relative;display:grid;grid-template-columns:112px minmax(0,1fr) auto;gap:12px;width:100%;margin:0 0 8px;padding:12px 14px;border:1px solid var(--sg-border);border-radius:8px;background:color-mix(in srgb,var(--sg-surface) 62%,transparent);color:var(--sg-text);text-align:left;cursor:pointer}.sg-timeline-card:hover,.sg-timeline-card.selected{border-color:var(--sg-accent);background:color-mix(in srgb,var(--sg-accent) 7%,var(--sg-surface))}.sg-timeline-dot{position:absolute;left:-19px;top:17px;width:9px;height:9px;border:2px solid var(--sg-accent);border-radius:50%;background:var(--sg-page)}.sg-event-clock{font-size:11px;white-space:normal}.sg-event-clock small{display:block;margin-top:3px;color:var(--sg-muted);line-height:1.35}.sg-event-title-row{display:flex;align-items:center;gap:7px;min-width:0}.sg-event-title-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sg-event-main p{margin:5px 0 7px;color:var(--sg-muted);font-size:12px;line-height:1.4;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.sg-type-badge{display:inline-flex;align-items:center;width:max-content;padding:2px 7px;border:1px solid color-mix(in srgb,var(--sg-accent) 30%,var(--sg-border));border-radius:5px;background:color-mix(in srgb,var(--sg-accent) 10%,transparent);color:var(--sg-accent);font-size:10px}.sg-event-status{display:inline-flex;width:max-content;height:max-content;padding:3px 8px;border:1px solid var(--sg-border);border-radius:999px;color:var(--sg-muted);font-size:10px;white-space:nowrap}.sg-event-status.occurred{border-color:color-mix(in srgb,var(--sg-good) 40%,var(--sg-border));background:var(--sg-good-soft);color:var(--sg-good)}.sg-event-status.planned,.sg-event-status.ongoing{border-color:color-mix(in srgb,var(--sg-accent) 35%,var(--sg-border));color:var(--sg-accent)}.sg-event-status.cancelled{color:var(--sg-danger)}.sg-event-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:7px}.sg-event-popover{position:fixed;z-index:2147483000;width:min(380px,calc(100vw - 24px));max-height:min(72vh,620px);overflow:auto;border:1px solid color-mix(in srgb,var(--sg-accent) 38%,var(--sg-border));border-radius:10px;background:var(--sg-page);box-shadow:0 18px 50px rgba(0,0,0,.38)}.sg-event-popover .sg-long-detail{border:0;background:transparent}.sg-popover-close{position:absolute;right:8px;top:8px;z-index:2;width:27px;height:27px;border:0;border-radius:6px;background:var(--sg-soft);cursor:pointer}.sg-time-grid{display:grid;grid-template-columns:92px 1fr;margin:0;border:1px solid var(--sg-border);border-radius:7px;overflow:hidden;font-size:11px}.sg-time-grid dt,.sg-time-grid dd{margin:0;padding:7px 8px;border-bottom:1px solid var(--sg-border)}.sg-time-grid dt{color:var(--sg-muted);background:var(--sg-soft)}.sg-time-grid dt:nth-last-of-type(1),.sg-time-grid dd:nth-last-of-type(1){border-bottom:0}.sg-entity-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--sg-border);border-radius:999px;background:transparent;color:var(--sg-text);font-size:11px;cursor:pointer}.sg-evidence-row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;color:var(--sg-muted);font-size:11px}.sg-evidence-row code{max-width:180px;overflow:hidden;text-overflow:ellipsis}.sg-source-button{width:100%;padding:9px;border:1px solid color-mix(in srgb,var(--sg-accent) 42%,var(--sg-border));border-radius:7px;background:transparent;color:var(--sg-accent);cursor:pointer}
+      @media (max-width:900px){.sg-long-layout{grid-template-columns:1fr;height:auto;max-height:none}.sg-long-explorer.fullscreen{inset:4px;padding:10px}.sg-long-explorer.fullscreen .sg-long-layout{overflow:auto}.sg-graph-canvas{height:520px}.sg-long-detail{max-height:520px;border-top:1px solid var(--sg-border);border-left:0}.sg-timeline{max-height:520px}.sg-toolbar-count{display:none}.sg-node-bubble{width:min(300px,72%)}}
+      @media (max-width:620px){.sg-long-toolbar{flex-wrap:wrap}.sg-long-toolbar .sg-search{flex-basis:100%}.sg-toolbar-button{flex:1}.sg-timeline-card{grid-template-columns:78px minmax(0,1fr)}.sg-timeline-card>.sg-event-status{grid-column:2}.sg-node-bubble{left:50%!important;top:auto!important;bottom:45px;width:calc(100% - 24px);transform:translateX(-50%)!important}}
       @media (max-width:860px){.sg-layer-hover:after{display:none}.sg-layer-popover{position:relative;left:auto;top:auto;width:auto;max-height:280px;margin:5px 0 1px;display:none;transform:none}.sg-layer-hover:hover .sg-layer-popover,.sg-layer-item:focus-visible + .sg-layer-popover{display:block;transform:none}}
       @media (max-width:560px){.sg-memory{padding:12px 12px 26px}.sg-brand-name{font-size:14px}.sg-tabs{margin-left:-2px;margin-right:-2px}.sg-tab{padding-left:0;padding-right:0}.sg-alert{grid-template-columns:auto minmax(0,1fr)}.sg-alert>.sg-chevron{display:none}.sg-tech-row{grid-template-columns:1fr;gap:1px}.sg-counts{gap:16px}.sg-entry-title{font-size:14px}.sg-block-header{display:none}.sg-block-toggle{grid-template-columns:76px minmax(76px,1fr) 24px;gap:6px}.sg-block-turn{grid-column:1/3}.sg-block-distance{display:none}.sg-layer-heading{display:block}.sg-layer-heading span{display:block;margin-top:2px}}
       .sg-decay-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.sg-conversation{display:flex;align-items:center;justify-content:flex-end;gap:5px;min-width:0;color:var(--sg-muted);font-size:11px}.sg-conversation select{min-width:0;max-width:230px;padding:3px 21px 3px 6px;border:1px solid var(--sg-border);border-radius:5px;background:var(--sg-surface);font-size:11px;text-overflow:ellipsis}.sg-distribution{scrollbar-width:none}.sg-distribution::-webkit-scrollbar{display:none}.sg-distribution-rail{display:block;width:100%;height:14px;margin:4px 0 0;accent-color:var(--sg-accent);cursor:pointer}.sg-distribution-rail:disabled{cursor:default;opacity:.38}.sg-layer-hover:after{display:none}.sg-layer-more-placeholder{width:30px}.sg-layer-popover{position:fixed!important;left:0;top:0;z-index:2147483000;width:min(390px,calc(100vw - 24px));max-height:min(70vh,520px);display:block!important;margin:0;overflow:auto;visibility:visible!important;opacity:1!important;transform:none!important;transition:opacity .1s ease;border:1px solid color-mix(in srgb,var(--sg-accent) 38%,var(--sg-border));background:var(--sg-surface);color:var(--sg-text);box-shadow:0 18px 50px rgba(0,0,0,.38)}
@@ -156,36 +165,208 @@ window.__ModuleLoader__.load({
         h('span', { className: 'sg-processing-icon', 'aria-hidden': 'true' }, '↻'),
         h('span', null,
           h('span', { className: 'sg-processing-title' }, '正在触发记忆整理'),
-          h('span', { className: 'sg-processing-copy' }, 'Block、Event 和 Element 正在生成，请稍候。')))
+          h('span', { className: 'sg-processing-copy' }, 'Block、Event 和知识图谱正在生成，请稍候。')))
     }
 
     function SearchBox({ value, onChange }) {
       return h('div', { className: 'sg-search' }, h('span', { className: 'sg-search-mark', 'aria-hidden': 'true' }, '⌕'), h('input', { value, onChange: (event) => onChange(event.target.value), placeholder: '搜索记忆、人物、项目、概念…', 'aria-label': '搜索长期记忆' }))
     }
 
-    function ElementTags({ elements, onOpen }) {
-      if (!Array.isArray(elements) || !elements.length) return null
-      return h('div', { className: 'sg-tags', 'aria-label': '相关事物' }, elements.map((element) => h('button', { key: element.id, className: 'sg-tag sg-tag-button', onClick: (event) => { event.stopPropagation(); onOpen(element.id) } }, element.name)))
+    const NODE_META = {
+      person: ['人物', '#8b6ccf', '♙'], project: ['项目', '#6f55ae', '▣'], organization: ['组织', '#3978cf', '⌘'],
+      tool: ['工具', '#3b854d', '▤'], place: ['地点', '#a9632b', '⌂'],
+    }
+    const EVENT_TYPE_TEXT = { decision: '决策', release: '发布', task_completed: '任务完成', plan: '计划', change: '变更', cancellation: '取消', incident: '事件', meeting: '会议', collaboration: '协作', migration: '迁移', other: '其他' }
+    const EVENT_STATUS_TEXT = { occurred: '已发生', planned: '计划中', cancelled: '已取消', ongoing: '进行中', unknown: '未知' }
+    const EVENT_RELATIONS = [['supersedesEventIds', '取代'], ['conflictsWithEventIds', '冲突'], ['sameEventId', '同一事件'], ['beforeEventIds', '之前'], ['afterEventIds', '之后'], ['relatedEventIds', '相关']]
+
+    function exactTime(value) {
+      if (!value) return '未知'
+      const date = new Date(value)
+      return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date)
     }
 
-    function LongTermPage({ events, elements, project, query, setQuery, openEvent, openElement }) {
-      const normalized = query.trim().toLocaleLowerCase()
-      const visible = [...events]
-        .filter((event) => event.status !== 'forgotten' && event.status !== 'archived')
-        .filter((event) => !normalized || JSON.stringify([event.title, event.summary, event.tags, event.relatedElements, project]).toLocaleLowerCase().includes(normalized))
-        .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
-      const elementMap = new Map(elements.map((element) => [element.id, element]))
-      return h(React.Fragment, null,
-        h('div', { className: 'sg-intro' }, h('h2', null, 'AI 已形成的长期记忆'), h('p', null, '围绕当前工作区整理出的经历与相关事物')),
-        h(SearchBox, { value: query, onChange: setQuery }),
-        visible.length ? h('div', { className: 'sg-feed' }, visible.map((event) => h('article', { key: event.id, className: 'sg-entry' },
-          h('button', { className: 'sg-entry sg-entry-button', style: { padding: 0, borderBottom: 0 }, onClick: () => openEvent(event) },
-            h('div', { className: 'sg-entry-title' }, event.title || '未命名记忆'),
-            event.summary ? h('div', { className: 'sg-entry-summary' }, event.summary) : null,
-            h('span', { className: 'sg-entry-chevron', 'aria-hidden': 'true' }, '›')),
-          h('div', { className: 'sg-meta' }, h('span', null, formatTime(event.updatedAt || event.createdAt)), h('span', { className: 'sg-meta-sep' }, project)),
-          h(ElementTags, { elements: (event.relatedElements || []).map((item) => elementMap.get(item.id) || item), onOpen: openElement }))))
-          : h(Empty, { title: normalized ? '没有找到匹配的长期记忆' : '还没有形成长期记忆', copy: normalized ? '换一个关键词试试。' : '近期内容完成整理后会出现在这里。' }))
+    function eventOccurrence(event) {
+      const happened = event.temporal?.happenedStart || event.temporal?.happenedEnd
+      return { value: happened || event.temporal?.mentionedAt || event.createdAt, known: Boolean(happened) }
+    }
+
+    function NodePill({ node, onClick }) {
+      const meta = NODE_META[node.type] || ['实体', '#64748b', '•']
+      return h('button', { className: 'sg-entity-pill', onClick }, h('span', { style: { color: meta[1] } }, meta[2]), node.name)
+    }
+
+    function NodeSummaryBubble({ node, x, y, width, onViewDetails }) {
+      if (!node) return null
+      const facts = (node.facts || []).filter((fact) => fact.status === 'active').slice(0, 5)
+      const eventCount = new Set(node.sourceEventIds || []).size
+      return h('aside', { className: 'sg-node-bubble ' + (x > width * .62 ? 'flip' : ''), style: { left: (x / width * 100) + '%', top: (y / 560 * 100) + '%' } },
+        h('div', { className: 'sg-node-bubble-head' }, h('h3', null, node.name), h('span', { className: 'sg-status-dot' }, '● ' + (node.status === 'active' ? '活跃' : node.status || '未知'))),
+        h('p', { className: 'sg-node-bubble-state' }, node.currentState || '暂无当前状态'),
+        facts.length ? h('ul', null, facts.map((fact) => h('li', { key: fact.id }, h('strong', null, fact.key + '：'), Array.isArray(fact.value) ? fact.value.join('、') : fact.value))) : h('p', { className: 'sg-node-bubble-state' }, '暂无关键事实'),
+        h('div', { className: 'sg-node-bubble-foot' }, h('span', null, eventCount + ' 条相关事件'), h('button', { type: 'button', onClick: onViewDetails }, '查看详情 →')))
+    }
+
+    function GraphCanvas({ nodes, edges, selectedId, onSelect, showSummary = false, onViewDetails }) {
+      if (!nodes.length) return h(Empty, { title: '知识图谱正在形成', copy: 'Event 会在后台分批投影为节点与关系。' })
+      const width = 760; const height = 560; const cx = width / 2; const cy = height / 2
+      const placed = nodes.slice(0, 40).map((node, index) => {
+        if (index === 0) return { node, x: cx, y: cy }
+        const ring = index <= 10 ? 1 : 2; const slot = ring === 1 ? index - 1 : index - 11
+        const count = ring === 1 ? Math.min(10, Math.max(1, nodes.length - 1)) : Math.max(1, Math.min(29, nodes.length - 11))
+        const angle = -Math.PI / 2 + slot * Math.PI * 2 / count
+        const radiusX = ring === 1 ? 205 : 320; const radiusY = ring === 1 ? 170 : 245
+        return { node, x: cx + Math.cos(angle) * radiusX, y: cy + Math.sin(angle) * radiusY }
+      })
+      const positions = new Map(placed.map((item) => [item.node.id, item]))
+      return h('div', { className: 'sg-graph-canvas' },
+        h('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': '知识图谱' },
+          h('defs', null, h('marker', { id: 'sg-arrow', markerWidth: '8', markerHeight: '8', refX: '7', refY: '4', orient: 'auto' }, h('path', { d: 'M0,0 L8,4 L0,8 Z', fill: 'var(--sg-muted)' }))),
+          edges.filter((edge) => edge.status === 'active').map((edge) => {
+            const from = positions.get(edge.fromNodeId); const to = positions.get(edge.toNodeId)
+            if (!from || !to) return null
+            const mx = (from.x + to.x) / 2; const my = (from.y + to.y) / 2
+            return h('g', { key: edge.id }, h('line', { x1: from.x, y1: from.y, x2: to.x, y2: to.y, className: 'sg-graph-edge', markerEnd: 'url(#sg-arrow)' }), h('text', { x: mx, y: my - 5, className: 'sg-edge-label' }, edge.relation))
+          }),
+          placed.map(({ node, x, y }) => {
+            const meta = NODE_META[node.type] || ['实体', '#64748b', '•']; const selected = node.id === selectedId
+            return h('g', { key: node.id, className: 'sg-graph-node ' + (selected ? 'selected' : ''), onClick: () => onSelect(node.id), onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(node.id) } }, role: 'button', tabIndex: 0, 'aria-label': node.name + '，' + meta[0] },
+              h('circle', { cx: x, cy: y, r: selected ? 47 : 42, fill: meta[1], fillOpacity: '.28', stroke: meta[1], strokeWidth: selected ? '3' : '1.5' }),
+              h('text', { x, y: y - 7, textAnchor: 'middle', className: 'sg-node-name' }, node.name.slice(0, 14)),
+              h('text', { x, y: y + 14, textAnchor: 'middle', className: 'sg-node-type' }, meta[0]))
+          })),
+        showSummary && selectedId ? (() => { const item = positions.get(selectedId); return item ? h(NodeSummaryBubble, { node: item.node, x: item.x, y: item.y, width, onViewDetails }) : null })() : null,
+        h('div', { className: 'sg-graph-legend' }, Object.entries(NODE_META).map(([type, meta]) => h('span', { key: type }, h('i', { style: { background: meta[1] } }), meta[0]))))
+    }
+
+    function NodeDetailPanel({ node, nodes, edges, events, onEvent }) {
+      if (!node) return h('aside', { className: 'sg-long-detail sg-placeholder-detail' }, '选择节点查看当前状态与证据')
+      const meta = NODE_META[node.type] || ['实体', '#64748b', '•']
+      const relations = edges.filter((edge) => edge.status === 'active' && (edge.fromNodeId === node.id || edge.toNodeId === node.id))
+      const eventMap = new Map(events.map((event) => [event.id, event]))
+      return h('aside', { className: 'sg-long-detail' },
+        h('div', { className: 'sg-node-head' }, h('span', { className: 'sg-node-avatar', style: { background: meta[1] } }, meta[2]), h('div', null, h('h2', null, node.name), h('span', { className: 'sg-muted' }, meta[0]))),
+        h('section', null, h('h3', null, '当前状态'), h('span', { className: 'sg-status-dot' }, '● ' + (node.status === 'active' ? '活跃' : node.status)), node.currentState ? h('p', { className: 'sg-detail-copy' }, node.currentState) : null),
+        h('section', null, h('h3', null, '关键事实'), node.facts?.filter((fact) => fact.status === 'active').length ? h('ul', null, node.facts.filter((fact) => fact.status === 'active').map((fact) => h('li', { key: fact.id }, h('strong', null, fact.key + '：'), Array.isArray(fact.value) ? fact.value.join('、') : fact.value))) : h('p', { className: 'sg-muted' }, '暂无关键事实')),
+        h('section', null, h('h3', null, '相关关系'), relations.length ? relations.map((edge) => { const outgoing = edge.fromNodeId === node.id; const other = nodes.find((item) => item.id === (outgoing ? edge.toNodeId : edge.fromNodeId)); return h('div', { key: edge.id, className: 'sg-relation-row' }, h('span', null, outgoing ? edge.relation : '被' + edge.relation), h('strong', null, other?.name || '未知节点'), h('small', null, Math.round(edge.confidence * 100) + '%')) }) : h('p', { className: 'sg-muted' }, '暂无关系')),
+        h('section', null, h('h3', null, '支撑事件'), (node.sourceEventIds || []).flatMap((id) => eventMap.get(id) || []).slice(0, 8).map((event) => h('button', { key: event.id, className: 'sg-support-event', onClick: () => onEvent(event.id) }, h('span', null, exactTime(eventOccurrence(event).value) + ' · ' + event.title), h('b', null, '›')))))
+    }
+
+    function EventDetailPanel({ event, nodes, events, onNode, openSource, className = '', onMouseEnter, onMouseLeave }) {
+      if (!event) return h('aside', { className: 'sg-long-detail sg-placeholder-detail' }, '选择事件查看完整时间、关系与证据')
+      const temporal = event.temporal || {}; const eventMap = new Map(events.map((item) => [item.id, item])); const nodeMap = new Map(nodes.map((node) => [node.id, node]))
+      const relations = EVENT_RELATIONS.flatMap(([key, label]) => { const value = temporal[key]; const ids = Array.isArray(value) ? value : value ? [value] : []; return ids.map((id) => ({ id, label })) })
+      return h('aside', { className: 'sg-long-detail ' + className, onMouseEnter, onMouseLeave },
+        h('div', { className: 'sg-event-detail-head' }, h('h2', null, event.title), h('span', { className: 'sg-event-status ' + (temporal.status || 'unknown') }, EVENT_STATUS_TEXT[temporal.status] || '未知')),
+        h('span', { className: 'sg-type-badge' }, EVENT_TYPE_TEXT[temporal.eventType] || temporal.eventType || '其他'),
+        h('section', null, h('h3', null, '摘要'), h('p', { className: 'sg-detail-copy' }, event.summary || '暂无摘要')),
+        event.narrative && event.narrative !== event.summary ? h('section', null, h('h3', null, '事件叙述'), h('p', { className: 'sg-detail-copy' }, event.narrative)) : null,
+        h('section', null, h('h3', null, '时间信息'), h('dl', { className: 'sg-time-grid' },
+          h('dt', null, '实际发生时间'), h('dd', null, temporal.happenedStart ? exactTime(temporal.happenedStart) + (temporal.happenedEnd && temporal.happenedEnd !== temporal.happenedStart ? ' — ' + exactTime(temporal.happenedEnd) : '') : '未知'),
+          h('dt', null, '提及时间'), h('dd', null, exactTime(temporal.mentionedAt || event.createdAt)),
+          h('dt', null, '时间精度'), h('dd', null, temporal.precision || 'unknown'),
+          h('dt', null, '原始表达'), h('dd', null, temporal.originalText || '未记录'))),
+        h('section', null, h('h3', null, '参与实体'), h('div', { className: 'sg-tags' }, (temporal.participantNodeIds || []).flatMap((id) => nodeMap.get(id) || []).map((node) => h(NodePill, { key: node.id, node, onClick: () => onNode(node.id) })), !(temporal.participantNodeIds || []).length ? (temporal.participants || []).map((name) => h('span', { key: name, className: 'sg-tag' }, name)) : null)),
+        relations.length ? h('section', null, h('h3', null, '事件关系'), relations.map((relation) => h('div', { key: relation.label + relation.id, className: 'sg-relation-row' }, h('span', null, relation.label), h('strong', null, eventMap.get(relation.id)?.title || relation.id)))) : null,
+        h('section', null, h('h3', null, '证据来源'), h('div', { className: 'sg-evidence-row' }, h('span', null, '来源 Block'), h('code', null, event.sourceBlockId)), h('div', { className: 'sg-evidence-row' }, h('span', null, '置信度'), h('strong', null, Math.round((event.confidence || 0) * 100) + '%'))),
+        h('button', { className: 'sg-source-button', onClick: () => openSource(event) }, '查看来源原始消息 →'))
+    }
+
+    function TimelineList({ events, nodes, query, filters, onSelect, selectedId, floating = false, onNode, openSource }) {
+      const [preview, setPreview] = React.useState(null)
+      const pinnedId = React.useRef('')
+      const hideTimer = React.useRef(null)
+      const cancelHide = () => { if (hideTimer.current) window.clearTimeout(hideTimer.current); hideTimer.current = null }
+      const hidePreview = () => { cancelHide(); setPreview(null); pinnedId.current = '' }
+      const showPreview = (event, target, pin = false) => {
+        if (!floating || (!pin && pinnedId.current)) return
+        cancelHide()
+        const rect = target.getBoundingClientRect(); const width = Math.min(380, window.innerWidth - 24); const maxHeight = Math.min(620, window.innerHeight * .72)
+        const rightSide = rect.right + 12 + width <= window.innerWidth - 12
+        const left = rightSide ? rect.right + 12 : Math.max(12, rect.left - width - 12)
+        const top = Math.min(Math.max(12, rect.top - 8), Math.max(12, window.innerHeight - maxHeight - 12))
+        setPreview({ event, left, top })
+        if (pin) pinnedId.current = event.id
+      }
+      const scheduleHide = () => {
+        if (pinnedId.current) return
+        cancelHide()
+        hideTimer.current = window.setTimeout(() => setPreview(null), 140)
+      }
+      React.useEffect(() => () => cancelHide(), [])
+      const normalized = query.trim().toLocaleLowerCase(); const now = new Date(); const weekAgo = now.getTime() - 7 * 86400000
+      const groups = { '今天': [], '本周': [], '更早': [] }
+      events.filter((event) => event.status !== 'forgotten' && event.status !== 'archived')
+        .filter((event) => !normalized || JSON.stringify(event).toLocaleLowerCase().includes(normalized))
+        .filter((event) => !filters.type || event.temporal?.eventType === filters.type)
+        .filter((event) => !filters.status || event.temporal?.status === filters.status)
+        .filter((event) => !filters.node || (event.temporal?.participantNodeIds || []).includes(filters.node))
+        .filter((event) => { const info = eventOccurrence(event); const time = Date.parse(info.value); return !filters.time || (filters.time === 'unknown' ? !info.known : filters.time === 'today' ? Number.isFinite(time) && new Date(time).toDateString() === now.toDateString() : filters.time === 'week' ? time >= weekAgo : true) })
+        .sort((a, b) => String(eventOccurrence(b).value).localeCompare(String(eventOccurrence(a).value)))
+        .forEach((event) => { const info = eventOccurrence(event); const time = Date.parse(info.value); const sameDay = Number.isFinite(time) && new Date(time).toDateString() === now.toDateString(); groups[sameDay ? '今天' : time >= weekAgo ? '本周' : '更早'].push(event) })
+      const nodeMap = new Map(nodes.map((node) => [node.id, node]))
+      return h('div', { className: 'sg-timeline' }, Object.entries(groups).map(([label, items]) => items.length ? h('section', { key: label, className: 'sg-time-group' }, h('h3', null, label), items.map((event) => {
+        const info = eventOccurrence(event); const temporal = event.temporal || {}
+        return h('button', { key: event.id, className: 'sg-timeline-card ' + (event.id === selectedId ? 'selected' : ''), onMouseEnter: (hover) => showPreview(event, hover.currentTarget), onMouseLeave: scheduleHide, onFocus: (focus) => showPreview(event, focus.currentTarget), onBlur: scheduleHide, onClick: (click) => { onSelect(event.id); showPreview(event, click.currentTarget, true) } },
+          h('span', { className: 'sg-timeline-dot' }), h('div', { className: 'sg-event-clock' }, info.known ? exactTime(info.value).replace(/^\d{4}\//, '') : '发生时间未知', !info.known ? h('small', null, '提及于 ' + exactTime(info.value)) : null),
+          h('div', { className: 'sg-event-main' }, h('div', { className: 'sg-event-title-row' }, h('strong', null, event.title), h('span', { className: 'sg-type-badge' }, EVENT_TYPE_TEXT[temporal.eventType] || temporal.eventType || '其他')), h('p', null, event.summary || '暂无摘要'), h('div', { className: 'sg-tags' }, (temporal.participantNodeIds || []).flatMap((id) => nodeMap.get(id) || []).map((node) => h('span', { key: node.id, className: 'sg-tag' }, node.name)), !(temporal.participantNodeIds || []).length ? (temporal.participants || []).map((name) => h('span', { key: name, className: 'sg-tag' }, name)) : null)),
+          h('span', { className: 'sg-event-status ' + (temporal.status || 'unknown') }, EVENT_STATUS_TEXT[temporal.status] || '未知'))
+      })) : null), floating && preview ? h('div', { className: 'sg-event-popover', style: { left: preview.left + 'px', top: preview.top + 'px' }, onMouseEnter: cancelHide, onMouseLeave: scheduleHide },
+        h('button', { type: 'button', className: 'sg-popover-close', 'aria-label': '关闭事件详情', onClick: hidePreview }, '×'),
+        h(EventDetailPanel, { event: preview.event, nodes, events, onNode, openSource })) : null)
+    }
+
+    function LongTermPage({ events, graph, project, query, setQuery, openEvent }) {
+      const [mode, setMode] = React.useState('graph')
+      const [selectedNodeId, setSelectedNodeId] = React.useState('')
+      const [selectedEventId, setSelectedEventId] = React.useState('')
+      const [eventFilters, setEventFilters] = React.useState({ time: '', node: '', type: '', status: '' })
+      const [nodeType, setNodeType] = React.useState('')
+      const [filtersOpen, setFiltersOpen] = React.useState(false)
+      const [fullScreen, setFullScreen] = React.useState(false)
+      const nodes = graph.nodes || []; const edges = graph.edges || []; const normalized = query.trim().toLocaleLowerCase()
+      React.useEffect(() => {
+        if (!fullScreen) return undefined
+        const previous = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        const onKeyDown = (event) => { if (event.key === 'Escape') { setFullScreen(false); setFiltersOpen(false) } }
+        window.addEventListener('keydown', onKeyDown)
+        return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKeyDown) }
+      }, [fullScreen])
+      const visibleNodes = nodes.filter((node) => node.status !== 'archived').filter((node) => !nodeType || node.type === nodeType).filter((node) => !normalized || JSON.stringify(node).toLocaleLowerCase().includes(normalized))
+      const selectEvent = (id) => { setSelectedEventId(id); setMode('timeline') }
+      const selectNode = (id) => { setSelectedNodeId(id); setMode('graph') }
+      const openExplorer = () => {
+        if (mode === 'graph' && !selectedNodeId && visibleNodes[0]) setSelectedNodeId(visibleNodes[0].id)
+        if (mode === 'timeline' && !selectedEventId && events[0]) setSelectedEventId(events[0].id)
+        setFiltersOpen(true)
+        setFullScreen(true)
+      }
+      const migration = graph.migration || { projected: events.length, total: events.length, complete: true }
+      const activeFilterCount = mode === 'graph' ? Number(Boolean(nodeType)) : Object.values(eventFilters).filter(Boolean).length
+      const filterControls = mode === 'graph'
+        ? h('div', { className: 'sg-filterbar' }, h('select', { value: nodeType, onChange: (event) => setNodeType(event.target.value), 'aria-label': '节点类型' }, h('option', { value: '' }, '全部节点类型'), Object.entries(NODE_META).map(([value, meta]) => h('option', { key: value, value }, meta[0]))))
+        : h('div', { className: 'sg-filterbar' },
+          h('select', { value: eventFilters.time, onChange: (event) => setEventFilters({ ...eventFilters, time: event.target.value }), 'aria-label': '时间范围' }, h('option', { value: '' }, '全部时间'), h('option', { value: 'today' }, '今天'), h('option', { value: 'week' }, '本周'), h('option', { value: 'unknown' }, '发生时间未知')),
+          h('select', { value: eventFilters.node, onChange: (event) => setEventFilters({ ...eventFilters, node: event.target.value }), 'aria-label': '参与实体' }, h('option', { value: '' }, '全部实体'), nodes.map((node) => h('option', { key: node.id, value: node.id }, node.name))),
+          h('select', { value: eventFilters.type, onChange: (event) => setEventFilters({ ...eventFilters, type: event.target.value }), 'aria-label': '事件类型' }, h('option', { value: '' }, '全部类型'), Object.entries(EVENT_TYPE_TEXT).map(([value, label]) => h('option', { key: value, value }, label))),
+          h('select', { value: eventFilters.status, onChange: (event) => setEventFilters({ ...eventFilters, status: event.target.value }), 'aria-label': '事件状态' }, h('option', { value: '' }, '全部状态'), Object.entries(EVENT_STATUS_TEXT).map(([value, label]) => h('option', { key: value, value }, label))))
+      return h('section', { className: 'sg-long-explorer ' + (fullScreen ? 'fullscreen' : ''), 'aria-label': fullScreen ? '长期记忆全屏探索' : '长期记忆浏览' },
+        h('nav', { className: 'sg-long-tabs' }, h('button', { className: mode === 'graph' ? 'active' : '', onClick: () => setMode('graph') }, '知识图谱'), h('button', { className: mode === 'timeline' ? 'active' : '', onClick: () => setMode('timeline') }, '事件时间线')),
+        !migration.complete ? h('div', { className: 'sg-migration', role: 'status' }, h('span', { className: 'sg-processing-icon' }, '↻'), h('span', null, '正在升级长期记忆 · ' + migration.projected + ' / ' + migration.total + ' Events'), h('small', null, migration.failed ? migration.failed + ' 批待重试' : '后台增量处理，不影响其他功能')) : null,
+        h('div', { className: 'sg-long-toolbar' },
+          h(SearchBox, { value: query, onChange: setQuery }),
+          h('button', { type: 'button', className: 'sg-toolbar-button', 'aria-expanded': filtersOpen ? 'true' : 'false', onClick: () => setFiltersOpen(!filtersOpen) }, '筛选 ▾', activeFilterCount ? h('span', { className: 'sg-active-filter-count' }, activeFilterCount) : null),
+          h('span', { className: 'sg-toolbar-count' }, mode === 'graph' ? visibleNodes.length + ' 个节点 · ' + edges.filter((edge) => edge.status === 'active').length + ' 条关系' : events.length + ' 条事件 · ' + project),
+          h('button', { type: 'button', className: 'sg-toolbar-button', onClick: fullScreen ? () => { setFullScreen(false); setFiltersOpen(false) } : openExplorer }, fullScreen ? '退出全屏' : '⛶ 全屏查看' + (mode === 'graph' ? '图谱' : '时间线'))),
+        filtersOpen ? filterControls : null,
+        mode === 'graph'
+          ? h('div', { className: 'sg-long-layout ' + (fullScreen ? '' : 'sg-summary-layout') },
+            h(GraphCanvas, { nodes: visibleNodes, edges, selectedId: selectedNodeId, onSelect: setSelectedNodeId, showSummary: !fullScreen, onViewDetails: openExplorer }),
+            fullScreen ? h(NodeDetailPanel, { node: nodes.find((node) => node.id === selectedNodeId), nodes, edges, events, onEvent: selectEvent }) : null)
+          : h('div', { className: 'sg-long-layout ' + (fullScreen ? 'sg-timeline-layout' : 'sg-summary-layout') },
+            h(TimelineList, { events, nodes, query, filters: eventFilters, onSelect: setSelectedEventId, selectedId: selectedEventId, floating: !fullScreen, onNode: selectNode, openSource: openEvent }),
+            fullScreen ? h(EventDetailPanel, { event: events.find((event) => event.id === selectedEventId), nodes, events, onNode: selectNode, openSource: openEvent }) : null))
     }
 
     function previewText(value) {
@@ -372,17 +553,17 @@ window.__ModuleLoader__.load({
         h('h3', { className: 'sg-section-title' }, '来源'),
         h('div', { className: 'sg-source-label' }, h('span', { className: 'sg-source-icon', 'aria-hidden': 'true' }, '▣'), h('span', null, '当前 DeepSeek 对话')),
         h('details', { className: 'sg-tech' }, h('summary', null, '技术详情'), h('div', { className: 'sg-tech-body' },
-          h('div', { className: 'sg-tech-row' }, h('span', { className: 'sg-muted' }, kind === 'block' ? 'Block ID' : kind === 'event' ? 'Event ID' : 'Element ID'), h('span', { className: 'sg-code' }, item.id)),
+          h('div', { className: 'sg-tech-row' }, h('span', { className: 'sg-muted' }, kind === 'block' ? 'Block ID' : 'Event ID'), h('span', { className: 'sg-code' }, item.id)),
           kind === 'block' && item.turnRange ? h('div', { className: 'sg-tech-row' }, h('span', { className: 'sg-muted' }, 'Turn'), h('span', null, item.turnRange.join(' - '))) : null,
           messages.length ? messages.map((message) => h('div', { key: message.id, className: 'sg-raw-message' }, h('div', { className: 'sg-muted' }, String(message.role || '') + ' · ' + formatTime(message.createdAt)), h('div', { className: 'sg-code' }, String(message.content || '')))) : h('div', { className: 'sg-muted' }, '当前数据中没有可显示的来源消息。'))))
     }
 
-    function EventDetail({ event, project, source, openElement, onBack, backLabel }) {
+    function EventDetail({ event, project, source, onBack, backLabel }) {
       return h(React.Fragment, null,
         h(BackBar, { label: backLabel, onBack }),
         h('header', { className: 'sg-detail-header' }, h('h2', { className: 'sg-detail-title' }, event.title || '记忆详情'), event.summary ? h('p', { className: 'sg-detail-subtitle' }, event.summary) : null, h('div', { className: 'sg-meta' }, h('span', null, formatTime(event.updatedAt || event.createdAt)), h('span', { className: 'sg-meta-sep' }, project))),
         event.narrative ? h('div', { className: 'sg-detail-section' }, h('h3', { className: 'sg-section-title' }, 'AI 对这段经历的理解'), h('p', { className: 'sg-prose' }, event.narrative)) : null,
-        h('div', { className: 'sg-detail-section' }, h('h3', { className: 'sg-section-title' }, '相关事物'), h(ElementTags, { elements: event.relatedElements || [], onOpen: openElement })),
+        h('div', { className: 'sg-detail-section' }, h('h3', { className: 'sg-section-title' }, '参与实体'), (event.temporal?.participants || []).length ? h('div', { className: 'sg-tags' }, event.temporal.participants.map((name) => h('span', { key: name, className: 'sg-tag' }, name))) : h('span', { className: 'sg-muted' }, '未记录')),
         h(SourceDetails, { item: event, source, kind: 'event' }))
     }
 
@@ -413,7 +594,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'sg-detail-section' }, h('div', { className: 'sg-pipeline' },
           h('div', { className: 'sg-stage' }, h('span', null, '记忆保存'), h('span', { className: 'sg-stage-value done' }, '✓ 已完成')),
           h('div', { className: 'sg-stage' }, h('span', null, '事件提取'), h('span', { className: 'sg-stage-value ' + (first?.kind === 'event-extraction' ? 'failed' : 'done') }, first?.kind === 'event-extraction' ? '× 失败' : '✓ 已完成')),
-          h('div', { className: 'sg-stage' }, h('span', null, '元素投影'), h('span', { className: 'sg-stage-value ' + (first?.kind === 'element-projection' ? 'failed' : first?.kind === 'event-extraction' ? 'waiting' : 'done') }, first?.kind === 'element-projection' ? '× 失败' : first?.kind === 'event-extraction' ? '— 等待' : '✓ 已完成')))),
+          h('div', { className: 'sg-stage' }, h('span', null, '图谱投影'), h('span', { className: 'sg-stage-value ' + (first?.kind === 'graph-projection' ? 'failed' : first?.kind === 'event-extraction' ? 'waiting' : 'done') }, first?.kind === 'graph-projection' ? '× 失败' : first?.kind === 'event-extraction' ? '— 等待' : '✓ 已完成')))),
         failedBlocks.length ? h('div', { className: 'sg-detail-section' }, h('h3', { className: 'sg-section-title' }, '受影响的短期记忆'), failedBlocks.map((block) => h('div', { key: block.id, className: 'sg-result-event' }, block.title || block.summary || '短期记忆'))) : null,
         h('button', { className: 'sg-alert', onClick: refresh, style: { marginTop: '16px' } }, h('span', { className: 'sg-alert-mark' }, '↻'), h('span', null, h('span', { className: 'sg-alert-title' }, '重新检查状态'), h('br'), h('span', { className: 'sg-alert-copy' }, '任务会沿用现有重试机制继续处理。')), h('span', { className: 'sg-chevron' }, '›')),
         h('details', { className: 'sg-tech' }, h('summary', null, '技术错误详情'), h('pre', { className: 'sg-tech-body sg-code' }, first?.lastErrorFull || first?.lastError || '没有记录技术错误。')))
@@ -421,10 +602,10 @@ window.__ModuleLoader__.load({
 
     function MoreHome({ selected, setView }) {
       const rows = [
-        ['structure', '◇', '记忆结构', '浏览经历与相关事物'],
+        ['structure', '◇', '记忆结构', '浏览 Event 与知识图谱'],
         ['system', '✓', '系统状态', '处理任务和最近整理时间'],
         ['audit', '↗', '使用记录', '长期记忆何时被使用'],
-        ['raw', '{}', '原始数据', 'Block、Event、Element 与模型响应'],
+        ['raw', '{}', '原始数据', 'Block、Event、Graph 与模型响应'],
         ['settings', '⚙', '高级设置', 'Schema、提取间隔与项目空间'],
         ['support', '?', '反馈与支持', '报告问题、提出建议或咨询使用方法'],
       ]
@@ -456,19 +637,19 @@ window.__ModuleLoader__.load({
         '- 当前工作区：' + project,
         '- blockTurnSize：' + (selected?.blockTurnSize ?? 'unknown'),
         '- 已封存块：' + (selected?.blocks ?? 0),
-        '- Event / Element 数量：' + (selected?.events ?? 0) + ' / ' + (selected?.elements ?? 0),
+        '- Event / Graph Node 数量：' + (selected?.events ?? 0) + ' / ' + (selected?.graphNodes ?? 0),
         '- 最近错误：' + (safeErrorSummary(recentError || latestJobError) || '无'),
         '',
-        '> 默认诊断不包含原始聊天、L5、Event 或 Element 内容。',
+        '> 默认诊断不包含原始聊天、L5、Event 或 Graph 内容。',
       ]
       if (includeLogs) lines.push('', '<details><summary>诊断日志</summary>', '', '```json', limitedJson({ frontendError: recentError || null, failedJobs: selected?.failedJobDetails || [] }), '```', '</details>')
-      if (includeMemory) lines.push('', '<details><summary>用户主动附加的记忆数据（可能包含对话内容）</summary>', '', '```json', limitedJson({ blocks: data.blocks, events: data.events, elements: data.elements }), '```', '</details>')
+      if (includeMemory) lines.push('', '<details><summary>用户主动附加的记忆数据（可能包含对话内容）</summary>', '', '```json', limitedJson({ blocks: data.blocks, events: data.events, graph: data.graph }), '```', '</details>')
       const issueParams = new URLSearchParams({ title: '[Bug] StrataGate：', body: lines.join('\n') })
       const featureParams = new URLSearchParams({ title: '[Feature] StrataGate：', body: '请描述希望增加的能力、使用场景和预期行为。' })
       return h(React.Fragment, null,
         h(BackBar, { label: '更多', onBack }),
         h('div', { className: 'sg-intro' }, h('h2', null, '反馈与支持'), h('p', null, '选择最合适的入口，我们会带上必要且安全的上下文。')),
-        h('div', { className: 'sg-privacy-note' }, '基础诊断不会附带原始聊天、L5、Event 或 Element 内容。'),
+        h('div', { className: 'sg-privacy-note' }, '基础诊断不会附带原始聊天、L5、Event 或 Graph 内容。'),
         h('section', { className: 'sg-support-card' }, h('h3', null, '遇到问题'), h('p', null, '插件会整理版本、配置、数量和最近错误，帮助快速定位。'),
           h('label', { className: 'sg-check' }, h('input', { type: 'checkbox', checked: includeLogs, onChange: (event) => setIncludeLogs(event.target.checked) }), h('span', null, '附加诊断日志')),
           h('label', { className: 'sg-check' }, h('input', { type: 'checkbox', checked: includeMemory, onChange: (event) => setIncludeMemory(event.target.checked) }), h('span', null, '附加记忆数据（可能包含对话内容）')),
@@ -478,25 +659,25 @@ window.__ModuleLoader__.load({
         h('section', { className: 'sg-support-card' }, h('h3', null, '使用疑问'), h('p', null, '在 GitHub Discussion 的 Q&A 区交流使用方法。'), h('a', { className: 'sg-link', href: DISCUSSION_URL, target: '_blank', rel: 'noopener noreferrer' }, '前往 Discussion / Q&A →')))
     }
 
-    function StructurePage({ events, elements, openEvent, openElement, onBack }) {
+    function StructurePage({ events, graph, openEvent, onBack }) {
       return h(React.Fragment, null,
         h(BackBar, { label: '更多', onBack }),
         h('div', { className: 'sg-intro' }, h('h2', null, '记忆结构'), h('p', null, '完整浏览现有结构化记忆')),
         h('div', { className: 'sg-counts' },
           h('div', null, h('div', { className: 'sg-count-value' }, events.length), h('div', { className: 'sg-count-label' }, '经历 / Event')),
-          h('div', null, h('div', { className: 'sg-count-value' }, elements.length), h('div', { className: 'sg-count-label' }, '相关事物 / Element'))),
+          h('div', null, h('div', { className: 'sg-count-value' }, graph.nodes.length), h('div', { className: 'sg-count-label' }, '知识图谱节点'))),
         h('div', { className: 'sg-structured-group' },
           h('h3', { className: 'sg-section-title' }, '经历'),
           events.map((event) => h('button', { key: event.id, className: 'sg-related', onClick: () => openEvent(event) }, h('span', null, event.title), h('span', { className: 'sg-related-time' }, formatTime(event.updatedAt))))),
         h('div', { className: 'sg-structured-group' },
-          h('h3', { className: 'sg-section-title' }, '相关事物'),
-          elements.map((element) => h('button', { key: element.id, className: 'sg-related', onClick: () => openElement(element.id) }, h('span', null, element.name), h('span', { className: 'sg-related-time' }, (element.sourceEventIds || []).length + ' 条经历')))))
+          h('h3', { className: 'sg-section-title' }, '图谱节点'),
+          graph.nodes.map((node) => h('div', { key: node.id, className: 'sg-related' }, h('span', null, node.name), h('span', { className: 'sg-related-time' }, (node.sourceEventIds || []).length + ' 条支撑事件')))))
     }
 
     function SystemPage({ selected, blocks, onBack, refresh }) {
       const processing = blocks.filter((block) => block.status === 'processing').length
       return h(React.Fragment, null, h(BackBar, { label: '更多', onBack }), h('div', { className: 'sg-intro' }, h('h2', null, '系统状态'), h('p', null, '仅在这里展示记忆处理的工程状态')), h('div', { className: 'sg-pipeline' },
-        [['Block 数量', selected.blocks], ['待处理任务', processing], ['失败任务', selected.failedJobs], ['最近整理时间', formatTime(selected.lastActivityAt)], ['Event 提取', selected.failedJobDetails?.some((item) => item.kind === 'event-extraction') ? '有失败' : '正常'], ['Element 投影', selected.failedJobDetails?.some((item) => item.kind === 'element-projection') ? '有失败' : '正常']].map(([label, value]) => h('div', { key: label, className: 'sg-stage' }, h('span', null, label), h('span', { className: 'sg-stage-value ' + (label === '失败任务' && value ? 'failed' : 'waiting') }, String(value))))), h('button', { className: 'sg-quiet-button', onClick: refresh, style: { marginTop: '14px' } }, '↻ 重新检查'))
+        [['Block 数量', selected.blocks], ['待处理任务', processing], ['失败任务', selected.failedJobs], ['最近整理时间', formatTime(selected.lastActivityAt)], ['Event 提取', selected.failedJobDetails?.some((item) => item.kind === 'event-extraction') ? '有失败' : '正常'], ['图谱投影', selected.failedJobDetails?.some((item) => item.kind === 'graph-projection') ? '有失败' : '正常']].map(([label, value]) => h('div', { key: label, className: 'sg-stage' }, h('span', null, label), h('span', { className: 'sg-stage-value ' + (label === '失败任务' && value ? 'failed' : 'waiting') }, String(value))))), h('button', { className: 'sg-quiet-button', onClick: refresh, style: { marginTop: '14px' } }, '↻ 重新检查'))
     }
 
     function AuditPage({ audit, onBack }) {
@@ -504,8 +685,8 @@ window.__ModuleLoader__.load({
     }
 
     function RawPage({ data, selected, onBack }) {
-      const groups = [['Block raw', data.blocks], ['Event raw', data.events], ['Element raw', data.elements], ['Usage raw', data.audit], ['模型响应', selected.successfulModelResponses || []]]
-      return h(React.Fragment, null, h(BackBar, { label: '更多', onBack }), h('div', { className: 'sg-intro' }, h('h2', null, '原始数据'), h('p', null, '供排查问题使用的内部字段与 JSON')), groups.map(([label, value]) => h('details', { key: label, className: 'sg-raw-group' }, h('summary', null, label + ' (' + value.length + ')'), h('pre', { className: 'sg-raw-json sg-code' }, JSON.stringify(value, null, 2)))))
+      const groups = [['Block raw', data.blocks], ['Event raw', data.events], ['Graph raw', data.graph], ['Usage raw', data.audit], ['模型响应', selected.successfulModelResponses || []]]
+      return h(React.Fragment, null, h(BackBar, { label: '更多', onBack }), h('div', { className: 'sg-intro' }, h('h2', null, '原始数据'), h('p', null, '供排查问题使用的内部字段与 JSON')), groups.map(([label, value]) => h('details', { key: label, className: 'sg-raw-group' }, h('summary', null, label + ' (' + (Array.isArray(value) ? value.length : ((value.nodes?.length || 0) + (value.edges?.length || 0))) + ')'), h('pre', { className: 'sg-raw-json sg-code' }, JSON.stringify(value, null, 2)))))
     }
 
     function SettingsPage({ selected, namespace, onBack, updateLambda, savingLambda }) {
@@ -538,7 +719,7 @@ window.__ModuleLoader__.load({
       const [conversationId, setConversationId] = React.useState('')
       const [section, setSection] = React.useState('short')
       const [view, setView] = React.useState({ name: 'root' })
-      const [data, setData] = React.useState({ events: [], elements: [], blocks: [], openBlock: null, conversations: [], activeThreadId: null, audit: [] })
+      const [data, setData] = React.useState({ events: [], graph: { nodes: [], edges: [], migration: null }, blocks: [], openBlock: null, conversations: [], activeThreadId: null, audit: [] })
       const [query, setQuery] = React.useState('')
       const [source, setSource] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
@@ -572,18 +753,18 @@ window.__ModuleLoader__.load({
 
       const loadMemoryData = React.useCallback((activeNamespace, options = {}) => {
         const background = options.background === true
-        if (!activeNamespace) { setData({ events: [], elements: [], blocks: [], openBlock: null, conversations: [], activeThreadId: null, audit: [] }); if (!background) setLoading(false); return Promise.resolve() }
+        if (!activeNamespace) { setData({ events: [], graph: { nodes: [], edges: [], migration: null }, blocks: [], openBlock: null, conversations: [], activeThreadId: null, audit: [] }); if (!background) setLoading(false); return Promise.resolve() }
         if (!background) setLoading(true)
         return Promise.allSettled([
           api('memories', { namespace: activeNamespace, kind: 'events', limit: '200' }),
-          api('memories', { namespace: activeNamespace, kind: 'elements', limit: '200' }),
+          api('memories', { namespace: activeNamespace, kind: 'graph' }),
           api('memories', { namespace: activeNamespace, kind: 'blocks', limit: '200', ...(options.threadId ? { threadId: options.threadId } : {}) }),
           api('audit', { namespace: activeNamespace, limit: '100' }),
         ]).then((results) => {
-          const [events, elements, blocks, audit] = results
+          const [events, graph, blocks, audit] = results
           setData((previous) => ({
             events: events.status === 'fulfilled' ? events.value.items || [] : previous.events,
-            elements: elements.status === 'fulfilled' ? elements.value.items || [] : previous.elements,
+            graph: graph.status === 'fulfilled' ? graph.value : previous.graph,
             blocks: blocks.status === 'fulfilled' ? blocks.value.items || [] : previous.blocks,
             openBlock: blocks.status === 'fulfilled' ? blocks.value.openBlock || null : previous.openBlock,
             conversations: blocks.status === 'fulfilled' ? blocks.value.conversations || [] : previous.conversations,
@@ -599,7 +780,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => { setLoading(true); void loadOverview().finally(() => setLoading(false)) }, [])
       React.useEffect(() => {
-        setConversationId(''); setView({ name: 'root' }); setSource(null); setData({ events: [], elements: [], blocks: [], openBlock: null, conversations: [], activeThreadId: null, audit: [] }); void loadMemoryData(namespace)
+        setConversationId(''); setView({ name: 'root' }); setSource(null); setData({ events: [], graph: { nodes: [], edges: [], migration: null }, blocks: [], openBlock: null, conversations: [], activeThreadId: null, audit: [] }); void loadMemoryData(namespace)
       }, [namespace])
       React.useEffect(() => {
         if (!namespace) return undefined
@@ -642,14 +823,13 @@ window.__ModuleLoader__.load({
         setView((current) => ({ name: kind, item, back: current })); loadSource(kind, item)
       }
       const openEvent = (event) => openWithSource('event', data.events.find((item) => item.id === event.id) || event)
-      const openElement = (id) => { const element = data.elements.find((item) => item.id === id); if (element) openWithSource('element', element) }
       const goBack = () => {
         const previous = view.back || { name: 'root' }
         setView(previous)
-        if (previous.item && ['event', 'element', 'block'].includes(previous.name)) loadSource(previous.name, previous.item)
+        if (previous.item && ['event', 'block'].includes(previous.name)) loadSource(previous.name, previous.item)
         else setSource(null)
       }
-      const backLabel = view.back?.name === 'block' ? '短期记忆' : view.back?.name === 'element' ? '相关事物' : view.back?.name === 'event' ? '长期记忆' : view.back?.name === 'structure' ? '记忆结构' : section === 'short' ? '短期记忆' : '长期记忆'
+      const backLabel = view.back?.name === 'block' ? '短期记忆' : view.back?.name === 'event' ? '长期记忆' : view.back?.name === 'structure' ? '记忆结构' : section === 'short' ? '短期记忆' : '长期记忆'
       const refresh = () => Promise.all([loadOverview(), loadMemoryData(namespace, { threadId: conversationId })])
       const selectConversation = (nextConversationId) => {
         setConversationId(nextConversationId)
@@ -673,10 +853,9 @@ window.__ModuleLoader__.load({
       let content = null
       if (loading && !selected) content = h(Loading)
       else if (!selected) content = h(Empty, { title: '还没有记忆', copy: '完成一些 DSH 对话后，短期记忆和长期记忆会出现在这里。' })
-      else if (view.name === 'event') content = h(EventDetail, { event: view.item, project, source, openElement, onBack: goBack, backLabel })
-      else if (view.name === 'element') content = h(ElementDetail, { element: view.item, events: data.events, source, openEvent, onBack: goBack, backLabel })
+      else if (view.name === 'event') content = h(EventDetail, { event: view.item, project, source, onBack: goBack, backLabel })
       else if (view.name === 'status') content = h(ProcessingStatus, { overview: selected, blocks: data.blocks, onBack: () => setView({ name: 'root' }), refresh })
-      else if (view.name === 'structure') content = h(StructurePage, { events: data.events, elements: data.elements, openEvent, openElement, onBack: moreBack })
+      else if (view.name === 'structure') content = h(StructurePage, { events: data.events, graph: data.graph, openEvent, onBack: moreBack })
       else if (view.name === 'system') content = h(SystemPage, { selected, blocks: data.blocks, onBack: moreBack, refresh })
       else if (view.name === 'audit') content = h(AuditPage, { audit: data.audit, onBack: moreBack })
       else if (view.name === 'raw') content = h(RawPage, { data, selected, onBack: moreBack })
@@ -684,7 +863,7 @@ window.__ModuleLoader__.load({
       else if (view.name === 'support') content = h(SupportPage, { overview, selected, project, data, recentError, onBack: moreBack })
       else content = h(React.Fragment, null,
         h(FailureAlert, { count: failedCount, onOpen: () => setView({ name: 'status' }) }),
-        loading ? h(Loading) : section === 'short' ? h(ShortTermPage, { key: namespace + ':' + conversationId, blocks: data.blocks, openBlock: data.openBlock, conversations, activeThreadId: conversationId || data.activeThreadId || '', namespace, onConversationChange: selectConversation, refresh }) : section === 'long' ? h(LongTermPage, { events: data.events, elements: data.elements, project, query, setQuery, openEvent, openElement }) : h(MoreHome, { setView }))
+        loading ? h(Loading) : section === 'short' ? h(ShortTermPage, { key: namespace + ':' + conversationId, blocks: data.blocks, openBlock: data.openBlock, conversations, activeThreadId: conversationId || data.activeThreadId || '', namespace, onConversationChange: selectConversation, refresh }) : section === 'long' ? h(LongTermPage, { events: data.events, graph: data.graph, project, query, setQuery, openEvent }) : h(MoreHome, { setView }))
 
       return h('main', { className: 'sg-memory', 'data-testid': 'stratagate-memory-ui' },
         h('style', null, css),

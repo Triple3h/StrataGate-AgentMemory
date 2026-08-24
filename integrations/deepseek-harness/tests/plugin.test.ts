@@ -26,6 +26,8 @@ describe('DSH plugin composition', () => {
       expect(names).toEqual(expect.arrayContaining([
         'memory_search_events',
         'memory_expand_event',
+        'memory_search_graph',
+        'memory_expand_graph_node',
         'memory_search_elements',
         'memory_expand_element',
         'memory_search_raw',

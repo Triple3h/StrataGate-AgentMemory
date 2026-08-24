@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import {
   deterministicBlockLayers,
   getDecayedBlockLevel,
+  KNOWLEDGE_GRAPH_PROJECTOR_VERSION,
   type ElementCard,
   type EventCard,
   type MemoryBlock,
@@ -12,7 +13,7 @@ import {
 } from '@diqier/stratagate'
 import type { StrataGateRuntime } from './runtime.js'
 
-const STRATAGATE_DSH_VERSION = '0.2.21'
+const STRATAGATE_DSH_VERSION = '0.2.22'
 const LEGACY_THREAD_ID = '__legacy__'
 const nodeRequire = createRequire(import.meta.url)
 
@@ -130,6 +131,7 @@ function eventSummary(event: EventCard): unknown {
     id: event.id,
     title: event.title,
     summary: event.summary,
+    narrative: event.narrative,
     tags: event.tags,
     sourceBlockId: event.sourceBlockId,
     sourceMessageIds: event.sourceMessageIds,
@@ -185,9 +187,9 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
     const snapshot = await runtime.adminSnapshot(namespace)
     if (!snapshot) continue
     const failedJobs = snapshot.extractionJobs.filter(({ status }) => status === 'failed').length
-      + snapshot.elementProjectionJobs.filter(({ status }) => status === 'failed').length
+      + snapshot.graphProjectionJobs.filter(({ status }) => status === 'failed').length
     const processingJobs = snapshot.extractionJobs.filter(({ status }) => status === 'running').length
-      + snapshot.elementProjectionJobs.filter(({ status }) => status === 'pending' || status === 'running').length
+      + snapshot.graphProjectionJobs.filter(({ status }) => status === 'pending' || status === 'running').length
     const failedJobDetails = [
       ...snapshot.extractionJobs
         .filter(({ status }) => status === 'failed')
@@ -199,11 +201,11 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
           lastErrorFull: job.lastError,
           updatedAt: job.updatedAt,
         })),
-      ...snapshot.elementProjectionJobs
+      ...snapshot.graphProjectionJobs
         .filter(({ status }) => status === 'failed')
         .map((job) => ({
           id: job.id,
-          kind: 'element-projection',
+          kind: 'graph-projection',
           attempts: job.attempts,
           lastError: job.lastError?.slice(0, 500) ?? null,
           lastErrorFull: job.lastError,
@@ -214,6 +216,7 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
       ...snapshot.blocks.map(({ createdAt }) => createdAt),
       ...snapshot.events.map(({ updatedAt }) => updatedAt),
       ...snapshot.elements.map(({ updatedAt }) => updatedAt),
+      ...snapshot.graphNodes.map(({ updatedAt }) => updatedAt),
       ...snapshot.usageReceipts.map(({ createdAt }) => createdAt),
     ].sort()
     rows.push({
@@ -228,6 +231,17 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
       events: snapshot.events.length,
       activeEvents: snapshot.events.filter(({ status }) => status === 'active').length,
       elements: snapshot.elements.length,
+      graphNodes: snapshot.graphNodes.length,
+      graphEdges: snapshot.graphEdges.length,
+      graphMigration: (() => {
+        const projected = new Set(snapshot.graphProjectionJobs
+          .filter(({ status, projectorVersion }) => status === 'completed' && projectorVersion === KNOWLEDGE_GRAPH_PROJECTOR_VERSION)
+          .flatMap(({ sourceEventIds }) => sourceEventIds)).size
+        const failed = snapshot.graphProjectionJobs.filter(({ status }) => status === 'failed').length
+        const running = snapshot.graphProjectionJobs.filter(({ status }) => status === 'running').length
+        const total = snapshot.events.filter(({ status }) => status !== 'forgotten' && status !== 'archived').length
+        return { projected, total, failed, running, complete: projected >= total }
+      })(),
       usageReceipts: snapshot.usageReceipts.length,
       memoryUseCount: snapshot.usageReceipts.filter((receipt) =>
         receipt.eventIds.length > 0 || receipt.elementIds.length > 0).length,
@@ -396,12 +410,46 @@ async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> 
   const offset = numeric(url.searchParams.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER)
   const limit = numeric(url.searchParams.get('limit'), 100, 1, 200)
   let values: unknown[]
-  if (kind === 'events') values = snapshot.events.map((event) => ({
+  if (kind === 'events') values = [...snapshot.events].sort((left, right) => {
+    const time = (event: EventCard): string => event.temporal.happenedStart ?? event.temporal.happenedEnd
+      ?? event.temporal.mentionedAt ?? event.createdAt
+    return time(right).localeCompare(time(left))
+  }).map((event) => ({
     ...(eventSummary(event) as object),
+    relatedNodes: snapshot.graphNodes
+      .filter(({ id, sourceEventIds }) => sourceEventIds.includes(event.id)
+        || (event.temporal.participantNodeIds ?? []).includes(id))
+      .map(({ id, name, type }) => ({ id, name, type })),
     relatedElements: snapshot.elements
       .filter(({ sourceEventIds }) => sourceEventIds.includes(event.id))
       .map(({ id, name }) => ({ id, name })),
   }))
+  else if (kind === 'graph') {
+    const eventMap = new Map(snapshot.events.map((event) => [event.id, event]))
+    return {
+      namespace,
+      kind,
+      projectorVersion: KNOWLEDGE_GRAPH_PROJECTOR_VERSION,
+      nodes: snapshot.graphNodes.map((node) => ({
+        ...node,
+        supportingEvents: node.sourceEventIds.flatMap((id) => eventMap.get(id) ?? []).map(eventSummary),
+      })),
+      edges: snapshot.graphEdges,
+      migration: (() => {
+        const projected = new Set(snapshot.graphProjectionJobs
+          .filter(({ status, projectorVersion }) => status === 'completed' && projectorVersion === KNOWLEDGE_GRAPH_PROJECTOR_VERSION)
+          .flatMap(({ sourceEventIds }) => sourceEventIds)).size
+        return {
+          projected,
+          total: snapshot.events.filter(({ status }) => status !== 'forgotten' && status !== 'archived').length,
+          pending: snapshot.graphProjectionJobs.filter(({ status }) => status === 'pending').length,
+          running: snapshot.graphProjectionJobs.filter(({ status }) => status === 'running').length,
+          failed: snapshot.graphProjectionJobs.filter(({ status }) => status === 'failed').length,
+          complete: projected >= snapshot.events.filter(({ status }) => status !== 'forgotten' && status !== 'archived').length,
+        }
+      })(),
+    }
+  }
   else if (kind === 'elements') values = snapshot.elements.map(elementSummary)
   else if (kind === 'blocks') {
     const recovered = recoverSnapshotView(snapshot)
@@ -418,11 +466,11 @@ async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> 
       const relatedEvents = snapshot.events.filter((event) => event.sourceBlockId === source.id
         && (!block.virtual || event.sourceMessageIds.some((id) => blockMessageIds.has(id))))
       const eventIds = new Set(relatedEvents.map(({ id }) => id))
-      const projections = snapshot.elementProjectionJobs
+      const projections = snapshot.graphProjectionJobs
         .filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
-      const relatedElements = snapshot.elements
+      const relatedNodes = snapshot.graphNodes
         .filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
-        .map(({ id, name }) => ({ id, name }))
+        .map(({ id, name, type }) => ({ id, name, type }))
       const failedProjection = projections.find(({ status }) => status === 'failed')
       const pendingProjection = projections.some(({ status }) => status === 'pending' || status === 'running')
       const needsExtraction = source.shouldExtract === true
@@ -465,13 +513,13 @@ async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> 
           updatedAt: extraction.updatedAt,
           lastError: extraction.lastError,
         } : null,
-        elementProjection: projections.length ? {
+        graphProjection: projections.length ? {
           status: failedProjection ? 'failed' : pendingProjection ? 'processing' : 'completed',
           jobs: projections.length,
           lastError: failedProjection?.lastError ?? null,
         } : null,
         relatedEvents: relatedEvents.map(eventSummary),
-        relatedElements,
+        relatedNodes,
       }
     })
     const filtered = values.filter((value) => matchesQuery(value, query))
@@ -506,6 +554,7 @@ async function sources(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
   if (!namespace) throw new AdminHttpError(400, 'namespace is required')
   const snapshot = await requiredSnapshot(runtime, namespace)
   const eventId = url.searchParams.get('eventId')
+  const nodeId = url.searchParams.get('nodeId')
   const elementId = url.searchParams.get('elementId')
   const blockId = url.searchParams.get('blockId')
   let events: EventCard[] = []
@@ -516,6 +565,18 @@ async function sources(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
     if (!event) throw new AdminHttpError(404, `Unknown event: ${eventId}`)
     events = [event]
     ids = new Set(event.sourceMessageIds)
+  } else if (nodeId) {
+    const node = snapshot.graphNodes.find(({ id }) => id === nodeId)
+    if (!node) throw new AdminHttpError(404, `Unknown graph node: ${nodeId}`)
+    events = snapshot.events.filter(({ id }) => node.sourceEventIds.includes(id))
+    ids = new Set(events.flatMap(({ sourceMessageIds }) => sourceMessageIds))
+    return {
+      namespace,
+      node,
+      edges: snapshot.graphEdges.filter(({ fromNodeId, toNodeId }) => fromNodeId === node.id || toNodeId === node.id),
+      events: events.map(eventSummary),
+      messages: sourceMessages(snapshot, ids),
+    }
   } else if (elementId) {
     const element = snapshot.elements.find(({ id }) => id === elementId)
     if (!element) throw new AdminHttpError(404, `Unknown element: ${elementId}`)
@@ -541,12 +602,15 @@ async function sources(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
       virtual: displayBlock?.virtual ?? false,
     }
   } else {
-    throw new AdminHttpError(400, 'eventId, elementId, or blockId is required')
+    throw new AdminHttpError(400, 'eventId, nodeId, elementId, or blockId is required')
   }
   return {
     namespace,
     events: events.map(eventSummary),
     elements: elements.map(elementSummary),
+    blocks: events.map((event) => snapshot.blocks.find(({ id }) => id === event.sourceBlockId))
+      .filter((block): block is MemoryBlock => Boolean(block))
+      .map((block) => ({ id: block.id, title: block.l0Title, createdAt: block.createdAt })),
     messages: sourceMessages(snapshot, ids),
   }
 }

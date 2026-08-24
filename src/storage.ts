@@ -1,7 +1,9 @@
 import { BLOCK_DECAY_LAMBDA } from './blocks.js';
-import type { ElementCard, EventCard, MemoryBlock, RawMessage } from './types.js';
+import { normalizeStandardEventType } from './events.js';
+import type { ElementCard, EventCard, GraphEdge, GraphNode, MemoryBlock, RawMessage } from './types.js';
 
-export const STRATAGATE_STORAGE_SCHEMA_VERSION = 7;
+export const STRATAGATE_STORAGE_SCHEMA_VERSION = 8;
+export const KNOWLEDGE_GRAPH_PROJECTOR_VERSION = 1;
 
 export type ExtractionJobStatus = 'running' | 'succeeded' | 'skipped' | 'failed';
 
@@ -13,7 +15,7 @@ export interface ExtractionJob {
   updatedAt: string;
 }
 
-export type SuccessfulModelResponseKind = 'summarizer' | 'extractor' | 'projector';
+export type SuccessfulModelResponseKind = 'summarizer' | 'extractor' | 'projector' | 'graphProjector';
 
 export interface SuccessfulModelResponse {
   id: string;
@@ -30,6 +32,23 @@ export interface ElementProjectionJob {
   status: ElementProjectionJobStatus;
   attempts: number;
   elementIds: string[];
+  reason: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type GraphProjectionJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface GraphProjectionJob {
+  id: string;
+  sourceEventIds: string[];
+  projectorVersion: number;
+  status: GraphProjectionJobStatus;
+  attempts: number;
+  priority: number;
+  nodeIds: string[];
+  edgeIds: string[];
   reason: string | null;
   lastError: string | null;
   createdAt: string;
@@ -68,6 +87,9 @@ export interface StrataGateSnapshot {
   openTail: RawMessage[];
   blocks: MemoryBlock[];
   events: EventCard[];
+  graphNodes: GraphNode[];
+  graphEdges: GraphEdge[];
+  graphProjectionJobs: GraphProjectionJob[];
   elements: ElementCard[];
   extractionJobs: ExtractionJob[];
   elementProjectionJobs: ElementProjectionJob[];
@@ -134,6 +156,14 @@ interface LegacySnapshotV6 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'b
   blocks: Array<Omit<MemoryBlock, 'lastLiftedBy'>>;
 }
 
+interface LegacySnapshotV7 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'graphNodes' | 'graphEdges' | 'graphProjectionJobs'> {
+  schemaVersion: 7;
+}
+
+function emptyGraph(): { graphNodes: GraphNode[]; graphEdges: GraphEdge[]; graphProjectionJobs: GraphProjectionJob[] } {
+  return { graphNodes: [], graphEdges: [], graphProjectionJobs: [] };
+}
+
 function migrateLegacyBlocks(blocks: readonly LegacyMemoryBlock[]): MemoryBlock[] {
   return blocks.map((block) => {
     const { pointerAnchorTurn, ...current } = block;
@@ -160,6 +190,7 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
         ? legacy.usageReceipts.map((receipt) => ({ ...receipt, elementIds: [] }))
         : [],
       ingestionReceipts: [],
+      ...emptyGraph(),
     };
   } else if (schemaVersion === 2) {
     const legacy = value as LegacySnapshotV2;
@@ -169,6 +200,7 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
       ingestionReceipts: [],
+      ...emptyGraph(),
     };
   } else if (schemaVersion === 3) {
     const legacy = value as LegacySnapshotV3;
@@ -177,6 +209,7 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      ...emptyGraph(),
     };
   } else if (schemaVersion === 4) {
     const legacy = value as LegacySnapshotV4;
@@ -185,6 +218,7 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      ...emptyGraph(),
     };
   } else if (schemaVersion === 5) {
     const legacy = value as LegacySnapshotV5;
@@ -193,6 +227,7 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      ...emptyGraph(),
     };
   } else if (schemaVersion === 6) {
     const legacy = value as LegacySnapshotV6;
@@ -200,7 +235,11 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       ...structuredClone(legacy),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blocks: legacy.blocks.map((block) => ({ ...structuredClone(block), lastLiftedBy: null })),
+      ...emptyGraph(),
     };
+  } else if (schemaVersion === 7) {
+    const legacy = value as LegacySnapshotV7;
+    snapshot = { ...structuredClone(legacy), schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION, ...emptyGraph() };
   } else if (schemaVersion === STRATAGATE_STORAGE_SCHEMA_VERSION) {
     snapshot = structuredClone(value) as StrataGateSnapshot;
   } else {
@@ -215,10 +254,13 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   if (!Number.isFinite(snapshot.blockDecayLambda) || snapshot.blockDecayLambda < 0) {
     throw new TypeError('Invalid StrataGate snapshot: blockDecayLambda must be a non-negative finite number');
   }
-  for (const key of ['openTail', 'blocks', 'events', 'elements', 'extractionJobs', 'elementProjectionJobs', 'usageReceipts', 'ingestionReceipts'] as const) {
+  for (const key of ['openTail', 'blocks', 'events', 'graphNodes', 'graphEdges', 'graphProjectionJobs', 'elements', 'extractionJobs', 'elementProjectionJobs', 'usageReceipts', 'ingestionReceipts'] as const) {
     if (!Array.isArray(snapshot[key])) throw new TypeError(`Invalid StrataGate snapshot: ${key} must be an array`);
   }
   if (!Array.isArray(snapshot.successfulModelResponses)) snapshot.successfulModelResponses = [];
+  for (const event of snapshot.events) {
+    event.temporal = { ...event.temporal, eventType: normalizeStandardEventType(event.temporal.eventType) };
+  }
   for (const block of snapshot.blocks) {
     if (!Number.isSafeInteger(block.pointerAnchorBlockPosition) || block.pointerAnchorBlockPosition < 1) {
       throw new TypeError('Invalid StrataGate snapshot: pointerAnchorBlockPosition must be a positive integer');
