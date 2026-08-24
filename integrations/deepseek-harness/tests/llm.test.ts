@@ -181,7 +181,7 @@ describe('DeepSeek Harness model JSON retries', () => {
       l3Condensed: 'target condensed', l4Readable: 'target readable',
       l5Raw: [{ id: 'msg_target', role: 'user', content: 'target message', createdAt: '2026-01-01T00:00:00.000Z' }],
       shouldExtract: true, pointerCurrentLevel: 5, pointerAnchorLevel: 5,
-      pointerAnchorBlockPosition: 1, lastLiftedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
+      pointerAnchorBlockPosition: 1, lastLiftedAt: null, lastLiftedBy: null, createdAt: '2026-01-01T00:00:00.000Z',
     } as MemoryBlock
     const next = {
       ...target, id: 'blk_next', sequence: 3, startTurn: 5, endTurn: 6,
@@ -211,7 +211,7 @@ describe('DeepSeek Harness model JSON retries', () => {
       l0Title: 'target', l0Tags: [], l1Summary: '', l2Keypoints: [], l3Condensed: '', l4Readable: '',
       l5Raw: [{ id: 'msg_target', role: 'user', content: 'target message', createdAt: '2026-01-01T00:00:00.000Z' }],
       shouldExtract: true, pointerCurrentLevel: 5, pointerAnchorLevel: 5,
-      pointerAnchorBlockPosition: 1, lastLiftedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
+      pointerAnchorBlockPosition: 1, lastLiftedAt: null, lastLiftedBy: null, createdAt: '2026-01-01T00:00:00.000Z',
     } as MemoryBlock
     const { bridge, session } = modelBridge([{
       tool: { shouldExtract: true, reason: 'wrong block', events: [{

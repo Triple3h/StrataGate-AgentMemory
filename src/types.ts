@@ -16,6 +16,7 @@ export interface RawMessage {
 }
 
 export type BlockLevel = 0 | 1 | 2 | 3 | 4 | 5;
+export type BlockLiftSource = 'user' | 'agent';
 
 export interface BlockLayers {
   l0Title: string;
@@ -39,6 +40,7 @@ export interface MemoryBlock extends BlockLayers {
   pointerAnchorLevel: BlockLevel;
   pointerAnchorBlockPosition: number;
   lastLiftedAt: string | null;
+  lastLiftedBy: BlockLiftSource | null;
 }
 
 export interface BlockSummary {

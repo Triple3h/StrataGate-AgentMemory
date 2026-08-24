@@ -33,6 +33,7 @@ import {
 import type {
   AppendTurnResult,
   BlockLevel,
+  BlockLiftSource,
   BlockSummarizer,
   ElementCard,
   ElementProjectionContext,
@@ -762,7 +763,7 @@ export class StrataGate {
     });
   }
 
-  async expandBlock(id: string, target: unknown = 'next'): Promise<BlockContextEntry> {
+  async expandBlock(id: string, target: unknown = 'next', source: BlockLiftSource = 'agent'): Promise<BlockContextEntry> {
     return this.commitMutation(() => {
       const block = this.blocks.find((candidate) => candidate.id === id);
       if (!block) throw new Error(`Unknown block: ${id}`);
@@ -779,6 +780,7 @@ export class StrataGate {
       block.pointerAnchorLevel = level;
       block.pointerAnchorBlockPosition = latestBlockPosition;
       block.lastLiftedAt = toUtc8Iso(this.now());
+      block.lastLiftedBy = source;
       return {
         id: block.id,
         ...(block.threadId ? { threadId: block.threadId } : {}),
@@ -1033,6 +1035,7 @@ export class StrataGate {
         pointerAnchorLevel: 5,
         pointerAnchorBlockPosition: blockPosition,
         lastLiftedAt: null,
+        lastLiftedBy: null,
       };
       const sealedIds = new Set(raw.map((message) => message.id));
       const remaining = this.openTail.filter((message) => !sealedIds.has(message.id));

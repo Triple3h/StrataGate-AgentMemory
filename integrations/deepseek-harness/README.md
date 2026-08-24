@@ -6,6 +6,16 @@ Automatic, local-first cross-session memory for DeepSeek Harness. StrataGate rem
 
 The plugin adapts DSH session events to the existing StrataGate memory engine; it does not implement a second memory system.
 
+## Preview
+
+### Layered short-term memory
+
+![StrataGate layered short-term memory view](docs/assets/stratagate-short-term-memory.png)
+
+### Memory structure and diagnostics
+
+![StrataGate memory structure and diagnostics view](docs/assets/stratagate-memory-structure.png)
+
 ## How it is designed
 
 StrataGate does not treat memory as a single summary that is continually rewritten. It separates **source evidence, derived memory, retrieval assessment, and usage feedback**:

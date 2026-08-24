@@ -76,19 +76,69 @@ describe('SQLite persistence', () => {
     expect(ephemeral.storageRevision).toBe(0);
   });
 
-  it('creates schema version six and rejects a newer database schema', async () => {
+  it('creates schema version seven and rejects a newer database schema', async () => {
     const initializedFilename = await databasePath();
     const initialized = new SqliteStorage({ filename: initializedFilename });
     await initialized.close();
     const initializedDatabase = new Database(initializedFilename, { readonly: true });
-    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(6);
+    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(7);
     initializedDatabase.close();
 
     const newerFilename = await databasePath();
     const newerDatabase = new Database(newerFilename);
-    newerDatabase.pragma('user_version = 7');
+    newerDatabase.pragma('user_version = 8');
     newerDatabase.close();
     expect(() => new SqliteStorage({ filename: newerFilename })).toThrow('newer than supported');
+  });
+
+  it('migrates schema v6 Blocks with an unknown legacy expansion source', async () => {
+    const filename = await databasePath();
+    const memory = await StrataGate.open({
+      database: filename,
+      namespace: 'legacy:v6',
+      blockTurnSize: 1,
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    await memory.appendTurn({ user: 'legacy prompt', assistant: 'legacy answer' });
+    await memory.close();
+
+    const legacy = new Database(filename);
+    legacy.exec(`
+      ALTER TABLE blocks DROP COLUMN last_lifted_by;
+      UPDATE memory_spaces SET schema_version = 6;
+      PRAGMA user_version = 6;
+    `);
+    legacy.close();
+
+    const storage = new SqliteStorage({ filename });
+    const loaded = await storage.load('legacy:v6');
+    expect(loaded?.snapshot.schemaVersion).toBe(7);
+    expect(loaded?.snapshot.blocks[0]?.lastLiftedBy).toBeNull();
+    await storage.close();
+
+    const migrated = new Database(filename, { readonly: true });
+    expect((migrated.pragma('table_info(blocks)') as Array<{ name: string }>).map(({ name }) => name))
+      .toContain('last_lifted_by');
+    migrated.close();
+  });
+
+  it('persists whether a Block was expanded by the user', async () => {
+    const filename = await databasePath();
+    const memory = await StrataGate.open({
+      database: filename,
+      namespace: 'expand-source',
+      blockTurnSize: 1,
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    const appended = await memory.appendTurn({ user: 'lift this', assistant: 'stored' });
+    await memory.expandBlock(appended.sealedBlock!.id, 4, 'user');
+    await memory.close();
+
+    const restored = await StrataGate.open({ database: filename, namespace: 'expand-source' });
+    expect(restored.listBlocks()[0]?.lastLiftedBy).toBe('user');
+    await restored.close();
   });
 
   it('restores an open tail and seals it at the same boundary after restart', async () => {
@@ -366,7 +416,7 @@ describe('SQLite persistence', () => {
     const loaded = await storage.load('legacy:user');
     expect(loaded?.revision).toBe(7);
     expect(loaded?.snapshot).toMatchObject({
-      schemaVersion: 6,
+      schemaVersion: 7,
       blockDecayLambda: 0.3,
       elements: [],
       elementProjectionJobs: [],
@@ -375,7 +425,7 @@ describe('SQLite persistence', () => {
     await storage.close();
 
     const migrated = new Database(filename, { readonly: true });
-    expect(migrated.pragma('user_version', { simple: true })).toBe(6);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(7);
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
       .map(({ name }) => name)).toContain('element_ids_json');
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
@@ -426,7 +476,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v4');
-    expect(loaded?.snapshot.schemaVersion).toBe(6);
+    expect(loaded?.snapshot.schemaVersion).toBe(7);
     expect(loaded?.snapshot.blockDecayLambda).toBe(0.3);
     await storage.close();
 
@@ -473,7 +523,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v5');
-    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 6, blockDecayLambda: 0.3 });
+    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 7, blockDecayLambda: 0.3 });
     expect(loaded?.snapshot.blocks.map(({ id, pointerAnchorBlockPosition }) =>
       [id, pointerAnchorBlockPosition])).toEqual([
       ['a1', 1],

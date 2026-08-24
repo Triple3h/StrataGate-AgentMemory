@@ -75,6 +75,7 @@ interface BlockRow {
   pointer_anchor_level: number;
   pointer_anchor_block_position: number;
   last_lifted_at: string | null;
+  last_lifted_by: 'user' | 'agent' | null;
 }
 
 interface EventRow {
@@ -223,6 +224,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   pointer_anchor_level INTEGER NOT NULL,
   pointer_anchor_block_position INTEGER NOT NULL,
   last_lifted_at TEXT,
+  last_lifted_by TEXT CHECK (last_lifted_by IS NULL OR last_lifted_by IN ('user', 'agent')),
   PRIMARY KEY (namespace, id),
   UNIQUE (namespace, sequence),
   FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
@@ -498,6 +500,7 @@ export class SqliteStorage implements StorageAdapter {
       pointerAnchorLevel: row.pointer_anchor_level as BlockLevel,
       pointerAnchorBlockPosition: row.pointer_anchor_block_position,
       lastLiftedAt: row.last_lifted_at,
+      lastLiftedBy: row.last_lifted_by,
     }));
 
     const sourceRows = this.database.prepare(`
@@ -751,8 +754,8 @@ export class SqliteStorage implements StorageAdapter {
       INSERT INTO blocks (
         namespace, id, thread_id, sequence, start_turn, end_turn, created_at, should_extract,
         l0_title, l0_tags_json, l1_summary, l2_keypoints_json, l3_condensed, l4_readable,
-        pointer_current_level, pointer_anchor_level, pointer_anchor_block_position, last_lifted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        pointer_current_level, pointer_anchor_level, pointer_anchor_block_position, last_lifted_at, last_lifted_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
         thread_id = excluded.thread_id,
         sequence = excluded.sequence,
@@ -769,7 +772,8 @@ export class SqliteStorage implements StorageAdapter {
         pointer_current_level = excluded.pointer_current_level,
         pointer_anchor_level = excluded.pointer_anchor_level,
         pointer_anchor_block_position = excluded.pointer_anchor_block_position,
-        last_lifted_at = excluded.last_lifted_at
+        last_lifted_at = excluded.last_lifted_at,
+        last_lifted_by = excluded.last_lifted_by
     `);
     for (const block of snapshot.blocks) {
       insertBlock.run(
@@ -791,6 +795,7 @@ export class SqliteStorage implements StorageAdapter {
         block.pointerAnchorLevel,
         block.pointerAnchorBlockPosition,
         block.lastLiftedAt,
+        block.lastLiftedBy,
       );
     }
 
@@ -1069,7 +1074,7 @@ export class SqliteStorage implements StorageAdapter {
         this.database.exec(THREAD_INDEXES);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
-    } else if (version === 1 || version === 2 || version === 3 || version === 4 || version === 5) {
+    } else if (version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6) {
       this.immediateTransaction(() => {
         this.database.exec(SCHEMA);
         if (version === 1) {
@@ -1101,6 +1106,9 @@ export class SqliteStorage implements StorageAdapter {
                 AND candidate.end_turn <= target.pointer_anchor_block_position
             ))
           `);
+        }
+        if (!blockColumns.some(({ name }) => name === 'last_lifted_by')) {
+          this.database.exec("ALTER TABLE blocks ADD COLUMN last_lifted_by TEXT CHECK (last_lifted_by IS NULL OR last_lifted_by IN ('user', 'agent'))");
         }
         const messageColumns = this.database.prepare("PRAGMA table_info('messages')").all() as unknown as Array<{ name: string }>;
         if (!messageColumns.some(({ name }) => name === 'thread_id')) {

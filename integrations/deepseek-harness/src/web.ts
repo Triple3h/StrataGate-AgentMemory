@@ -1,6 +1,46 @@
+import { createRequire } from 'node:module'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ElementCard, EventCard, RawMessage, StrataGateSnapshot, UsageReceipt } from '@diqier/stratagate'
+import {
+  deterministicBlockLayers,
+  getDecayedBlockLevel,
+  type ElementCard,
+  type EventCard,
+  type MemoryBlock,
+  type RawMessage,
+  type StrataGateSnapshot,
+  type UsageReceipt,
+} from '@diqier/stratagate'
 import type { StrataGateRuntime } from './runtime.js'
+
+const STRATAGATE_DSH_VERSION = '0.2.21'
+const LEGACY_THREAD_ID = '__legacy__'
+const nodeRequire = createRequire(import.meta.url)
+
+function installedPackageVersion(names: readonly string[]): string {
+  for (const name of names) {
+    try {
+      const value = nodeRequire(`${name}/package.json`) as { version?: unknown }
+      if (typeof value.version === 'string' && value.version.trim()) return value.version
+    } catch {}
+  }
+  return 'unknown'
+}
+
+interface DisplayBlock {
+  id: string
+  source: MemoryBlock
+  threadId: string
+  messages: RawMessage[]
+  virtual: boolean
+  turnRange: [number, number]
+}
+
+interface RecoveredSnapshotView {
+  blocks: DisplayBlock[]
+  openMessages: Array<{ message: RawMessage; threadId: string }>
+  receiptThreads: Map<string, string>
+  receiptActivity: Map<string, string>
+}
 
 export interface WebResponse {
   statusCode: number
@@ -72,6 +112,17 @@ function sourceMessages(snapshot: StrataGateSnapshot, ids?: ReadonlySet<string>)
     }
   }
   return output
+}
+
+function blockLayers(block: MemoryBlock): Array<{ level: number; content: string }> {
+  return [
+    { level: 0, content: `${block.l0Title}\n标签：${block.l0Tags.join('、') || '无'}` },
+    { level: 1, content: block.l1Summary || block.l0Title },
+    { level: 2, content: block.l2Keypoints.map((point) => `• ${point}`).join('\n') || block.l1Summary || block.l0Title },
+    { level: 3, content: block.l3Condensed || block.l2Keypoints.join('\n') || block.l1Summary },
+    { level: 4, content: block.l4Readable || block.l3Condensed },
+    { level: 5, content: block.l5Raw.map((message) => `${message.role}: ${message.content}`).join('\n\n') },
+  ]
 }
 
 function eventSummary(event: EventCard): unknown {
@@ -187,7 +238,13 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
       lastActivityAt: timestamps.at(-1) ?? null,
     })
   }
-  return { readonly: true, settingsWritable: true, namespaces: rows }
+  return {
+    readonly: true,
+    settingsWritable: true,
+    pluginVersion: STRATAGATE_DSH_VERSION,
+    harnessVersion: installedPackageVersion(['@deepseek-ai/dsh', '@deepseek-ai/dsh-session']),
+    namespaces: rows,
+  }
 }
 
 async function updateSettings(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
@@ -197,6 +254,137 @@ async function updateSettings(runtime: StrataGateRuntime, url: URL): Promise<unk
     throw new AdminHttpError(400, 'blockDecayLambda must be a non-negative finite number')
   }
   return { blockDecayLambda: await runtime.adminSetBlockDecayLambda(value) }
+}
+
+function receiptThreadId(id: string): string | null {
+  const match = /^dsh:(.+):turn:\d+$/.exec(id)
+  return match?.[1]?.trim() || null
+}
+
+function timestampKey(value: string): string {
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? String(parsed) : value
+}
+
+function recoverSnapshotView(snapshot: StrataGateSnapshot): RecoveredSnapshotView {
+  const receiptThreads = new Map<string, string>()
+  const receiptActivity = new Map<string, string>()
+  const receiptCandidates = new Map<string, Set<string>>()
+  for (const receipt of snapshot.ingestionReceipts) {
+    const threadId = receiptThreadId(receipt.id)
+    if (!threadId) continue
+    receiptThreads.set(receipt.id, threadId)
+    const currentActivity = receiptActivity.get(threadId)
+    if (!currentActivity || receipt.createdAt > currentActivity) receiptActivity.set(threadId, receipt.createdAt)
+    const key = timestampKey(receipt.createdAt)
+    const candidates = receiptCandidates.get(key) ?? new Set<string>()
+    candidates.add(threadId)
+    receiptCandidates.set(key, candidates)
+  }
+  const exactThreadAt = new Map([...receiptCandidates]
+    .filter(([, ids]) => ids.size === 1)
+    .map(([createdAt, ids]) => [createdAt, [...ids][0]!] as const))
+
+  const recoverMessages = (messages: readonly RawMessage[]): Array<{ message: RawMessage; threadId: string }> => {
+    let precedingThreadId: string | null = null
+    return messages.map((message) => {
+      const explicit = message.threadId?.trim()
+      const exact = exactThreadAt.get(timestampKey(message.createdAt))
+      const recovered = explicit || exact || (message.role === 'assistant' ? precedingThreadId : null)
+      const threadId = recovered || LEGACY_THREAD_ID
+      if (message.role === 'user' || explicit || exact) precedingThreadId = threadId
+      return { message, threadId }
+    })
+  }
+
+  const blocks: DisplayBlock[] = []
+  for (const source of snapshot.blocks) {
+    const recovered = recoverMessages(source.l5Raw)
+    const groups = new Map<string, RawMessage[]>()
+    for (const item of recovered) {
+      const messages = groups.get(item.threadId) ?? []
+      messages.push(item.message)
+      groups.set(item.threadId, messages)
+    }
+    const entries = [...groups]
+    for (const [threadId, messages] of entries) {
+      const virtual = !source.threadId && (entries.length > 1 || threadId !== LEGACY_THREAD_ID)
+      blocks.push({
+        id: entries.length > 1 ? `virtual:${source.id}:${encodeURIComponent(threadId)}` : source.id,
+        source,
+        threadId,
+        messages,
+        virtual,
+        turnRange: [0, 0],
+      })
+    }
+  }
+
+  const turnCounters = new Map<string, number>()
+  for (const block of blocks) {
+    if (block.source.threadId) {
+      block.turnRange = [block.source.startTurn, block.source.endTurn]
+      turnCounters.set(block.threadId, Math.max(turnCounters.get(block.threadId) ?? 0, block.source.endTurn))
+      continue
+    }
+    const turns = Math.max(1, block.messages.filter(({ role }) => role === 'user').length)
+    const start = (turnCounters.get(block.threadId) ?? 0) + 1
+    block.turnRange = [start, start + turns - 1]
+    turnCounters.set(block.threadId, start + turns - 1)
+  }
+
+  return {
+    blocks,
+    openMessages: recoverMessages(snapshot.openTail),
+    receiptThreads,
+    receiptActivity,
+  }
+}
+
+function virtualBlockLayers(block: DisplayBlock): Array<{ level: number; content: string }> {
+  if (!block.virtual || block.messages.length === block.source.l5Raw.length) return blockLayers(block.source)
+  const deterministic = deterministicBlockLayers(block.messages)
+  const natural = block.messages.filter(({ role }) => role === 'user' || role === 'assistant')
+  const firstUser = natural.find(({ role, content }) => role === 'user' && content.trim())
+  const title = firstUser?.content.replace(/\s+/g, ' ').trim().slice(0, 80) || '旧会话片段'
+  const summary = natural.map(({ content }) => content.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ').slice(0, 500)
+  const keypoints = natural.filter(({ role }) => role === 'user').map(({ content }) => content.replace(/\s+/g, ' ').trim().slice(0, 160))
+  return [
+    { level: 0, content: title },
+    { level: 1, content: summary || title },
+    { level: 2, content: keypoints.map((point) => `• ${point}`).join('\n') || summary || title },
+    { level: 3, content: deterministic.l3Condensed },
+    { level: 4, content: deterministic.l4Readable },
+    { level: 5, content: block.messages.map((message) => `${message.role}: ${message.content}`).join('\n\n') },
+  ]
+}
+
+function conversationRows(snapshot: StrataGateSnapshot, view = recoverSnapshotView(snapshot)): Array<{ id: string; label: string; blocks: number; lastActivityAt: string | null }> {
+  const ids = new Set([
+    ...view.blocks.map((block) => block.threadId),
+    ...view.openMessages.map(({ threadId }) => threadId),
+    ...view.receiptThreads.values(),
+  ])
+  return [...ids].map((id) => {
+    const blocks = view.blocks.filter((block) => block.threadId === id)
+    const messages = [
+      ...blocks.flatMap((block) => block.messages),
+      ...view.openMessages.filter((message) => message.threadId === id).map(({ message }) => message),
+    ]
+    const firstUser = messages.find(({ role, content }) => role === 'user' && content.trim())
+    const title = firstUser?.content.replace(/\s+/g, ' ').trim().slice(0, 28)
+    const timestamps = [
+      ...blocks.map(({ source }) => source.createdAt),
+      ...messages.map(({ createdAt }) => createdAt),
+      ...(view.receiptActivity.get(id) ? [view.receiptActivity.get(id)!] : []),
+    ].sort()
+    return {
+      id,
+      label: id === LEGACY_THREAD_ID ? '历史对话' : title || `对话 ${id.slice(0, 8)}`,
+      blocks: blocks.length,
+      lastActivityAt: timestamps.at(-1) ?? null,
+    }
+  }).sort((left, right) => String(right.lastActivityAt).localeCompare(String(left.lastActivityAt)))
 }
 
 async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
@@ -215,50 +403,99 @@ async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> 
       .map(({ id, name }) => ({ id, name })),
   }))
   else if (kind === 'elements') values = snapshot.elements.map(elementSummary)
-  else if (kind === 'blocks') values = snapshot.blocks.map((block) => {
-    const extraction = snapshot.extractionJobs.find(({ blockId }) => blockId === block.id)
-    const relatedEvents = snapshot.events.filter(({ sourceBlockId }) => sourceBlockId === block.id)
-    const eventIds = new Set(relatedEvents.map(({ id }) => id))
-    const projections = snapshot.elementProjectionJobs
-      .filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
-    const relatedElements = snapshot.elements
-      .filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
-      .map(({ id, name }) => ({ id, name }))
-    const failedProjection = projections.find(({ status }) => status === 'failed')
-    const pendingProjection = projections.some(({ status }) => status === 'pending' || status === 'running')
-    const needsExtraction = block.shouldExtract === true
-    const status = extraction?.status === 'failed' || failedProjection
-      ? 'failed'
-      : extraction?.status === 'succeeded' || extraction?.status === 'skipped'
-        ? pendingProjection ? 'processing' : 'organized'
-        : needsExtraction ? 'waiting' : 'organized'
+  else if (kind === 'blocks') {
+    const recovered = recoverSnapshotView(snapshot)
+    const conversations = conversationRows(snapshot, recovered)
+    const requestedThreadId = url.searchParams.get('threadId')?.trim() ?? ''
+    const activeThreadId = requestedThreadId || conversations[0]?.id || null
+    const scopedBlocks = activeThreadId
+      ? recovered.blocks.filter((block) => block.threadId === activeThreadId)
+      : []
+    values = scopedBlocks.map((block) => {
+      const source = block.source
+      const extraction = snapshot.extractionJobs.find(({ blockId }) => blockId === source.id)
+      const blockMessageIds = new Set(block.messages.map(({ id }) => id))
+      const relatedEvents = snapshot.events.filter((event) => event.sourceBlockId === source.id
+        && (!block.virtual || event.sourceMessageIds.some((id) => blockMessageIds.has(id))))
+      const eventIds = new Set(relatedEvents.map(({ id }) => id))
+      const projections = snapshot.elementProjectionJobs
+        .filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
+      const relatedElements = snapshot.elements
+        .filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
+        .map(({ id, name }) => ({ id, name }))
+      const failedProjection = projections.find(({ status }) => status === 'failed')
+      const pendingProjection = projections.some(({ status }) => status === 'pending' || status === 'running')
+      const needsExtraction = source.shouldExtract === true
+      const status = extraction?.status === 'failed' || failedProjection
+        ? 'failed'
+        : extraction?.status === 'succeeded' || extraction?.status === 'skipped'
+          ? pendingProjection ? 'processing' : 'organized'
+          : needsExtraction ? 'waiting' : 'organized'
+      const blockPosition = scopedBlocks.findIndex(({ id }) => id === block.id) + 1
+      const latestBlockPosition = scopedBlocks.length
+      const currentLevel = getDecayedBlockLevel(
+        source.pointerAnchorLevel,
+        source.threadId ? source.pointerAnchorBlockPosition : Math.min(source.pointerAnchorBlockPosition, blockPosition),
+        latestBlockPosition,
+        snapshot.blockDecayLambda,
+      )
+      return {
+        id: block.id,
+        sourceBlockId: source.id,
+        threadId: block.threadId,
+        sequence: source.sequence,
+        turnRange: block.turnRange,
+        title: block.virtual && block.messages.length !== source.l5Raw.length
+          ? block.messages.find(({ role }) => role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) || '旧会话片段'
+          : source.l0Title,
+        tags: source.l0Tags,
+        summary: source.l1Summary,
+        keypoints: source.l2Keypoints,
+        currentLevel,
+        distanceFromLatest: Math.max(0, latestBlockPosition - blockPosition),
+        expansionSource: source.lastLiftedAt ? source.lastLiftedBy ?? 'legacy' : null,
+        lastLiftedAt: source.lastLiftedAt,
+        sourceMessages: block.messages.length,
+        createdAt: source.createdAt,
+        virtual: block.virtual,
+        status,
+        eventExtraction: extraction ? {
+          status: extraction.status,
+          attempts: extraction.attempts,
+          updatedAt: extraction.updatedAt,
+          lastError: extraction.lastError,
+        } : null,
+        elementProjection: projections.length ? {
+          status: failedProjection ? 'failed' : pendingProjection ? 'processing' : 'completed',
+          jobs: projections.length,
+          lastError: failedProjection?.lastError ?? null,
+        } : null,
+        relatedEvents: relatedEvents.map(eventSummary),
+        relatedElements,
+      }
+    })
+    const filtered = values.filter((value) => matchesQuery(value, query))
+    const latestSealedTurn = scopedBlocks.reduce((latest, block) => Math.max(latest, block.turnRange[1]), 0)
+    const openMessages = activeThreadId
+      ? recovered.openMessages.filter((message) => message.threadId === activeThreadId).map(({ message }) => message)
+      : []
+    const openTurns = openMessages.filter(({ role }) => role === 'user').length
     return {
-      id: block.id,
-      sequence: block.sequence,
-      turnRange: [block.startTurn, block.endTurn],
-      title: block.l0Title,
-      tags: block.l0Tags,
-      summary: block.l1Summary,
-      keypoints: block.l2Keypoints,
-      currentLevel: block.pointerCurrentLevel,
-      sourceMessages: block.l5Raw.length,
-      createdAt: block.createdAt,
-      status,
-      eventExtraction: extraction ? {
-        status: extraction.status,
-        attempts: extraction.attempts,
-        updatedAt: extraction.updatedAt,
-        lastError: extraction.lastError,
-      } : null,
-      elementProjection: projections.length ? {
-        status: failedProjection ? 'failed' : pendingProjection ? 'processing' : 'completed',
-        jobs: projections.length,
-        lastError: failedProjection?.lastError ?? null,
-      } : null,
-      relatedEvents: relatedEvents.map(eventSummary),
-      relatedElements,
+      namespace,
+      kind,
+      total: filtered.length,
+      offset,
+      limit,
+      items: filtered.slice(offset, offset + limit),
+      openBlock: {
+        turnRange: openTurns > 0 ? [latestSealedTurn + 1, latestSealedTurn + openTurns] : null,
+        messages: openMessages.length,
+        status: 'open',
+      },
+      conversations,
+      activeThreadId,
     }
-  })
+  }
   else throw new AdminHttpError(400, `Unsupported memory kind: ${kind}`)
   const filtered = values.filter((value) => matchesQuery(value, query))
   return { namespace, kind, total: filtered.length, offset, limit, items: filtered.slice(offset, offset + limit) }
@@ -286,12 +523,23 @@ async function sources(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
     events = snapshot.events.filter(({ id }) => element.sourceEventIds.includes(id))
     ids = new Set(events.flatMap(({ sourceMessageIds }) => sourceMessageIds))
   } else if (blockId) {
-    const block = snapshot.blocks.find(({ id }) => id === blockId)
+    const displayBlock = recoverSnapshotView(snapshot).blocks.find(({ id }) => id === blockId)
+    const block = displayBlock?.source ?? snapshot.blocks.find(({ id }) => id === blockId)
     if (!block) throw new AdminHttpError(404, `Unknown block: ${blockId}`)
-    ids = new Set(block.l5Raw.map(({ id }) => id))
-    events = snapshot.events.filter(({ sourceBlockId }) => sourceBlockId === blockId)
+    const messages = displayBlock?.messages ?? block.l5Raw
+    ids = new Set(messages.map(({ id }) => id))
+    events = snapshot.events.filter((event) => event.sourceBlockId === block.id
+      && (!displayBlock?.virtual || event.sourceMessageIds.some((id) => ids.has(id))))
     const eventIds = new Set(events.map(({ id }) => id))
     elements = snapshot.elements.filter(({ sourceEventIds }) => sourceEventIds.some((id) => eventIds.has(id)))
+    return {
+      namespace,
+      events: events.map(eventSummary),
+      elements: elements.map(elementSummary),
+      messages: sourceMessages(snapshot, ids),
+      layers: displayBlock ? virtualBlockLayers(displayBlock) : blockLayers(block),
+      virtual: displayBlock?.virtual ?? false,
+    }
   } else {
     throw new AdminHttpError(400, 'eventId, elementId, or blockId is required')
   }
@@ -301,6 +549,17 @@ async function sources(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
     elements: elements.map(elementSummary),
     messages: sourceMessages(snapshot, ids),
   }
+}
+
+async function expandBlock(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
+  const namespace = url.searchParams.get('namespace')?.trim() ?? ''
+  const blockId = url.searchParams.get('blockId')?.trim() ?? ''
+  const target = url.searchParams.get('level')?.trim() ?? ''
+  if (!namespace) throw new AdminHttpError(400, 'namespace is required')
+  if (!blockId) throw new AdminHttpError(400, 'blockId is required')
+  if (blockId.startsWith('virtual:')) throw new AdminHttpError(409, 'Recovered legacy fragments are read-only display data')
+  if (!/^L?[0-5]$/i.test(target)) throw new AdminHttpError(400, 'level must be L0 through L5')
+  return runtime.adminExpandBlock(namespace, blockId, target)
 }
 
 function receiptSources(snapshot: StrataGateSnapshot, receipt: UsageReceipt): unknown {
@@ -340,6 +599,9 @@ export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebReq
     if (path === '/api/stratagate/settings') {
       if (req.method !== 'PATCH') throw new AdminHttpError(405, 'StrataGate settings require PATCH')
       sendJson(res, 200, await updateSettings(runtime, url))
+    } else if (path === '/api/stratagate/blocks/expand') {
+      if (req.method !== 'PATCH') throw new AdminHttpError(405, 'StrataGate Block expansion requires PATCH')
+      sendJson(res, 200, await expandBlock(runtime, url))
     } else if (req.method !== 'GET') throw new AdminHttpError(405, 'StrataGate memory data is read-only')
     else if (path === '/api/stratagate/overview') sendJson(res, 200, await overview(runtime))
     else if (path === '/api/stratagate/memories') sendJson(res, 200, await memories(runtime, url))

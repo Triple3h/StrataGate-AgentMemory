@@ -135,7 +135,7 @@ export class StrataGateRuntime {
 
   async expandBlock(session: Session, id: string, target?: string | number): Promise<unknown> {
     await this.flush()
-    const result = await (await this.space(session)).expandBlock(id, target)
+    const result = await (await this.space(session)).expandBlock(id, target, 'agent')
     return this.batch(session, [{
       ref: `block:${result.id}:level:${result.level}`,
       target: { eventIds: [], elementIds: [] },
@@ -381,6 +381,35 @@ export class StrataGateRuntime {
     this.settingsTail = update.then(() => {}, () => {})
     await update
     return value
+  }
+
+  async adminExpandBlock(namespace: string, id: string, target: string | number): Promise<unknown> {
+    const key = namespace.trim()
+    if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
+    const update = this.settingsTail.catch(() => {}).then(async () => {
+      await this.flush()
+      const active = this.spaces.get(key)
+      if (active) return (await active).expandBlock(id, target, 'user')
+      if (this.config.database === ':memory:' || !existsSync(this.config.database)) {
+        throw new Error(`Unknown StrataGate namespace: ${key}`)
+      }
+      const memory = await StrataGate.open({
+        database: this.config.database,
+        namespace: key,
+        blockTurnSize: this.config.blockTurnSize,
+        blockDecayLambda: this.blockDecayLambda,
+        summarizer: this.models.summarizer,
+        extractor: this.models.extractor,
+        elementProjector: this.models.projector,
+      })
+      try {
+        return await memory.expandBlock(id, target, 'user')
+      } finally {
+        await memory.close()
+      }
+    })
+    this.settingsTail = update.then(() => {}, () => {})
+    return update
   }
 
   private async applyBlockDecayLambda(value: number): Promise<void> {

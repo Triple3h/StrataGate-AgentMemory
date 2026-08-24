@@ -1,6 +1,6 @@
 {
   "name": "stratagate-dsh",
-  "version": "0.2.19",
+  "version": "0.2.21",
   "description": "Automatic local-first cross-session memory for DeepSeek Harness with source-traceable recall",
   "type": "module",
   "main": "./dist/index.js",

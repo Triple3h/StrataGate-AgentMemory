@@ -40,8 +40,11 @@ describe('StrataGate Web client contract', () => {
 
   it('uses the user-defined DSH Workspace title and keeps the compact header collision-free', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
-    expect(source).toContain('function MemoryPage({ useWorkspaces })')
+    expect(source).toContain('function MemoryPage({ useWorkspaces, useSessions })')
     expect(source).toContain('const workspaceItems = useWorkspaces((state) => state.items)')
+    expect(source).toContain('const sessionById = useSessions((state) => state.byId || {})')
+    expect(source).toContain("String(session?.title || '').trim()")
+    expect(source).toContain("workspace.sessionIds")
     expect(source).toContain("String(workspace.title || '').trim()")
     expect(source).toContain("value.split(':project:').pop()")
     expect(source).toContain('display:grid;grid-template-columns:minmax(0,1fr)')
@@ -50,13 +53,28 @@ describe('StrataGate Web client contract', () => {
 
   it('uses the memory-first three-part information architecture', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
-    expect(source).toContain("const [section, setSection] = React.useState('long')")
-    expect(source).toContain("[['long', '长期记忆'], ['recent', '最近记忆'], ['more', '更多']]")
+    expect(source).toContain("const [section, setSection] = React.useState('short')")
+    expect(source).toContain("[['short', '短期记忆'], ['long', '长期记忆'], ['more', '更多']]")
+    expect(source).toContain('块衰减总览')
+    expect(source).toContain('开放块 · 未封存')
+    expect(source).toContain('距最新封存块')
+    expect(source).toContain('分层内容预览')
+    expect(source).toContain('展开到这一层')
+    expect(source).toContain("api('blocks/expand'")
+    expect(source).toContain('用户展开')
+    expect(source).toContain('Agent 展开')
+    expect(source).toContain('曾展开')
+    expect(source).toContain('当前对话：')
+    expect(source).toContain('Block 分布滑轨')
+    expect(source).toContain('L0 层最浅最简略，L5 层最深最详细，离当前对话越远，Block 会逐渐简略。')
+    expect(source).toContain('document.body.appendChild(popover)')
+    expect(source).toContain('setOpenMenuLevel')
+    expect(source).toContain('完整内容')
     expect(source).toContain('AI 已形成的长期记忆')
-    expect(source).toContain('AI 最近完整记下、正在整理的内容')
     expect(source).toContain('搜索记忆、人物、项目、概念')
     expect(source).not.toContain("['overview', '概览']")
     expect(source).not.toContain('sg-stats')
+    expect(source).not.toContain('封存时为 L5')
   })
 
   it('inherits the resolved light, dark, or system appearance from DSH theme tokens', () => {
@@ -84,6 +102,13 @@ describe('StrataGate Web client contract', () => {
     expect(source).toContain('默认 0.3；数字越小，记忆遗忘越慢，消耗 token 越多，不建议大于 0.4。')
     expect(source).toContain("method: 'PATCH'")
     expect(source).toContain('当前工作区')
+    expect(source).toContain("['support', '?', '反馈与支持'")
+    expect(source).toContain('在 GitHub 提交 Issue')
+    expect(source).toContain('附加诊断日志')
+    expect(source).toContain('附加记忆数据（可能包含对话内容）')
+    expect(source).toContain('默认诊断不包含原始聊天、L5、Event 或 Element 内容。')
+    expect(source).toContain('发现问题？ ')
+    expect(source).toContain("'提交反馈'")
   })
 
   it('shows a red processing banner with a loading icon while memory work is active', () => {
