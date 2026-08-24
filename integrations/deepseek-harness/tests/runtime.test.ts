@@ -1,7 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { StrataGate } from '@diqier/stratagate'
 import { describe, expect, it } from 'vitest'
 import type { DshModelBridge } from '../src/llm.js'
@@ -14,6 +15,7 @@ const fakeModels = {
   }),
   extractor: async () => ({ shouldExtract: false, reason: 'none', events: [] }),
   projector: async () => ({ reason: 'none', changes: [] }),
+  graphProjector: async () => ({ reason: 'none', nodes: [], edges: [] }),
 } as unknown as DshModelBridge
 
 const session = {
@@ -69,8 +71,8 @@ describe('DSH runtime ingestion', () => {
     try {
       const memory = await (runtime as unknown as { space: (session: Session) => Promise<StrataGate> })
         .space(activeSession)
-      await memory.appendTurn({ user: 'Initial setup.', assistant: 'Ready.', threadId: String(activeSession.id) })
-      await memory.appendTurn({ user: 'Seal this block.', assistant: 'Sealed.', threadId: String(activeSession.id) })
+      await memory.appendTurn({ user: 'Initial setup.', assistant: 'Ready.', threadId: 'historical-session' })
+      await memory.appendTurn({ user: 'Seal this block.', assistant: 'Sealed.', threadId: 'historical-session' })
       const block = memory.listBlocks()[0]
       expect(block).toBeDefined()
 
@@ -87,19 +89,16 @@ describe('DSH runtime ingestion', () => {
           status: 'ongoing',
         },
       })
-      const projection = await memory.claimNextElementProjection()
+      const projection = await memory.claimNextGraphProjection()
       expect(projection).not.toBeNull()
-      await memory.completeElementProjection(projection!.jobId, {
+      await memory.completeGraphProjection(projection!.jobId, {
         reason: 'project tool',
-        changes: [{
-          element: { name: 'StrataGate', type: 'project' },
-          operation: 'set_state',
-          key: 'packageManager',
-          mode: 'state',
-          value: 'pnpm',
-          validFrom: '2026-08-20T10:00:00+08:00',
+        nodes: [{
+          ref: 'stratagate', name: 'StrataGate', type: 'project', state: 'packageManager: pnpm',
+          facts: [{ key: 'packageManager', value: 'pnpm', sourceEventIds: [relevant.id] }],
           sourceEventIds: [relevant.id],
         }],
+        edges: [],
       })
       const irrelevant = await memory.addEvent({
         title: 'Unrelated archive note',
@@ -133,15 +132,15 @@ describe('DSH runtime ingestion', () => {
       ]))
       const context = await runtime.buildAutoContext(activeSession)
 
-      expect(context).toContain('[Current conversation]\nuser: We chose pnpm earlier.')
-      expect(context).toContain('[Decayed memory blocks]')
-      expect(context).toContain(`block ${block!.id} | turns 1-2 | age 0 | L`)
       expect(context).toContain('[Activated long-term memory]')
       expect(context).toContain('Historical memory context.')
+      expect(context).not.toContain('[Current conversation]')
+      expect(context).not.toContain('[Decayed memory blocks]')
+      expect(context).not.toContain('We chose pnpm earlier.')
+      expect(context).not.toContain('toolCalls:')
       expect(context).toContain(relevant.id)
       expect(context).toContain('"temporal":{"status":"ongoing"}')
-      expect(context).toContain('"elementId":')
-      expect(context).toContain('"key":"packageManager"')
+      expect(context).toContain('"summary":"The project package manager is pnpm."')
       expect(context).toContain(pinned.id)
       expect(context).toContain(safety.id)
       expect(context).not.toContain(irrelevant.id)
@@ -151,7 +150,7 @@ describe('DSH runtime ingestion', () => {
       expect(context).not.toContain('sourceEventIds')
       expect(context).not.toContain('mentionCount')
       expect((context.match(/^\- \{"id":"evt_/gm) ?? [])).toHaveLength(3)
-      expect((context.match(/^\- \{"elementId":/gm) ?? [])).toHaveLength(1)
+      expect((context.match(/^\- \{"nodeId":/gm) ?? [])).toHaveLength(1)
       for (const event of memory.listEvents()) {
         expect([event.weight.mentionCount, event.weight.lastAdoptedTurn]).toEqual(before.get(event.id))
       }
@@ -209,8 +208,9 @@ describe('DSH runtime ingestion', () => {
       await memory.appendTurn({ user: 'B-only open tail.', assistant: 'B tail reply.', threadId: 'session-b' })
 
       const context = await runtime.buildAutoContext(sessionB)
-      expect(context).toContain('[Current conversation]\nuser: B-only open tail.')
-      expect(context).toContain('[Decayed memory blocks]\n(no sealed blocks)')
+      expect(context).not.toContain('[Current conversation]')
+      expect(context).not.toContain('[Decayed memory blocks]')
+      expect(context).not.toContain('B-only open tail.')
       expect(context).not.toContain(blockA.id)
       expect(context).not.toContain('A-only')
       expect(context).toContain(event.id)
@@ -340,6 +340,152 @@ describe('DSH runtime ingestion', () => {
       expect(memory.hasIngestionReceipt('dsh:session-runtime:turn:1')).toBe(true)
       await memory.close()
     } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('uses native surface replacement for sealed turns and preserves the open-tail tool chain', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-native-compaction-'))
+    const database = join(directory, 'memory.db')
+    const activeSession = Session.create('native-compaction-session' as never)
+    const runtime = new StrataGateRuntime({
+      database,
+      namespaceMode: 'session',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 2,
+      blockDecayLambda: 1,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, fakeModels)
+    const append = <T extends Parameters<Session['append']>[0]>(
+      type: T,
+      data: Parameters<Session['append']>[1],
+      opts?: { surfaceOp: 'append'; sourceEventSeqs?: number[] },
+    ): SessionEvent => {
+      const appendEvent = activeSession.append.bind(activeSession) as (...args: unknown[]) => SessionEvent
+      const event = opts
+        ? appendEvent(type, data, opts)
+        : appendEvent(type, data)
+      runtime.acceptEvent(activeSession, event)
+      return event
+    }
+    const appendPlainTurn = (turn: number, user: string, assistant: string): void => {
+      append('turn/start', { turn })
+      append('user/message', createUserMessage({
+        content: [{ type: 'text', text: user }], source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      append('step/start', { turn, step: 1 })
+      append('assistant/message', {
+        turn, step: 1,
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: assistant }],
+          source: { provider: 'test', model: 'test' },
+        }),
+      }, { surfaceOp: 'append', sourceEventSeqs: [] })
+      append('step/end', { turn, step: 1 })
+      append('turn/end', { turn, reason: { kind: 'completed' } })
+    }
+
+    try {
+      appendPlainTurn(1, 'SEALED ORIGINAL ONE', 'SEALED ANSWER ONE')
+      appendPlainTurn(2, 'SEALED ORIGINAL TWO', 'SEALED ANSWER TWO')
+      await runtime.flush()
+
+      let derived = activeSession.deriveMessages()
+      expect(derived).toHaveLength(1)
+      expect(derived[0]).toMatchObject({
+        role: 'user',
+        source: { kind: 'plugin', plugin: 'stratagate-memory' },
+      })
+      expect(JSON.stringify(derived)).toContain('[StrataGate conversation block]')
+      expect(JSON.stringify(derived)).toContain('Level: L5 (L5 raw transcript)')
+      expect(JSON.stringify(derived)).toContain('SEALED ORIGINAL ONE')
+      expect(JSON.stringify(derived)).toContain('SEALED ORIGINAL TWO')
+      const nativeMemory = await (runtime as unknown as { space: (active: Session) => Promise<StrataGate> })
+        .space(activeSession)
+      const currentBlock = nativeMemory.listBlocks()[0]!
+      const currentConversationEvent = await nativeMemory.addEvent({
+        title: 'CURRENT USER SENTINEL history',
+        summary: 'CURRENT USER SENTINEL came from this same conversation.',
+        sourceMessageIds: [currentBlock.l5Raw[0]!.id],
+        sourceBlockId: currentBlock.id,
+      })
+
+      const callId = 'current-tool-call' as never
+      append('turn/start', { turn: 3 })
+      append('user/message', createUserMessage({
+        content: [{ type: 'text', text: 'CURRENT USER SENTINEL' }], source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      append('step/start', { turn: 3, step: 1 })
+      append('assistant/message', {
+        turn: 3, step: 1,
+        message: createAssistantMessage({
+          content: [{ type: 'tool-call', id: callId, name: 'inspect_workspace', arguments: '{"path":"CURRENT_TOOL_PATH"}' }],
+          source: { provider: 'test', model: 'test' },
+        }),
+      }, { surfaceOp: 'append', sourceEventSeqs: [] })
+      append('tool/call', { turn: 3, step: 1, callId, name: 'inspect_workspace', arguments: '{"path":"CURRENT_TOOL_PATH"}' })
+      append('tool/result', {
+        turn: 3, step: 1,
+        message: createToolResultMessage({
+          callId,
+          content: [{ type: 'text', text: 'CURRENT TOOL RESULT' }],
+          isError: false,
+        }),
+      }, { surfaceOp: 'append' })
+      append('step/end', { turn: 3, step: 1 })
+      append('step/start', { turn: 3, step: 2 })
+      append('assistant/message', {
+        turn: 3, step: 2,
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'CURRENT FINAL ANSWER' }],
+          source: { provider: 'test', model: 'test' },
+        }),
+      }, { surfaceOp: 'append', sourceEventSeqs: [] })
+      append('step/end', { turn: 3, step: 2 })
+      append('turn/end', { turn: 3, reason: { kind: 'completed' } })
+      await runtime.flush()
+
+      derived = activeSession.deriveMessages()
+      const nativeRequest = JSON.stringify(derived)
+      expect(nativeRequest.match(/CURRENT USER SENTINEL/g)).toHaveLength(1)
+      expect(nativeRequest).toContain('CURRENT_TOOL_PATH')
+      expect(nativeRequest).toContain('CURRENT TOOL RESULT')
+      expect(nativeRequest).toContain('CURRENT FINAL ANSWER')
+      expect(derived.some((message) => message.content.some((block) => block.type === 'tool-call' && block.id === callId))).toBe(true)
+      expect(derived.some((message) => message.content.some((block) => block.type === 'tool-result' && block.toolCallId === callId))).toBe(true)
+
+      const dynamicContext = await runtime.buildAutoContext(activeSession)
+      expect(dynamicContext).toContain('[Activated long-term memory]')
+      expect(dynamicContext).not.toContain('CURRENT USER SENTINEL')
+      expect(dynamicContext).not.toContain('CURRENT_TOOL_PATH')
+      expect(dynamicContext).not.toContain('CURRENT TOOL RESULT')
+      expect(dynamicContext).not.toContain(currentConversationEvent.id)
+      expect(dynamicContext).not.toContain('[Current conversation]')
+      expect(dynamicContext).not.toContain('[Decayed memory blocks]')
+      expect(`${nativeRequest}\n${dynamicContext}`.match(/CURRENT USER SENTINEL/g)).toHaveLength(1)
+
+      appendPlainTurn(4, 'SECOND BLOCK CLOSER', 'SECOND BLOCK ANSWER')
+      await runtime.flush()
+      const decayed = nativeMemory.getBlockContext(String(activeSession.id))
+      expect(decayed.map(({ level }) => level)).toEqual([3, 5])
+      derived = activeSession.deriveMessages()
+      expect(derived).toHaveLength(2)
+      const decayedRequest = JSON.stringify(derived)
+      const decayedTexts = derived.flatMap((message) => message.content
+        .flatMap((block) => block.type === 'text' ? [block.text] : []))
+      expect(decayedRequest).toContain(`Block: ${decayed[0]!.id}`)
+      expect(decayedRequest).toContain('Level: L3 (L3 rule-condensed transcript)')
+      expect(decayedTexts.find((text) => text.includes(`Block: ${decayed[0]!.id}`))).toContain(decayed[0]!.content)
+      expect(decayedRequest).toContain(`Block: ${decayed[1]!.id}`)
+      expect(decayedRequest).toContain('Level: L5 (L5 raw transcript)')
+
+      await nativeMemory.expandBlock(decayed[0]!.id, 'L4', 'user')
+      await runtime.buildAutoContext(activeSession)
+      expect(JSON.stringify(activeSession.deriveMessages())).toContain('Level: L4 (L4 readable near-verbatim transcript)')
+    } finally {
+      await runtime.close().catch(() => {})
       await rm(directory, { recursive: true, force: true })
     }
   })

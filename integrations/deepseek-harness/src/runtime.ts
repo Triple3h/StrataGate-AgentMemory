@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   memoryWeightAt,
@@ -10,8 +10,11 @@ import {
   type ElementSearchResult,
   type EventCard,
   type EventSearchResult,
+  type BlockContextEntry,
+  type GraphNode,
   type ElementSearchOptions,
   type MemoryElementType,
+  type MemoryBlock,
   type RawMessage,
   type RetrievalAssessment,
   type RetrievalAssessmentInput,
@@ -42,6 +45,7 @@ interface RetrievalBatch {
 const AUTO_EVENT_LIMIT = 4
 const AUTO_ELEMENT_LIMIT = 4
 const AUTO_MEMORY_TOKEN_BUDGET = 900
+const COMPACTION_SOURCE_PLUGIN = 'stratagate-memory'
 
 interface RankedElementFact extends ElementSearchResult {
   weight: number
@@ -64,6 +68,7 @@ export class StrataGateRuntime {
   private readonly adopted = new Map<string, AdoptedEvidence>()
   private readonly pendingUse = new Set<string>()
   private readonly workspaceNames = new Map<string, string>()
+  private readonly migrationTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private ingestTail: Promise<void> = Promise.resolve()
   private settingsTail: Promise<void> = Promise.resolve()
   private batchSequence = 0
@@ -75,6 +80,7 @@ export class StrataGateRuntime {
     private readonly config: ResolvedConfig,
     private readonly models: DshModelBridge,
     private readonly onIngestError: (error: unknown) => void = () => {},
+    private readonly flushNativeSession: (session: Session) => Promise<void> = async () => {},
   ) {
     this.blockDecayLambda = config.blockDecayLambda
   }
@@ -87,7 +93,15 @@ export class StrataGateRuntime {
     this.ingestTail = this.ingestTail.catch(() => {}).then(async () => {
       const memory = await this.space(session)
       try {
-        await this.models.run(session, () => memory.appendTurn(turn))
+        const result = await this.models.run(session, () => memory.appendTurn(turn))
+        if (result.sealedBlock) {
+          const contexts = memory.getBlockContext(String(session.id))
+          const sealedContext = contexts.find(({ id }) => id === result.sealedBlock!.id)
+          if (!sealedContext) throw new Error(`Missing context for sealed StrataGate block ${result.sealedBlock.id}`)
+          this.replaceSealedSurface(session, result.sealedBlock, sealedContext, turn.dshTurn)
+          this.syncDecayedBlockSurface(session, contexts)
+          await this.flushNativeSession(session)
+        }
       } finally {
         await this.persistSuccessfulResponses(memory)
       }
@@ -258,29 +272,92 @@ export class StrataGateRuntime {
     await this.flush()
     const memory = await this.space(session)
     const threadId = String(session.id)
+    const blockContexts = memory.getBlockContext(threadId)
+    if (this.syncDecayedBlockSurface(session, blockContexts)) {
+      await this.flushNativeSession(session)
+    }
     const openTail = memory.listOpenTail(threadId)
     const activationQuery = [currentUserMessage(session), renderMessages(recentTurns(openTail, 2))]
       .filter(Boolean)
       .join('\n\n')
-    const [eventHits, elementHits] = activationQuery
-      ? await Promise.all([
-          memory.searchEvents(activationQuery, { limit: 20 }),
-          memory.searchElements(activationQuery, { limit: 12 }),
-        ])
-      : [[], []]
+    const eventHits = activationQuery ? await memory.searchEvents(activationQuery, { limit: 20 }) : []
+    let graphNodes: GraphNode[] = []
+    if (activationQuery && typeof memory.searchGraphNodes === 'function') {
+      graphNodes = (await memory.searchGraphNodes(activationQuery, 12)).map(({ node }) => node)
+    } else if (activationQuery) {
+      // Compatibility for an in-flight older core instance; new persistent
+      // spaces always use Graph nodes and never create new Element cards.
+      const legacy = activatedElements(memory, await memory.searchElements(activationQuery, { limit: 12 }))
+      graphNodes = legacy.map((item) => ({
+        id: item.elementId, name: item.name, type: item.type, aliases: [], currentState: '', status: 'active',
+        confidence: item.fact.confidence ?? 0.8, sourceEventIds: item.fact.sourceEventIds,
+        facts: [{ ...item.fact, confidence: item.fact.confidence ?? 0.8, status: item.fact.status === 'disputed' ? 'disputed' : item.fact.status === 'superseded' ? 'superseded' : 'active' }],
+        createdAt: item.fact.createdAt, updatedAt: item.fact.updatedAt,
+      }))
+    }
 
-    const events = activatedEvents(memory, eventHits).slice(0, AUTO_EVENT_LIMIT)
-    const elements = activatedElements(memory, elementHits).slice(0, AUTO_ELEMENT_LIMIT)
+    const events = activatedEvents(memory, eventHits)
+    const currentBlockIds = new Set(memory.listBlocks()
+      .filter((block) => block.threadId === threadId)
+      .map(({ id }) => id))
+    const currentEventIds = new Set(memory.listEvents()
+      .filter((event) => currentBlockIds.has(event.sourceBlockId))
+      .map(({ id }) => id))
+    const longTermEvents = events
+      .filter((event) => !currentEventIds.has(event.id))
+      .slice(0, AUTO_EVENT_LIMIT)
+    graphNodes = graphNodes
+      .filter((node) => !node.sourceEventIds.some((id) => currentEventIds.has(id)))
+      .slice(0, AUTO_ELEMENT_LIMIT)
 
-    return [
-      '[Current conversation]',
-      openTail.length > 0 ? renderMessages(openTail) : '(open tail is empty)',
-      '',
-      '[Decayed memory blocks]',
-      renderBlocks(memory.getBlockContext(threadId)),
-      '',
-      renderActivatedMemory(events, elements),
-    ].join('\n')
+    return renderActivatedMemory(longTermEvents, graphNodes)
+  }
+
+  /**
+   * Replace the just-sealed DSH turns with one native surface message. The raw
+   * events remain in the append-only log for transcript/evidence provenance,
+   * while deriveMessages() sees only this compressed checkpoint.
+   */
+  private replaceSealedSurface(
+    session: Session,
+    block: MemoryBlock,
+    context: BlockContextEntry,
+    endTurn: number,
+  ): void {
+    const sourceEventSeqs = sealedSurfaceSeqs(session, endTurn, block.endTurn - block.startTurn + 1)
+    const start = sourceEventSeqs[0]
+    const end = sourceEventSeqs.at(-1)
+    if (start === undefined || end === undefined) {
+      throw new Error(`Cannot compact StrataGate block ${block.id}: no DSH surface range was found`)
+    }
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: renderBlockSurfaceMessage(context) }],
+      source: { kind: 'plugin', plugin: COMPACTION_SOURCE_PLUGIN },
+    }), {
+      surfaceOp: { op: 'replace', start, end },
+      sourceEventSeqs,
+    })
+  }
+
+  /** Keep each native Block checkpoint synchronized with its current decay pointer. */
+  private syncDecayedBlockSurface(session: Session, contexts: readonly BlockContextEntry[]): boolean {
+    const current = currentBlockSurfaceMessages(session)
+    let changed = false
+    for (const context of contexts) {
+      const node = current.get(context.id)
+      if (!node) continue
+      const text = renderBlockSurfaceMessage(context)
+      if (node.text === text) continue
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'plugin', plugin: COMPACTION_SOURCE_PLUGIN },
+      }), {
+        surfaceOp: { op: 'replace', start: node.seq, end: node.seq },
+        sourceEventSeqs: [node.seq],
+      })
+      changed = true
+    }
+    return changed
   }
 
   // Keep the ingestion error for callers that explicitly require a flushed run.
@@ -294,6 +371,8 @@ export class StrataGateRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    for (const timer of this.migrationTimers.values()) clearTimeout(timer)
+    this.migrationTimers.clear()
     let flushError: unknown
     try {
       await this.flush()
@@ -400,7 +479,8 @@ export class StrataGateRuntime {
         blockDecayLambda: this.blockDecayLambda,
         summarizer: this.models.summarizer,
         extractor: this.models.extractor,
-        elementProjector: this.models.projector,
+        graphProjector: this.models.graphProjector,
+        disableElementProjection: true,
       })
       try {
         return await memory.expandBlock(id, target, 'user')
@@ -457,14 +537,28 @@ export class StrataGateRuntime {
         blockDecayLambda: this.blockDecayLambda,
         summarizer: this.models.summarizer,
         extractor: this.models.extractor,
-        elementProjector: this.models.projector,
+        graphProjector: this.models.graphProjector,
+        disableElementProjection: true,
       }).then(async (memory) => {
         try {
           try {
-            await this.models.run(session, () => memory.resumePendingWork({ retrySkipped: true }))
+            const resumed = await this.models.run(session, () => memory.resumePendingWork({ retrySkipped: true }))
+            const contexts = memory.getBlockContext(String(session.id))
+            for (const block of resumed.sealedBlocks) {
+              if (block.threadId !== String(session.id)) continue
+              const endTurn = dshTurnAtBlockEnd(session, block)
+              const context = contexts.find(({ id }) => id === block.id)
+              if (!context) throw new Error(`Missing context for recovered StrataGate block ${block.id}`)
+              this.replaceSealedSurface(session, block, context, endTurn)
+            }
+            this.syncDecayedBlockSurface(session, contexts)
+            if (resumed.sealedBlocks.some((block) => block.threadId === String(session.id))) {
+              await this.flushNativeSession(session)
+            }
           } finally {
             await this.persistSuccessfulResponses(memory)
           }
+          this.scheduleGraphMigration(session, memory)
           return memory
         } catch (error) {
           await memory.close().catch(() => {})
@@ -477,6 +571,51 @@ export class StrataGateRuntime {
       })
     }
     return opening
+  }
+
+  async searchGraph(session: Session, query: string, limit = 8): Promise<unknown> {
+    await this.flush()
+    const results = await (await this.space(session)).searchGraphNodes(query, limit)
+    return this.batch(session, results.map(({ node }) => ({
+      ref: `graph-node:${node.id}`,
+      target: { eventIds: node.sourceEventIds, elementIds: [] },
+    })), results)
+  }
+
+  async expandGraphNode(session: Session, id: string): Promise<unknown> {
+    await this.flush()
+    const memory = await this.space(session)
+    const node = memory.listGraphNodes().find((candidate) => candidate.id === id)
+    if (!node) throw new Error(`Unknown graph node: ${id}`)
+    const edges = memory.listGraphEdges().filter(({ fromNodeId, toNodeId }) => fromNodeId === id || toNodeId === id)
+    return this.batch(session, [{
+      ref: `graph-node:${node.id}:expanded`,
+      target: { eventIds: [...new Set([...node.sourceEventIds, ...edges.flatMap(({ sourceEventIds }) => sourceEventIds)])], elementIds: [] },
+    }], { node, edges })
+  }
+
+  private scheduleGraphMigration(session: Session, memory: StrataGate): void {
+    const namespace = this.namespaceFor(session)
+    if (this.closed || this.migrationTimers.has(namespace)) return
+    if (typeof memory.listGraphProjectionJobs !== 'function') return
+    const pending = memory.listGraphProjectionJobs().some(({ status }) => status === 'pending' || status === 'failed')
+    if (!pending) return
+    const timer = setTimeout(() => {
+      this.migrationTimers.delete(namespace)
+      if (this.closed) return
+      const completedBefore = memory.listGraphProjectionJobs().filter(({ status }) => status === 'completed').length
+      void this.models.run(session, () => memory.resumePendingWork()).then(async () => {
+        await this.persistSuccessfulResponses(memory)
+        const completedAfter = memory.listGraphProjectionJobs().filter(({ status }) => status === 'completed').length
+        // Continue only after durable progress. A failed batch waits for the
+        // next normal plugin wake-up instead of causing a retry/token storm.
+        if (completedAfter > completedBefore) this.scheduleGraphMigration(session, memory)
+      }).catch((error: unknown) => {
+        this.onIngestError(error)
+      })
+    }, 1_500)
+    timer.unref?.()
+    this.migrationTimers.set(namespace, timer)
   }
 
   private rememberWorkspace(namespace: string, cwd: string | undefined): void {
@@ -558,12 +697,87 @@ function renderMessages(messages: readonly RawMessage[]): string {
   }).join('\n\n')
 }
 
-function renderBlocks(blocks: ReturnType<StrataGate['getBlockContext']>): string {
-  if (blocks.length === 0) return '(no sealed blocks)'
-  return blocks.map((block) => [
-    `block ${block.id} | turns ${block.turnRange[0]}-${block.turnRange[1]} | age ${block.age} | L${block.level}`,
-    block.content,
-  ].join('\n')).join('\n\n')
+function dshTurnAtBlockEnd(session: Session, block: MemoryBlock): number {
+  const blockEnd = Date.parse(block.createdAt)
+  for (let index = session.events.length - 1; index >= 0; index -= 1) {
+    const event = session.events[index]
+    if (event?.type === 'turn/end' && event.time === blockEnd) return event.data.turn
+  }
+  throw new Error(`Cannot match StrataGate block ${block.id} to its completed DSH turn`)
+}
+
+function sealedSurfaceSeqs(session: Session, endTurn: number, turnCount: number): number[] {
+  const currentSurface = [...session.surface.nodes]
+  const currentSet = new Set(currentSurface)
+  const completed: Array<{ turn: number; start: number; end: number; nodes: number[] }> = []
+  let open: { turn: number; start: number } | undefined
+
+  for (const event of session.events) {
+    if (event.type === 'turn/start') {
+      open = { turn: event.data.turn, start: event.seq }
+      continue
+    }
+    if (event.type !== 'turn/end' || !open || event.data.turn !== open.turn) continue
+    const turnEvents = session.events.slice(open.start + 1, event.seq)
+    const hasHumanMessage = turnEvents.some((candidate) =>
+      candidate.type === 'user/message' && candidate.data.source.kind === 'user')
+    if (hasHumanMessage && event.data.turn <= endTurn) {
+      completed.push({
+        turn: event.data.turn,
+        start: open.start,
+        end: event.seq,
+        nodes: currentSurface.filter((seq) => seq > open!.start && seq < event.seq && currentSet.has(seq)),
+      })
+    }
+    open = undefined
+  }
+
+  const selected = completed.slice(-turnCount)
+  if (selected.length !== turnCount || selected.at(-1)?.turn !== endTurn) {
+    throw new Error(`Cannot identify ${turnCount} completed DSH turns ending at turn ${endTurn}`)
+  }
+  const emptyTurn = selected.find((turn) => turn.nodes.length === 0)
+  if (emptyTurn) {
+    throw new Error(`Cannot compact DSH turn ${emptyTurn.turn}: its original messages are no longer on the surface`)
+  }
+
+  const start = selected[0]!.nodes[0]!
+  const end = selected.at(-1)!.nodes.at(-1)!
+  const startIndex = currentSurface.indexOf(start)
+  const endIndex = currentSurface.indexOf(end)
+  if (startIndex < 0 || endIndex < startIndex) {
+    throw new Error(`Cannot identify a contiguous DSH surface range ending at turn ${endTurn}`)
+  }
+  return currentSurface.slice(startIndex, endIndex + 1)
+}
+
+function renderBlockSurfaceMessage(context: BlockContextEntry): string {
+  return [
+    '[StrataGate conversation block]',
+    `Block: ${context.id}`,
+    `Turns: ${context.turnRange[0]}-${context.turnRange[1]}`,
+    `Level: L${context.level} (${context.label})`,
+    '',
+    context.content,
+  ].join('\n')
+}
+
+function currentBlockSurfaceMessages(session: Session): Map<string, { seq: number; text: string }> {
+  const blocks = new Map<string, { seq: number; text: string }>()
+  if (!session.surface?.nodes) return blocks
+  for (const seq of session.surface.nodes) {
+    const event = session.events[seq]
+    if (event?.type !== 'user/message'
+      || event.data.source.kind !== 'plugin'
+      || event.data.source.plugin !== COMPACTION_SOURCE_PLUGIN) continue
+    const text = event.data.content
+      .flatMap((block) => block.type === 'text' ? [block.text] : [])
+      .join('\n')
+    const blockId = text.match(/^\[StrataGate conversation block\]\nBlock: ([^\n]+)/u)?.[1]
+      ?? text.match(/^\[StrataGate compressed conversation\]\nBlock ([^;\n]+);/u)?.[1]
+    if (blockId) blocks.set(blockId, { seq, text })
+  }
+  return blocks
 }
 
 function activatedEvents(memory: StrataGate, relevance: readonly EventSearchResult[]): EventCard[] {
@@ -620,7 +834,7 @@ function activatedElements(memory: StrataGate, relevance: readonly ElementSearch
   ]).map(({ item }) => item)
 }
 
-function renderActivatedMemory(events: readonly EventCard[], elements: readonly RankedElementFact[]): string {
+function renderActivatedMemory(events: readonly EventCard[], graphNodes: readonly GraphNode[]): string {
   const heading = [
     '[Activated long-term memory]',
     'Historical memory context.',
@@ -630,7 +844,7 @@ function renderActivatedMemory(events: readonly EventCard[], elements: readonly 
   const lines = [...heading]
   let tokens = estimateTokens(lines.join('\n'))
   let eventCount = 0
-  let elementCount = 0
+  let nodeCount = 0
 
   for (const event of events) {
     const rendered = JSON.stringify({
@@ -649,24 +863,23 @@ function renderActivatedMemory(events: readonly EventCard[], elements: readonly 
     eventCount += 1
   }
 
-  for (const element of elements) {
+  for (const node of graphNodes) {
     const rendered = JSON.stringify({
-      elementId: element.elementId,
-      name: element.name,
-      key: element.fact.key,
-      value: element.fact.value,
-      validFrom: element.fact.validFrom,
-      validTo: element.fact.validTo,
+      nodeId: node.id,
+      name: node.name,
+      type: node.type,
+      currentState: node.currentState,
+      facts: node.facts.filter(({ status }) => status === 'active').map(({ key, value, validFrom, validTo }) => ({ key, value, validFrom, validTo })),
     })
-    const cost = estimateTokens(`\nElementFacts:\n- ${rendered}`)
+    const cost = estimateTokens(`\nKnowledgeGraph:\n- ${rendered}`)
     if (tokens + cost > AUTO_MEMORY_TOKEN_BUDGET) break
-    if (elementCount === 0) lines.push('ElementFacts:')
+    if (nodeCount === 0) lines.push('KnowledgeGraph:')
     lines.push(`- ${rendered}`)
     tokens += cost
-    elementCount += 1
+    nodeCount += 1
   }
 
-  if (eventCount === 0 && elementCount === 0) lines.push('(no activated memory)')
+  if (eventCount === 0 && nodeCount === 0) lines.push('(no activated memory)')
   return lines.join('\n')
 }
 

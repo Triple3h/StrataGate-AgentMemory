@@ -7,6 +7,8 @@ import {
   normalizeBlockLevel,
 } from './blocks.js';
 import { applyElementChanges, elementViewAt } from './elements.js';
+import { normalizeStandardEventType } from './events.js';
+import { applyGraphProjection } from './graph.js';
 import { normalizeRetrievalAssessment, type RetrievalAssessment, type RetrievalAssessmentInput } from './retrieval.js';
 import { SqliteStorage } from './sqlite.js';
 import {
@@ -19,10 +21,12 @@ import {
 } from './search.js';
 import {
   STRATAGATE_STORAGE_SCHEMA_VERSION,
+  KNOWLEDGE_GRAPH_PROJECTOR_VERSION,
   cloneSnapshot,
   normalizeSnapshot,
   type ElementProjectionJob,
   type ExtractionJob,
+  type GraphProjectionJob,
   type IngestionReceipt,
   type SuccessfulModelResponse,
   type StorageAdapter,
@@ -45,6 +49,12 @@ import type {
   EventCardInput,
   EventExtractor,
   EventSearchResult,
+  GraphEdge,
+  GraphNode,
+  GraphNodeSearchResult,
+  GraphProjectionContext,
+  GraphProjectionResult,
+  GraphProjector,
   MemoryBlock,
   RawMessage,
   RawSearchHit,
@@ -60,9 +70,13 @@ export interface StrataGateOptions {
   summarizer?: BlockSummarizer;
   extractor?: EventExtractor;
   elementProjector?: ElementProjector;
+  /** Prevents creation of legacy Element projection jobs for graph-native hosts. */
+  disableElementProjection?: boolean;
+  graphProjector?: GraphProjector;
   now?: () => Date;
   idFactory?: (prefix: 'msg' | 'blk' | 'evt') => string;
   elementIdFactory?: (prefix: 'elem' | 'fact' | 'proj') => string;
+  graphIdFactory?: (prefix: 'node' | 'edge' | 'gfact' | 'gproj') => string;
 }
 
 export interface PersistentStrataGateOptions extends StrataGateOptions {
@@ -134,6 +148,10 @@ function defaultElementIdFactory(prefix: 'elem' | 'fact' | 'proj'): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
+function defaultGraphIdFactory(prefix: 'node' | 'edge' | 'gfact' | 'gproj'): string {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
 function defaultSummary(messages: readonly RawMessage[]): {
   l0Title: string;
   l0Tags: string[];
@@ -182,15 +200,21 @@ export class StrataGate {
   private readonly summarizer: BlockSummarizer | undefined;
   private readonly extractor: EventExtractor | undefined;
   private readonly elementProjector: ElementProjector | undefined;
+  private readonly disableElementProjection: boolean;
+  private readonly graphProjector: GraphProjector | undefined;
   private readonly now: () => Date;
   private readonly idFactory: (prefix: 'msg' | 'blk' | 'evt') => string;
   private readonly elementIdFactory: (prefix: 'elem' | 'fact' | 'proj') => string;
+  private readonly graphIdFactory: (prefix: 'node' | 'edge' | 'gfact' | 'gproj') => string;
   private readonly openTail: RawMessage[] = [];
   private readonly blocks: MemoryBlock[] = [];
   private readonly events: EventCard[] = [];
   private readonly elements: ElementCard[] = [];
+  private readonly graphNodes: GraphNode[] = [];
+  private readonly graphEdges: GraphEdge[] = [];
   private readonly extractionJobs = new Map<string, ExtractionJob>();
   private readonly elementProjectionJobs = new Map<string, ElementProjectionJob>();
+  private readonly graphProjectionJobs = new Map<string, GraphProjectionJob>();
   private readonly usageReceipts = new Map<string, UsageReceipt>();
   private readonly successfulModelResponses: SuccessfulModelResponse[] = [];
   private readonly ingestionReceipts = new Map<string, IngestionReceipt>();
@@ -213,9 +237,12 @@ export class StrataGate {
     this.summarizer = options.summarizer;
     this.extractor = options.extractor;
     this.elementProjector = options.elementProjector;
+    this.disableElementProjection = options.disableElementProjection ?? false;
+    this.graphProjector = options.graphProjector;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? defaultIdFactory;
     this.elementIdFactory = options.elementIdFactory ?? defaultElementIdFactory;
+    this.graphIdFactory = options.graphIdFactory ?? defaultGraphIdFactory;
   }
 
   static inMemory(options: StrataGateOptions = {}): StrataGate {
@@ -238,9 +265,12 @@ export class StrataGate {
         ...(options.summarizer ? { summarizer: options.summarizer } : {}),
         ...(options.extractor ? { extractor: options.extractor } : {}),
         ...(options.elementProjector ? { elementProjector: options.elementProjector } : {}),
+        ...(options.disableElementProjection !== undefined ? { disableElementProjection: options.disableElementProjection } : {}),
+        ...(options.graphProjector ? { graphProjector: options.graphProjector } : {}),
         ...(options.now ? { now: options.now } : {}),
         ...(options.idFactory ? { idFactory: options.idFactory } : {}),
         ...(options.elementIdFactory ? { elementIdFactory: options.elementIdFactory } : {}),
+        ...(options.graphIdFactory ? { graphIdFactory: options.graphIdFactory } : {}),
       });
     } catch (error) {
       await storage.close();
@@ -283,9 +313,12 @@ export class StrataGate {
     if (options.summarizer) memoryOptions.summarizer = options.summarizer;
     if (options.extractor) memoryOptions.extractor = options.extractor;
     if (options.elementProjector) memoryOptions.elementProjector = options.elementProjector;
+    if (options.disableElementProjection !== undefined) memoryOptions.disableElementProjection = options.disableElementProjection;
+    if (options.graphProjector) memoryOptions.graphProjector = options.graphProjector;
     if (options.now) memoryOptions.now = options.now;
     if (options.idFactory) memoryOptions.idFactory = options.idFactory;
     if (options.elementIdFactory) memoryOptions.elementIdFactory = options.elementIdFactory;
+    if (options.graphIdFactory) memoryOptions.graphIdFactory = options.graphIdFactory;
     const memory = new StrataGate(memoryOptions, STRATAGATE_CONSTRUCTOR_TOKEN);
     memory.storage = options.storage;
     memory.namespace = namespace;
@@ -321,6 +354,22 @@ export class StrataGate {
           }
         });
       }
+      const interruptedGraphProjections = [...memory.graphProjectionJobs.values()]
+        .filter((job) => job.status === 'running');
+      if (interruptedGraphProjections.length > 0) {
+        await memory.commitMutation(() => {
+          const now = toUtc8Iso(memory.now());
+          for (const job of interruptedGraphProjections) {
+            memory.graphProjectionJobs.set(job.id, {
+              ...job,
+              status: 'failed',
+              lastError: 'Graph projection was interrupted before completion.',
+              updatedAt: now,
+            });
+          }
+        });
+      }
+      if (memory.graphProjector) await memory.commitMutation(() => memory.queueMissingGraphProjections());
     } else {
       await memory.persist();
     }
@@ -361,6 +410,14 @@ export class StrataGate {
     return this.elements;
   }
 
+  listGraphNodes(): readonly GraphNode[] {
+    return this.graphNodes;
+  }
+
+  listGraphEdges(): readonly GraphEdge[] {
+    return this.graphEdges;
+  }
+
   listOpenTail(threadId?: string): readonly RawMessage[] {
     if (threadId === undefined) return this.openTail;
     return this.openTail.filter((message) => message.threadId === threadId);
@@ -372,6 +429,10 @@ export class StrataGate {
 
   listElementProjectionJobs(): readonly ElementProjectionJob[] {
     return [...this.elementProjectionJobs.values()];
+  }
+
+  listGraphProjectionJobs(): readonly GraphProjectionJob[] {
+    return [...this.graphProjectionJobs.values()];
   }
 
   listUsageReceipts(): readonly UsageReceipt[] {
@@ -404,6 +465,9 @@ export class StrataGate {
       openTail: this.openTail,
       blocks: this.blocks,
       events: this.events,
+      graphNodes: this.graphNodes,
+      graphEdges: this.graphEdges,
+      graphProjectionJobs: [...this.graphProjectionJobs.values()],
       elements: this.elements,
       extractionJobs: [...this.extractionJobs.values()],
       elementProjectionJobs: [...this.elementProjectionJobs.values()],
@@ -457,12 +521,14 @@ export class StrataGate {
 
     if (this.threadOpenTail(threadId).filter((message) => message.role === 'user').length < this.blockTurnSize) {
       const projectedElements = await this.projectEligibleElements() ?? [];
+      await this.projectEligibleGraph();
       return { sealedBlock: null, extractedEvents: [], projectedElements };
     }
 
     const sealedBlock = await this.sealOpenTail(threadId);
     const extractedEvents = await this.extractEligibleBlock() ?? [];
     const projectedElements = await this.projectEligibleElements() ?? [];
+    await this.projectEligibleGraph();
     return { sealedBlock, extractedEvents, projectedElements };
   }
 
@@ -476,12 +542,14 @@ export class StrataGate {
       sealedBlocks.push(await this.sealOpenTail(sealable.threadId));
       extractedEvents.push(...(await this.extractEligibleBlock() ?? []));
       projectedElements.push(...(await this.projectEligibleElements() ?? []));
+      await this.projectEligibleGraph();
     }
     while (true) {
       const extracted = await this.extractEligibleBlock();
       if (extracted === null) break;
       extractedEvents.push(...extracted);
       projectedElements.push(...(await this.projectEligibleElements() ?? []));
+      await this.projectEligibleGraph();
     }
     if (options.retrySkipped === true) {
       const skippedBlockIds = this.blocks
@@ -494,6 +562,7 @@ export class StrataGate {
         if (extracted === null) continue;
         extractedEvents.push(...extracted);
         projectedElements.push(...(await this.projectEligibleElements() ?? []));
+        await this.projectEligibleGraph();
       }
     }
     while (true) {
@@ -501,6 +570,9 @@ export class StrataGate {
       if (projected === null) break;
       projectedElements.push(...projected);
     }
+    // Historical graph rebuild is deliberately bounded: one persisted batch per
+    // worker pass keeps startup responsive and avoids burst token consumption.
+    await this.projectEligibleGraph();
     return { sealedBlocks, extractedEvents, projectedElements };
   }
 
@@ -508,6 +580,7 @@ export class StrataGate {
     return this.commitMutation(() => {
       const event = this.addEventInMemory(input);
       this.queueElementProjection([event.id]);
+      this.queueGraphProjection([event.id], 1_000);
       return event;
     });
   }
@@ -639,6 +712,70 @@ export class StrataGate {
   async failElementProjection(jobId: string, error: unknown): Promise<void> {
     await this.commitMutation(() => {
       const job = this.requireElementProjectionJob(jobId);
+      if (job.status === 'completed') return;
+      job.status = 'failed';
+      job.lastError = errorMessage(error);
+      job.updatedAt = toUtc8Iso(this.now());
+    });
+  }
+
+  async claimNextGraphProjection(): Promise<GraphProjectionContext | null> {
+    return this.commitMutation(() => {
+      const job = [...this.graphProjectionJobs.values()]
+        .filter((candidate) => candidate.status === 'pending' || candidate.status === 'failed')
+        .sort((left, right) => right.priority - left.priority || left.createdAt.localeCompare(right.createdAt))[0];
+      if (!job) return null;
+      const events = job.sourceEventIds.flatMap((id) => this.events.find((event) => event.id === id) ?? []);
+      if (events.length === 0) throw new Error(`Graph projection ${job.id} has no available source events`);
+      job.status = 'running';
+      job.attempts += 1;
+      job.lastError = null;
+      job.updatedAt = toUtc8Iso(this.now());
+      const eventText = normalizeSearchText(events.map((event) => [
+        event.title, event.summary, event.tags.join(' '), (event.temporal.participants ?? []).join(' '),
+      ].join(' ')).join(' '));
+      const relevantNodes = this.graphNodes.filter((node) => [node.name, ...node.aliases]
+        .some((name) => eventText.includes(normalizeSearchText(name))))
+        .concat([...this.graphNodes].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 24));
+      const existingNodes = [...new Map(relevantNodes.map((node) => [node.id, node])).values()].slice(0, 80);
+      const nodeIds = new Set(existingNodes.map(({ id }) => id));
+      return {
+        jobId: job.id,
+        projectorVersion: job.projectorVersion,
+        events: structuredClone(events),
+        existingNodes: structuredClone(existingNodes),
+        existingEdges: structuredClone(this.graphEdges.filter(({ fromNodeId, toNodeId }) => nodeIds.has(fromNodeId) && nodeIds.has(toNodeId)).slice(-120)),
+      };
+    });
+  }
+
+  async completeGraphProjection(jobId: string, result: GraphProjectionResult): Promise<{ nodeIds: string[]; edgeIds: string[] }> {
+    return this.commitMutation(() => {
+      const job = this.requireGraphProjectionJob(jobId);
+      if (job.status === 'completed') return { nodeIds: job.nodeIds, edgeIds: job.edgeIds };
+      if (job.status !== 'running') throw new Error(`Graph projection ${job.id} is ${job.status}, not running`);
+      const touched = applyGraphProjection({
+        nodes: this.graphNodes,
+        edges: this.graphEdges,
+        events: this.events,
+        result,
+        allowedEventIds: new Set(job.sourceEventIds),
+        now: toUtc8Iso(this.now()),
+        idFactory: this.graphIdFactory,
+      });
+      job.status = 'completed';
+      job.nodeIds = touched.nodeIds;
+      job.edgeIds = touched.edgeIds;
+      job.reason = typeof result.reason === 'string' ? result.reason.trim().replace(/\s+/g, ' ').slice(0, 500) || null : null;
+      job.lastError = null;
+      job.updatedAt = toUtc8Iso(this.now());
+      return touched;
+    });
+  }
+
+  async failGraphProjection(jobId: string, error: unknown): Promise<void> {
+    await this.commitMutation(() => {
+      const job = this.requireGraphProjectionJob(jobId);
       if (job.status === 'completed') return;
       job.status = 'failed';
       job.lastError = errorMessage(error);
@@ -889,7 +1026,10 @@ export class StrataGate {
       quotes: [...new Set(input.quotes ?? [])].slice(0, 12),
       sourceMessageIds,
       sourceBlockId: sourceBlock.id,
-      temporal: input.temporal ? { ...input.temporal } : { mentionedAt: now },
+      temporal: {
+        ...(input.temporal ? { ...input.temporal } : { mentionedAt: now }),
+        eventType: normalizeStandardEventType(input.temporal?.eventType),
+      },
       scope: input.scope ?? 'user',
       criticality,
       confidence: Math.max(0, Math.min(1, input.confidence ?? 1)),
@@ -932,7 +1072,61 @@ export class StrataGate {
     return job;
   }
 
+  async searchGraphNodes(query: string, limit = 8): Promise<GraphNodeSearchResult[]> {
+    const candidates = this.graphNodes.filter((node) => node.status === 'active' || node.status === 'disputed');
+    const ranked = bm25Rank(candidates, query, (node) => weightedSearchTokens([
+      [node.name, 6], [node.aliases.join(' '), 5], [node.type, 2], [node.currentState, 4],
+      [node.facts.map((fact) => `${fact.key} ${Array.isArray(fact.value) ? fact.value.join(' ') : fact.value}`).join(' '), 4],
+      [this.graphEdges.filter((edge) => edge.fromNodeId === node.id || edge.toNodeId === node.id).map(({ relation }) => relation).join(' '), 3],
+    ])).slice(0, Math.max(1, Math.min(20, limit)));
+    if (searchTokens(query).length > 0 && ranked.length === 0) return [];
+    return ranked.map(({ item: node, score }) => ({ node, score }));
+  }
+
+  private requireGraphProjectionJob(id: string): GraphProjectionJob {
+    const job = this.graphProjectionJobs.get(id);
+    if (!job) throw new Error(`Unknown graph projection: ${id}`);
+    return job;
+  }
+
+  private queueGraphProjection(sourceEventIds: readonly string[], priority: number): GraphProjectionJob | null {
+    if (!this.graphProjector) return null;
+    const completed = new Set([...this.graphProjectionJobs.values()]
+      .filter((job) => job.projectorVersion === KNOWLEDGE_GRAPH_PROJECTOR_VERSION && job.status === 'completed')
+      .flatMap((job) => job.sourceEventIds));
+    const queued = new Set([...this.graphProjectionJobs.values()]
+      .filter((job) => job.projectorVersion === KNOWLEDGE_GRAPH_PROJECTOR_VERSION && job.status !== 'completed')
+      .flatMap((job) => job.sourceEventIds));
+    const ids = [...new Set(sourceEventIds.filter((id) => this.events.some((event) => event.id === id)
+      && !completed.has(id) && !queued.has(id)))];
+    if (ids.length === 0) return null;
+    const now = toUtc8Iso(this.now());
+    const job: GraphProjectionJob = {
+      id: this.graphIdFactory('gproj'), sourceEventIds: ids,
+      projectorVersion: KNOWLEDGE_GRAPH_PROJECTOR_VERSION,
+      status: 'pending', attempts: 0, priority, nodeIds: [], edgeIds: [],
+      reason: null, lastError: null, createdAt: now, updatedAt: now,
+    };
+    this.graphProjectionJobs.set(job.id, job);
+    return job;
+  }
+
+  private queueMissingGraphProjections(): void {
+    const candidates = [...this.events]
+      .filter((event) => event.status !== 'forgotten' && event.status !== 'archived')
+      .sort((left, right) => {
+        const score = (event: EventCard): number => (event.status === 'active' ? 10_000 : 0)
+          + event.weight.mentionCount * 100 + (event.scope === 'project' ? 500 : 0)
+          + (Date.parse(event.temporal.happenedStart ?? event.temporal.mentionedAt ?? event.updatedAt) || 0) / 1e12;
+        return score(right) - score(left);
+      });
+    for (let index = 0; index < candidates.length; index += 8) {
+      this.queueGraphProjection(candidates.slice(index, index + 8).map(({ id }) => id), candidates.length - index);
+    }
+  }
+
   private queueElementProjection(sourceEventIds: readonly string[]): ElementProjectionJob | null {
+    if (this.disableElementProjection) return null;
     const ids = [...new Set(sourceEventIds.filter((id) => this.events.some((event) => event.id === id)))];
     if (ids.length === 0) return null;
     const now = toUtc8Iso(this.now());
@@ -1115,7 +1309,11 @@ export class StrataGate {
       const extracted = result.shouldExtract
         ? result.events.map((event) => this.addEventInMemory({ ...event, sourceBlockId: target.id }))
         : [];
-      if (extracted.length > 0) this.queueElementProjection(extracted.map(({ id }) => id));
+      if (extracted.length > 0) {
+        const ids = extracted.map(({ id }) => id);
+        this.queueElementProjection(ids);
+        this.queueGraphProjection(ids, 1_000);
+      }
       const job = this.extractionJobs.get(target.id);
       if (!job) throw new Error(`Missing extraction job for block: ${target.id}`);
       this.extractionJobs.set(target.id, {
@@ -1138,6 +1336,18 @@ export class StrataGate {
     } catch (error) {
       await this.failElementProjection(batch.jobId, error);
       throw error;
+    }
+  }
+
+  private async projectEligibleGraph(): Promise<{ nodeIds: string[]; edgeIds: string[] } | null> {
+    if (!this.graphProjector) return null;
+    const batch = await this.claimNextGraphProjection();
+    if (!batch) return null;
+    try {
+      return await this.completeGraphProjection(batch.jobId, await this.graphProjector(batch));
+    } catch (error) {
+      await this.failGraphProjection(batch.jobId, error);
+      return null;
     }
   }
 
@@ -1187,11 +1397,15 @@ export class StrataGate {
     this.openTail.splice(0, this.openTail.length, ...copy.openTail);
     this.blocks.splice(0, this.blocks.length, ...copy.blocks);
     this.events.splice(0, this.events.length, ...copy.events);
+    this.graphNodes.splice(0, this.graphNodes.length, ...copy.graphNodes);
+    this.graphEdges.splice(0, this.graphEdges.length, ...copy.graphEdges);
     this.elements.splice(0, this.elements.length, ...copy.elements);
     this.extractionJobs.clear();
     for (const job of copy.extractionJobs) this.extractionJobs.set(job.blockId, job);
     this.elementProjectionJobs.clear();
     for (const job of copy.elementProjectionJobs) this.elementProjectionJobs.set(job.id, job);
+    this.graphProjectionJobs.clear();
+    for (const job of copy.graphProjectionJobs) this.graphProjectionJobs.set(job.id, job);
     this.usageReceipts.clear();
     for (const receipt of copy.usageReceipts) this.usageReceipts.set(receipt.id, receipt);
     this.ingestionReceipts.clear();
@@ -1255,6 +1469,42 @@ export class StrataGate {
       }
       for (const elementId of job.elementIds) {
         if (!elementIds.has(elementId)) throw new Error(`Element projection ${job.id} references unknown element ${elementId}`);
+      }
+    }
+    const graphNodeIds = new Set<string>();
+    for (const node of this.graphNodes) {
+      if (graphNodeIds.has(node.id)) throw new Error(`Duplicate graph node ID in snapshot: ${node.id}`);
+      graphNodeIds.add(node.id);
+      for (const eventId of node.sourceEventIds) {
+        if (!eventIds.has(eventId)) throw new Error(`Graph node ${node.id} references unknown event ${eventId}`);
+      }
+      for (const fact of node.facts) for (const eventId of fact.sourceEventIds) {
+        if (!eventIds.has(eventId)) throw new Error(`Graph fact ${fact.id} references unknown event ${eventId}`);
+      }
+    }
+    const graphEdgeIds = new Set<string>();
+    for (const edge of this.graphEdges) {
+      if (graphEdgeIds.has(edge.id)) throw new Error(`Duplicate graph edge ID in snapshot: ${edge.id}`);
+      graphEdgeIds.add(edge.id);
+      if (!graphNodeIds.has(edge.fromNodeId) || !graphNodeIds.has(edge.toNodeId)) {
+        throw new Error(`Graph edge ${edge.id} references an unknown node`);
+      }
+      for (const eventId of edge.sourceEventIds) {
+        if (!eventIds.has(eventId)) throw new Error(`Graph edge ${edge.id} references unknown event ${eventId}`);
+      }
+    }
+    for (const event of this.events) for (const nodeId of event.temporal.participantNodeIds ?? []) {
+      if (!graphNodeIds.has(nodeId)) throw new Error(`Event ${event.id} references unknown graph node ${nodeId}`);
+    }
+    for (const job of this.graphProjectionJobs.values()) {
+      for (const eventId of job.sourceEventIds) if (!eventIds.has(eventId)) {
+        throw new Error(`Graph projection ${job.id} references unknown event ${eventId}`);
+      }
+      for (const nodeId of job.nodeIds) if (!graphNodeIds.has(nodeId)) {
+        throw new Error(`Graph projection ${job.id} references unknown node ${nodeId}`);
+      }
+      for (const edgeId of job.edgeIds) if (!graphEdgeIds.has(edgeId)) {
+        throw new Error(`Graph projection ${job.id} references unknown edge ${edgeId}`);
       }
     }
   }

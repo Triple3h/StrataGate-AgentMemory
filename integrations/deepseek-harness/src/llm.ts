@@ -11,6 +11,9 @@ import type {
   EventCardInput,
   EventExtractor,
   ExtractionContext,
+  GraphProjector,
+  GraphProjectionContext,
+  GraphProjectionResult,
   MemoryCriticality,
   MemoryElementType,
   MemoryScope,
@@ -69,6 +72,7 @@ const STRUCTURED_FIELDS = {
   summarizer: ['l0Title', 'l0Tags', 'l1Summary', 'l2Keypoints', 'shouldExtract'],
   extractor: ['shouldExtract', 'reason', 'events'],
   projector: ['reason', 'changes'],
+  graphProjector: ['reason', 'nodes', 'edges'],
 } as const
 const STRING_ARRAY: ValueSchemaSpec = { type: 'array', items: { type: 'string' } }
 const OPEN_OBJECT: ValueSchemaSpec = { type: 'object', additionalProperties: true }
@@ -141,6 +145,40 @@ const PROJECTOR_PARAMETERS: ParameterSchemaSpec = {
   changes: { type: 'array', items: ELEMENT_CHANGE, required: true },
 }
 
+const GRAPH_FACT: ValueSchemaSpec = {
+  type: 'object', additionalProperties: false,
+  properties: { key: { type: 'string', required: true }, value: { ...VALUE, required: true }, sourceEventIds: { ...STRING_ARRAY, required: true } },
+}
+
+const GRAPH_NODE: ValueSchemaSpec = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    ref: { type: 'string', required: true }, name: { type: 'string', required: true },
+    type: { type: 'string', enum: ['person', 'project', 'organization', 'tool', 'place'], required: true },
+    aliases: STRING_ARRAY, state: { type: 'string' }, facts: { type: 'array', items: GRAPH_FACT },
+    status: { type: 'string', enum: ['active', 'superseded', 'disputed', 'archived'] },
+    validFrom: { type: 'string' }, validTo: { type: 'string' }, confidence: { type: 'number' },
+    sourceEventIds: { ...STRING_ARRAY, required: true },
+  },
+}
+
+const GRAPH_EDGE: ValueSchemaSpec = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    fromRef: { type: 'string', required: true }, toRef: { type: 'string', required: true },
+    relation: { type: 'string', required: true },
+    status: { type: 'string', enum: ['active', 'superseded', 'disputed', 'archived'] },
+    validFrom: { type: 'string' }, validTo: { type: 'string' }, confidence: { type: 'number' },
+    sourceEventIds: { ...STRING_ARRAY, required: true },
+  },
+}
+
+const GRAPH_PROJECTOR_PARAMETERS: ParameterSchemaSpec = {
+  reason: { type: 'string', required: true },
+  nodes: { type: 'array', items: GRAPH_NODE, required: true },
+  edges: { type: 'array', items: GRAPH_EDGE, required: true },
+}
+
 const STRUCTURED_TOOLS = {
   summarizer: {
     name: 'stratagate_summarize_block',
@@ -156,6 +194,11 @@ const STRUCTURED_TOOLS = {
     name: 'stratagate_project_element_cards',
     description: 'Submit element-card changes supported by the supplied event cards.',
     parameters: PROJECTOR_PARAMETERS,
+  },
+  graphProjector: {
+    name: 'stratagate_project_knowledge_graph',
+    description: 'Project stable graph nodes and directed edges from supplied event evidence.',
+    parameters: GRAPH_PROJECTOR_PARAMETERS,
   },
 } as const
 
@@ -217,7 +260,7 @@ export class DshModelBridge {
   readonly extractor: EventExtractor = async (context: ExtractionContext) => {
     const validMessageIds = new Set(context.target.l5Raw.map((message) => message.id))
     const raw = object(await this.callStructured('extractor',
-      `Extract only durable, evidence-backed events from target.l5Raw, then call ${STRUCTURED_TOOLS.extractor.name} exactly once. The target block is the only legal source of new facts, quotations, and sourceMessageIds. neighbors.previous and neighbors.next are context-only L2 summaries; never extract from them. Every sourceMessageIds entry must exactly match allowedSourceMessageIds. If a fact appears only in a neighbor, do not extract it in this call. Events must be understandable later without the original chat. Use project scope for repository decisions, user scope for stable preferences/identity, and session scope for temporary task state. Use ISO-8601 timestamps with the explicit +08:00 offset in temporal fields. Do not turn an assistant statement that merely recalls older memory into a new event; require new human input or a new observable task/tool outcome from target.l5Raw. Do not return the result as text.`,
+      `Extract only durable, evidence-backed events from target.l5Raw, then call ${STRUCTURED_TOOLS.extractor.name} exactly once. The target block is the only legal source of new facts, quotations, and sourceMessageIds. neighbors.previous and neighbors.next are context-only L2 summaries; never extract from them. Every sourceMessageIds entry must exactly match allowedSourceMessageIds. If a fact appears only in a neighbor, do not extract it in this call. Events must be understandable later without the original chat. Use project scope for repository decisions, user scope for stable preferences/identity, and session scope for temporary task state. temporal.eventType must use exactly one stable value: decision, release, task_completed, plan, change, cancellation, incident, meeting, collaboration, migration, or other. temporal.participants contains canonical entity names. Use ISO-8601 timestamps with the explicit +08:00 offset in temporal fields. Keep happened time separate from mentionedAt; when happened time is unknown omit it and set precision/basis to unknown. Do not turn an assistant statement that merely recalls older memory into a new event; require new human input or a new observable task/tool outcome from target.l5Raw. Do not return the result as text.`,
       extractorPayload(context),
     ))
     const events = (Array.isArray(raw.events) ? raw.events : []).map((candidate): EventCardInput | null => {
@@ -280,6 +323,51 @@ export class DshModelBridge {
       }]
     })
     return { reason: text(raw.reason, 'Projected event evidence.'), changes }
+  }
+
+  readonly graphProjector: GraphProjector = async (context: GraphProjectionContext): Promise<GraphProjectionResult> => {
+    const eventIds = new Set(context.events.map((event) => event.id))
+    const raw = object(await this.callStructured('graphProjector',
+      `Project the supplied Events into the current Knowledge Graph, then call ${STRUCTURED_TOOLS.graphProjector.name} exactly once. Events are the sole source of truth; never use legacy Element data. Return stable entity nodes for people, projects, organizations, tools, and places. Use aliases to merge spelling/case/separator variants. Put attributes in node facts and every relationship in a directed edge using fromRef/toRef—never encode a relationship as a fact string. Prefer concise canonical Chinese relation labels such as 使用、属于、创建、参与、贡献、依赖、位于、相关. Every node, fact, and edge must cite only supplied Event ids. Do not return text.`,
+      context,
+    ))
+    const nodes = (Array.isArray(raw.nodes) ? raw.nodes : []).flatMap((candidate) => {
+      const item = object(candidate)
+      const sourceEventIds = strings(item.sourceEventIds).filter((id) => eventIds.has(id))
+      const type = item.type as MemoryElementType
+      if (!text(item.ref) || !text(item.name) || !ELEMENT_TYPES.has(type) || sourceEventIds.length === 0) return []
+      const facts = (Array.isArray(item.facts) ? item.facts : []).flatMap((candidateFact) => {
+        const fact = object(candidateFact)
+        const value = fact.value
+        if (!text(fact.key) || !(typeof value === 'string' || (Array.isArray(value) && value.every((entry) => typeof entry === 'string')))) return []
+        const sourceEventIds = strings(fact.sourceEventIds).filter((id) => eventIds.has(id))
+        if (sourceEventIds.length === 0) return []
+        return [{ key: text(fact.key), value, sourceEventIds }]
+      })
+      return [{
+        ref: text(item.ref), name: text(item.name), type, aliases: strings(item.aliases),
+        ...(text(item.state) ? { state: text(item.state) } : {}), facts,
+        ...(typeof item.status === 'string' ? { status: item.status as 'active' } : {}),
+        ...(text(item.validFrom) ? { validFrom: text(item.validFrom) } : {}),
+        ...(text(item.validTo) ? { validTo: text(item.validTo) } : {}),
+        ...(typeof item.confidence === 'number' ? { confidence: item.confidence } : {}), sourceEventIds,
+      }]
+    })
+    const refs = new Set(nodes.map(({ ref }) => ref))
+    const edges = (Array.isArray(raw.edges) ? raw.edges : []).flatMap((candidate) => {
+      const item = object(candidate)
+      const sourceEventIds = strings(item.sourceEventIds).filter((id) => eventIds.has(id))
+      const fromRef = text(item.fromRef); const toRef = text(item.toRef); const relation = text(item.relation)
+      if (!refs.has(fromRef) || !refs.has(toRef) || !relation || sourceEventIds.length === 0) return []
+      return [{
+        fromRef, toRef, relation,
+        ...(typeof item.status === 'string' ? { status: item.status as 'active' } : {}),
+        ...(text(item.validFrom) ? { validFrom: text(item.validFrom) } : {}),
+        ...(text(item.validTo) ? { validTo: text(item.validTo) } : {}),
+        ...(typeof item.confidence === 'number' ? { confidence: item.confidence } : {}), sourceEventIds,
+      }]
+    })
+    return { reason: text(raw.reason, 'Projected Event evidence into the Knowledge Graph.'), nodes, edges }
   }
 
   private async callStructured(kind: SuccessfulModelResponseKind, system: string, payload: unknown): Promise<unknown> {

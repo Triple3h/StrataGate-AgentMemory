@@ -6,6 +6,7 @@ import {
   cloneSnapshot,
   type ElementProjectionJob,
   type ExtractionJob,
+  type GraphProjectionJob,
   type IngestionReceipt,
   type LoadedStrataGateState,
   type SuccessfulModelResponse,
@@ -22,6 +23,8 @@ import type {
   ElementFactStatus,
   EventCard,
   EventTemporal,
+  GraphEdge,
+  GraphNode,
   MemoryBlock,
   MemoryCriticality,
   MemoryScope,
@@ -31,6 +34,7 @@ import type {
   ToolTrace,
 } from './types.js';
 import { nowUtc8 } from './time.js';
+import { normalizeStandardEventType } from './events.js';
 
 export interface SqliteStorageOptions {
   filename: string;
@@ -191,6 +195,12 @@ interface ElementProjectionJobRow {
   last_error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface GraphStateRow {
+  nodes_json: string;
+  edges_json: string;
+  jobs_json: string;
 }
 
 const SCHEMA = `
@@ -379,6 +389,15 @@ CREATE TABLE IF NOT EXISTS element_projection_jobs (
   FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS graph_state (
+  namespace TEXT PRIMARY KEY,
+  nodes_json TEXT NOT NULL DEFAULT '[]',
+  edges_json TEXT NOT NULL DEFAULT '[]',
+  jobs_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS usage_receipts (
   namespace TEXT NOT NULL,
   receipt_id TEXT NOT NULL,
@@ -526,7 +545,10 @@ export class SqliteStorage implements StorageAdapter {
       quotes: parseJson<string[]>(row.quotes_json, 'events.quotes_json'),
       sourceMessageIds: sourcesByEvent.get(row.id) ?? [],
       sourceBlockId: row.source_block_id,
-      temporal: parseJson<EventTemporal>(row.temporal_json, 'events.temporal_json'),
+      temporal: (() => {
+        const temporal = parseJson<EventTemporal>(row.temporal_json, 'events.temporal_json');
+        return { ...temporal, eventType: normalizeStandardEventType(temporal.eventType) };
+      })(),
       scope: row.scope,
       criticality: row.criticality,
       confidence: row.confidence,
@@ -674,6 +696,14 @@ export class SqliteStorage implements StorageAdapter {
       createdAt: row.created_at,
     }));
 
+    const graphState = this.database.prepare(`
+      SELECT nodes_json, edges_json, jobs_json FROM graph_state WHERE namespace = ?
+    `).get(key) as GraphStateRow | undefined;
+    const graphNodes = graphState ? parseJson<GraphNode[]>(graphState.nodes_json, 'graph_state.nodes_json') : [];
+    const graphEdges = graphState ? parseJson<GraphEdge[]>(graphState.edges_json, 'graph_state.edges_json') : [];
+    const graphProjectionJobs = graphState
+      ? parseJson<GraphProjectionJob[]>(graphState.jobs_json, 'graph_state.jobs_json') : [];
+
     const snapshot: StrataGateSnapshot = {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       currentTurn: space.current_turn,
@@ -682,6 +712,9 @@ export class SqliteStorage implements StorageAdapter {
       openTail,
       blocks,
       events,
+      graphNodes,
+      graphEdges,
+      graphProjectionJobs,
       elements,
       extractionJobs,
       elementProjectionJobs,
@@ -1026,6 +1059,22 @@ export class SqliteStorage implements StorageAdapter {
       );
     }
 
+    this.database.prepare(`
+      INSERT INTO graph_state (namespace, nodes_json, edges_json, jobs_json, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (namespace) DO UPDATE SET
+        nodes_json = excluded.nodes_json,
+        edges_json = excluded.edges_json,
+        jobs_json = excluded.jobs_json,
+        updated_at = excluded.updated_at
+    `).run(
+      namespace,
+      JSON.stringify(snapshot.graphNodes),
+      JSON.stringify(snapshot.graphEdges),
+      JSON.stringify(snapshot.graphProjectionJobs),
+      updatedAt,
+    );
+
     const insertReceipt = this.database.prepare(`
       INSERT INTO usage_receipts (namespace, receipt_id, event_ids_json, element_ids_json, audit_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -1074,7 +1123,7 @@ export class SqliteStorage implements StorageAdapter {
         this.database.exec(THREAD_INDEXES);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
-    } else if (version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6) {
+    } else if (version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7) {
       this.immediateTransaction(() => {
         this.database.exec(SCHEMA);
         if (version === 1) {

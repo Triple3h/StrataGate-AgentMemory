@@ -66,6 +66,8 @@ export interface EventTemporal {
   basis?: 'explicit' | 'relative' | 'inferred' | 'unknown';
   status?: 'occurred' | 'planned' | 'cancelled' | 'ongoing' | 'unknown';
   participants?: string[];
+  /** Stable references into the projected knowledge graph. */
+  participantNodeIds?: string[];
   eventType?: string;
   threadId?: string;
   sameEventId?: string;
@@ -73,7 +75,22 @@ export interface EventTemporal {
   afterEventIds?: string[];
   supersedesEventIds?: string[];
   conflictsWithEventIds?: string[];
+  relatedEventIds?: string[];
 }
+
+/** Stable taxonomy used by extraction, filtering, projection, and statistics. */
+export type StandardEventType =
+  | 'decision'
+  | 'release'
+  | 'task_completed'
+  | 'plan'
+  | 'change'
+  | 'cancellation'
+  | 'incident'
+  | 'meeting'
+  | 'collaboration'
+  | 'migration'
+  | 'other';
 
 export interface MemoryWeight {
   mentionCount: number;
@@ -192,6 +209,91 @@ export interface ElementProjectionContext {
 
 export type ElementProjector = (context: ElementProjectionContext) => Promise<ElementProjectionResult>;
 
+export type GraphNodeType = 'person' | 'project' | 'organization' | 'tool' | 'place';
+export type GraphRecordStatus = 'active' | 'superseded' | 'disputed' | 'archived';
+
+export interface GraphFact {
+  id: string;
+  key: string;
+  value: string | string[];
+  status: GraphRecordStatus;
+  validFrom?: string;
+  validTo?: string;
+  confidence: number;
+  sourceEventIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: GraphNodeType;
+  aliases: string[];
+  currentState: string;
+  facts: GraphFact[];
+  status: GraphRecordStatus;
+  confidence: number;
+  sourceEventIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GraphEdge {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  relation: string;
+  status: GraphRecordStatus;
+  validFrom?: string;
+  validTo?: string;
+  confidence: number;
+  sourceEventIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GraphNodeProjection {
+  ref: string;
+  name: string;
+  type: GraphNodeType;
+  aliases?: string[];
+  state?: string;
+  facts?: Array<{ key: string; value: string | string[]; sourceEventIds: string[] }>;
+  status?: GraphRecordStatus;
+  validFrom?: string;
+  validTo?: string;
+  confidence?: number;
+  sourceEventIds: string[];
+}
+
+export interface GraphEdgeProjection {
+  fromRef: string;
+  toRef: string;
+  relation: string;
+  status?: GraphRecordStatus;
+  validFrom?: string;
+  validTo?: string;
+  confidence?: number;
+  sourceEventIds: string[];
+}
+
+export interface GraphProjectionResult {
+  reason: string;
+  nodes: GraphNodeProjection[];
+  edges: GraphEdgeProjection[];
+}
+
+export interface GraphProjectionContext {
+  jobId: string;
+  projectorVersion: number;
+  events: EventCard[];
+  existingNodes: GraphNode[];
+  existingEdges: GraphEdge[];
+}
+
+export type GraphProjector = (context: GraphProjectionContext) => Promise<GraphProjectionResult>;
+
 export interface SearchOptions {
   limit?: number;
   temporalIntent?: boolean | 'first' | 'latest';
@@ -218,6 +320,11 @@ export interface ElementSearchResult {
   name: string;
   type: MemoryElementType;
   fact: ElementFact;
+  score: number;
+}
+
+export interface GraphNodeSearchResult {
+  node: GraphNode;
   score: number;
 }
 

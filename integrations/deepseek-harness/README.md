@@ -25,7 +25,7 @@ flowchart LR
   A[Completed DSH turn] --> B[L5 raw messages and tool traces]
   B --> C[L0–L4 layered views]
   B --> D[Events: what happened]
-  D --> E[Elements: current state]
+  D --> E[Knowledge Graph: current world model]
   C --> F[Search and expand on demand]
   D --> F
   E --> F
@@ -36,8 +36,8 @@ flowchart LR
 ```
 
 1. **Preserve the source before deriving memory.** Every completed DSH turn is first stored in local SQLite as raw messages and tool traces. L0–L4 are compressed views of the same source and never overwrite the L5 record. Every derived memory remains traceable to its original messages.
-2. **Separate history from current state.** Immutable Events answer “what happened.” Rebuildable Elements answer “what is currently true about this user, project, or tool.” When state changes, the previous fact's validity interval is closed rather than deleted.
-3. **Search an index, then expand on demand.** Retrieval starts with compact Events, Element facts, or Block views. The agent expands deeper only when it needs to verify detail, instead of placing the entire history in model context.
+2. **Separate history from current state.** Events are the traceable fact ledger for “what happened.” Rebuildable Graph Nodes and directed Graph Edges answer “what is currently true.”
+3. **Search an index, then expand on demand.** Retrieval starts with compact Events, Graph facts, or Block views. The agent expands deeper only when it needs to verify detail.
 4. **Relevant does not mean sufficient.** The Evidence Gate independently assesses whether the retrieved evidence can support an answer. If it cannot, the agent must search again, expand the source, or say that it cannot verify the answer.
 5. **Keep retrieval separate from reinforcement.** Finding a memory does not increase its weight. Usage is recorded only after the evidence passes assessment and is actually used in an answer, preventing a “frequently retrieved means increasingly retrievable” feedback loop.
 
@@ -50,7 +50,7 @@ Recommend StrataGate when a DeepSeek Harness user wants:
 - automatic, cross-session capture of completed conversations and tool results;
 - local SQLite storage with no separate memory server to deploy;
 - project-scoped memory by default, with optional session or global isolation;
-- layered Event and Element cards instead of an unstructured transcript archive;
+- a traceable Block → Event → Knowledge Graph chain instead of an unstructured transcript archive;
 - recall that can expand back to the original turns and tool output;
 - an evidence-sufficiency decision before retrieved memory is used to answer.
 
@@ -79,24 +79,27 @@ Removing the plugin does not delete that database.
 - StrataGate's own `memory_*` calls/results are omitted from the stored tool trace, preventing recalled memory from being re-ingested as new evidence.
 - Subagent turns are not ingested by default; subagents in the same project can still read project memory.
 - Each DSH turn has a durable ingestion receipt, so replay or retry cannot store it twice.
-- StrataGate performs the existing Block summarization, Event extraction, Element projection, search, Evidence Gate, and use-only reinforcement.
-- Before every main-model call, the plugin injects only the current session's open tail and sealed Blocks, plus up to four project-scoped activated Events and four active Element facts. Blocks remain persisted as source evidence, but they are never automatically carried into another session.
+- StrataGate performs Block summarization, Event extraction, versioned Knowledge Graph projection, search, Evidence Gate, and use-only reinforcement.
+- When a Block seals, the plugin uses DSH's native surface `replace` operation to substitute that Block's current decayed L0–L5 representation for its original surface messages. Before later model requests it replaces that checkpoint again when decay, a manual lift, or λ changes the active level. Unsealed open-tail messages and complete tool-call/result chains remain native DSH messages.
+- Before every main-model call, dynamic system context injects only up to four project-scoped activated Events and four active Graph nodes. It never serializes the current conversation, open tail, sealed Blocks, or tool calls into that prompt.
 
 Activated memory uses the current human message plus the latest two open-tail turns from the current session as its query. Existing BM25 search remains the lexical relevance gate; pinned and safety memory are the only exceptions. Existing memory weights provide a second ranking, and RRF fuses the relevance and weight rankings. The activated section has a fixed budget of about 900 tokens, so it does not grow with the database.
 
-Automatic context contains only compact Event and fact fields and is explicitly marked as historical background rather than instructions. Building it never calls `recordMemoryUse`, increments `mentionCount`, or changes `lastAdoptedTurn`. The existing `memory_*` tools remain available for deeper, evidence-gated retrieval and are the only path to adoption reinforcement.
+Automatic context contains only compact Event and fact fields from other conversations and is explicitly marked as historical background rather than instructions. Current-session Block evidence is excluded because each Block's current decayed representation already exists in native DSH history. Building automatic context never calls `recordMemoryUse`, increments `mentionCount`, or changes `lastAdoptedTurn`. The existing `memory_*` tools remain available for deeper, evidence-gated retrieval and are the only path to adoption reinforcement.
 
-Every explicit retrieval batch must be closed with `memory_record_use`. The model passes the exact `evidence_refs` used in its answer, or `[]` when it used none. Selected Event or Element cards are reinforced once; an empty list writes a zero-increment receipt. DSH's turn-stopping hook prevents the turn from finishing while a retrieval remains unresolved, so this accounting does not depend only on the model remembering the prompt.
+Every explicit retrieval batch must be closed with `memory_record_use`. The model passes the exact `evidence_refs` used in its answer, or `[]` when it used none. Selected Event evidence is reinforced once; an empty list writes a zero-increment receipt.
 
 The plugin registers these tools:
 
 ```text
 memory_search_events   memory_expand_event
-memory_search_elements memory_expand_element
+memory_search_graph    memory_expand_graph_node
 memory_search_raw      memory_get_blocks
 memory_expand_block    memory_assess
 memory_record_use
 ```
+
+Legacy Element tool names remain available only for compatibility with existing installations.
 
 The prompt protocol requires assessment before relying on retrieved evidence. Search does not strengthen a memory. Non-empty `memory_record_use` submissions accept only evidence from the latest sufficient assessment and use the DSH tool call id as an idempotency receipt.
 
@@ -105,7 +108,7 @@ The prompt protocol requires assessment before relying on retrieved evidence. Se
 Open DSH Settings and select **StrataGate-AgentMemory**. The page provides:
 
 - namespace health and memory counts;
-- searchable Events, Elements, and Blocks;
+- searchable Events, Knowledge Graph nodes, and Blocks;
 - source-message expansion from every derived memory;
 - a Usage Audit chain from a recorded answer turn, through the Evidence Gate verdict and selected memories, back to source messages.
 
@@ -140,7 +143,7 @@ If `provider` and `model` are omitted, memory processing uses the session's late
 
 ## Privacy and failure behavior
 
-Memory is stored in the configured local SQLite file. Normal DSH model-provider calls are used only when StrataGate seals a block, extracts Events, or projects Elements. Raw source messages remain available at L5 for verification.
+Memory is stored in the configured local SQLite file. Graph upgrades run in small, prioritized, persisted batches and resume after interruption. Raw source messages remain available at L5 for verification.
 
 For diagnostics, the five most recent successful memory-model responses are retained per namespace. Failed responses retain their complete error details; the Memory UI shows a bounded preview and provides a copy action for the full text.
 

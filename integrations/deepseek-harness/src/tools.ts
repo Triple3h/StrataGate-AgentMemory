@@ -39,8 +39,27 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
   }))
 
   ctx.tools.register(defineTool({
+    name: 'memory_search_graph',
+    description: 'Search the current Event-backed Knowledge Graph for people, projects, organizations, tools, places, facts, and relations.',
+    parameters: {
+      query: { type: 'string', required: true },
+      limit: { type: 'integer', description: 'Maximum results, 1-20.' },
+    },
+    output: jsonOutput,
+    execute: async (args, exec) => runtime.searchGraph(sessionOf(exec), args.query, args.limit ?? 8) as never,
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'memory_expand_graph_node',
+    description: 'Expand one Knowledge Graph node with its current facts, directed edges, and supporting Event evidence.',
+    parameters: { id: { type: 'string', required: true } },
+    output: jsonOutput,
+    execute: async (args, exec) => runtime.expandGraphNode(sessionOf(exec), args.id) as never,
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'memory_search_elements',
-    description: 'Search current Element-card facts about people, projects, organizations, tools, or places. Returns evidenceRefs that must be assessed before use.',
+    description: 'Deprecated compatibility search for legacy Element-card data. Prefer memory_search_graph.',
     parameters: {
       query: { type: 'string', required: true },
       limit: { type: 'integer' },
@@ -116,7 +135,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
       missing: { type: 'string', required: true },
       next_strategy: {
         type: 'string',
-        enum: ['answer', 'search_events', 'expand_event', 'search_elements', 'expand_element', 'search_raw_memory', 'expand_block'] as const,
+        enum: ['answer', 'search_events', 'expand_event', 'search_graph', 'expand_graph_node', 'search_elements', 'expand_element', 'search_raw_memory', 'expand_block'] as const,
         required: true,
       },
     },

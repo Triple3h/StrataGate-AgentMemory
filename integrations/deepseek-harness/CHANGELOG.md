@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.25 - 2026-08-24
+
+- Send every sealed conversation Block through its current decayed L0–L5 representation instead of a fixed L0/L1/L2 checkpoint.
+- Re-replace native DSH Block checkpoints when decay, a manual lift, or the global decay coefficient changes their active level.
+- Keep the original surface range shadowed, the unsealed open tail and tool chain native, and automatic system context limited to activated cross-conversation long-term memory.
+
+## 0.2.24 - 2026-08-24
+
+- Make the Knowledge Graph and Event Timeline fill the plugin width instead of reserving a permanent detail column.
+- Add lightweight node and event detail bubbles, including hover persistence for timeline previews and summary-first event rows.
+- Collapse advanced filters behind a compact toolbar control and move complete relationships, evidence, and exploration into full-screen views.
+
+## 0.2.23 - 2026-08-24
+
+- Replace each newly sealed conversation range on the native DSH surface with its compressed StrataGate Block summary, allowing `deriveMessages()` to shadow the corresponding raw messages while preserving the append-only evidence log.
+- Keep unsealed open-tail messages and their tool-call/result chains in native DSH history instead of serializing them into the dynamic system context.
+- Restrict automatic dynamic context to activated long-term memory from other conversations, preventing current conversation content from appearing in both native messages and the system prompt.
+
+## 0.2.22 - 2026-08-24
+
+- Replace the visible Element-card long-term memory model with an Event-backed Knowledge Graph of stable nodes and directed edges.
+- Add the Knowledge Graph / Event Timeline settings views, evidence navigation, canonical Event types, and stable participant node references.
+- Rebuild legacy Event history in small, prioritized, persisted, resumable background batches with projector-version tracking.
+
 ## 0.2.21 - 2026-08-24
 
 - Use the current DSH Workspace session list and latest persisted DSH titles as the conversation selector source of truth.

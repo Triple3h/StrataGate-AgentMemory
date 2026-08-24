@@ -13,6 +13,8 @@ interface PendingTurn {
 
 export interface FoldedTurn extends TurnInput {
   receiptId: string
+  /** Native DSH turn number used to replace the sealed surface range. */
+  dshTurn: number
 }
 
 function renderBlocks(blocks: readonly ContentBlock[]): string {
@@ -115,6 +117,7 @@ export class TurnFolder {
           assistantToolCalls: [...pending.tools.values()],
           createdAt: toUtc8Iso(event.time),
           receiptId: `dsh:${sessionId}:turn:${event.data.turn}`,
+          dshTurn: event.data.turn,
         }
       }
       default:

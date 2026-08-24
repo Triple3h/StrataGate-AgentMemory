@@ -6,7 +6,7 @@ import { handleAdminRequest, type WebResponse } from '../src/web.js'
 const fullFailure = 'StrataGate model response was not valid JSON\nRaw response (full):\n' + 'x'.repeat(600)
 
 const snapshot: StrataGateSnapshot = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   currentTurn: 8,
   blockTurnSize: 4,
   blockDecayLambda: 0.3,
@@ -55,6 +55,17 @@ const snapshot: StrataGateSnapshot = {
     weight: { mentionCount: 1, lastAdoptedTurn: 8, lastRetrievedAt: null, pinned: false, floorWeight: 0, forcedCap: null },
     createdAt: '2026-08-18T00:00:00.000Z',
     updatedAt: '2026-08-18T00:00:00.000Z',
+  }],
+  graphNodes: [{
+    id: 'node_1', name: 'pnpm', type: 'tool', aliases: [], currentState: '项目包管理器', facts: [],
+    status: 'active', confidence: 0.95, sourceEventIds: ['evt_1'],
+    createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z',
+  }],
+  graphEdges: [],
+  graphProjectionJobs: [{
+    id: 'gproj_1', sourceEventIds: ['evt_1'], projectorVersion: 1, status: 'completed', attempts: 1,
+    priority: 1, nodeIds: ['node_1'], edgeIds: [], reason: 'projected', lastError: null,
+    createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z',
   }],
   elements: [{
     id: 'el_1',
@@ -176,6 +187,14 @@ describe('StrataGate admin routes', () => {
     const memories = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=events&q=pnpm')
     expect(memories.body).toMatchObject({ total: 1, items: [{ id: 'evt_1', title: 'Use pnpm', relatedElements: [{ id: 'el_1', name: 'pnpm' }] }] })
 
+    const graph = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=graph')
+    expect(graph.body).toMatchObject({
+      projectorVersion: 1,
+      migration: { projected: 1, total: 1, complete: true },
+      nodes: [{ id: 'node_1', name: 'pnpm', supportingEvents: [{ id: 'evt_1' }] }],
+      edges: [],
+    })
+
     const blocks = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=blocks')
     expect(blocks.body).toMatchObject({
       activeThreadId: '__legacy__',
@@ -189,7 +208,7 @@ describe('StrataGate admin routes', () => {
         status: 'organized',
         eventExtraction: { status: 'succeeded' },
         relatedEvents: [{ id: 'evt_1' }],
-        relatedElements: [{ id: 'el_1' }],
+        relatedNodes: [{ id: 'node_1' }],
       }],
     })
   })
