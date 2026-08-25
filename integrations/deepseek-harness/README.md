@@ -8,13 +8,13 @@ The plugin adapts DSH session events to the existing StrataGate memory engine; i
 
 ## Preview
 
+### Knowledge graph and event timeline
+
+![StrataGate knowledge graph and event timeline view](docs/assets/stratagate-knowledge-graph.png)
+
 ### Layered short-term memory
 
 ![StrataGate layered short-term memory view](docs/assets/stratagate-short-term-memory.png)
-
-### Memory structure and diagnostics
-
-![StrataGate memory structure and diagnostics view](docs/assets/stratagate-memory-structure.png)
 
 ## How it is designed
 

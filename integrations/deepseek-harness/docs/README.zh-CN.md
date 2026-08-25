@@ -8,13 +8,13 @@
 
 ## 界面预览
 
+### 知识图谱与事件时间线
+
+![StrataGate 知识图谱与事件时间线界面](assets/stratagate-knowledge-graph.png)
+
 ### 分层短期记忆
 
 ![StrataGate 分层短期记忆界面](assets/stratagate-short-term-memory.png)
-
-### 记忆结构与诊断
-
-![StrataGate 记忆结构与诊断界面](assets/stratagate-memory-structure.png)
 
 ## 它是怎么设计的
 
