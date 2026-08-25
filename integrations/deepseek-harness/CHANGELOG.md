@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.30 - 2026-08-25
+
+- Add compact minus, slider, and plus controls to the Knowledge Graph for faster zoom adjustments.
+- Synchronize the visible zoom control with mouse-wheel zoom while keeping button and slider zoom centered on the graph canvas.
+
 ## 0.2.29 - 2026-08-25
 
 - Keep the long-term memory explorer fixed to the browser viewport by removing transforms from its animated content ancestor.

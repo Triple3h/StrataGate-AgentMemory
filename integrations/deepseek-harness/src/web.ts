@@ -14,7 +14,7 @@ import {
 import type { StrataGateRuntime } from './runtime.js'
 import { clusterKnowledgeGraph } from './graph-clustering.js'
 
-const STRATAGATE_DSH_VERSION = '0.2.29'
+const STRATAGATE_DSH_VERSION = '0.2.30'
 const LEGACY_THREAD_ID = '__legacy__'
 const nodeRequire = createRequire(import.meta.url)
 
