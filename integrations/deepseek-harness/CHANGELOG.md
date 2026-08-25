@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.26 - 2026-08-25
+
+- Size Knowledge Graph nodes by their long-term importance using supporting Events, active relationships, sustained recent activity, and current-workspace affinity.
+- Keep node sizing stable across search and type filters by deriving importance from the complete graph snapshot.
+- Preserve selection as an independent outline and glow treatment instead of temporarily enlarging the selected node.
+
 ## 0.2.25 - 2026-08-24
 
 - Send every sealed conversation Block through its current decayed L0–L5 representation instead of a fixed L0/L1/L2 checkpoint.
