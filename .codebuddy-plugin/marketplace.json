@@ -23,6 +23,31 @@
       "license": "MIT",
       "keywords": ["memory", "agent-memory", "workbuddy", "mcp", "local-first"],
       "category": "productivity"
+    },
+    {
+      "name": "stratagate-dsh-memory",
+      "source": {
+        "source": "npm",
+        "package": "stratagate-dsh",
+        "versionConstraint": "0.2.29"
+      },
+      "description": "Evidence-gated, local-first cross-session memory for DeepSeek Harness with source-traceable recall and an interactive memory explorer.",
+      "version": "0.2.29",
+      "author": {
+        "name": "diqier"
+      },
+      "homepage": "https://github.com/diqierjia/StrataGate-AgentMemory/tree/main/integrations/deepseek-harness",
+      "repository": "https://github.com/diqierjia/StrataGate-AgentMemory",
+      "license": "MIT",
+      "keywords": [
+        "memory",
+        "agent-memory",
+        "deepseek",
+        "dsh",
+        "cross-session",
+        "source-traceability"
+      ],
+      "category": "productivity"
     }
   ]
 }

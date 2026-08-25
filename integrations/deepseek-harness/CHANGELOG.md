@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.29 - 2026-08-25
+
+- Keep the long-term memory explorer fixed to the browser viewport by removing transforms from its animated content ancestor.
+- Add regression coverage for the full-screen positioning contract.
+
+## 0.2.28 - 2026-08-25
+
+- Refine the DSH Memory UI with clearer brand, navigation, hierarchy, spacing, and interaction states while retaining native DSH theme tokens.
+- Add restrained view, Block expansion, graph layout, detail panel, popover, and skeleton-loading motion with reduced-motion support.
+- Improve keyboard focus visibility, active navigation semantics, meaningful mascot alternative text, and tactile hover and pressed feedback.
+
 ## 0.2.27 - 2026-08-25
 
 - Add optional semantic Tags to newly projected Knowledge Graph nodes for search, filtering, and understandable group names while keeping Node Type unchanged.

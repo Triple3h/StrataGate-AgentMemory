@@ -106,6 +106,22 @@ describe('StrataGate Web client contract', () => {
     expect(source).not.toContain("'Block · ' + event.sourceBlockId.slice")
   })
 
+  it('keeps the full-screen explorer anchored to the viewport', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('.sg-long-explorer.fullscreen{position:fixed;inset:12px')
+    expect(source).toContain('@keyframes sg-view-in{from{opacity:0}to{opacity:1}}')
+    expect(source).not.toContain('@keyframes sg-view-in{from{opacity:0;transform:')
+  })
+
+  it('provides synchronized knowledge graph zoom controls', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain("className: 'sg-graph-zoom'")
+    expect(source).toContain("type: 'range', min: '25', max: '240'")
+    expect(source).toContain("graph.on('zoom', updateZoom)")
+    expect(source).toContain("renderedPosition: { x: container.clientWidth / 2, y: container.clientHeight / 2 }")
+    expect(source).toContain('wheelSensitivity: .22')
+  })
+
   it('sizes graph nodes by stable long-term importance without conflating selection', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(source).toContain('function graphNodeImportance(nodes, edges, project)')
