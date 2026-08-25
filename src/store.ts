@@ -1075,7 +1075,7 @@ export class StrataGate {
   async searchGraphNodes(query: string, limit = 8): Promise<GraphNodeSearchResult[]> {
     const candidates = this.graphNodes.filter((node) => node.status === 'active' || node.status === 'disputed');
     const ranked = bm25Rank(candidates, query, (node) => weightedSearchTokens([
-      [node.name, 6], [node.aliases.join(' '), 5], [node.type, 2], [node.currentState, 4],
+      [node.name, 6], [node.aliases.join(' '), 5], [(node.tags ?? []).join(' '), 5], [node.type, 2], [node.currentState, 4],
       [node.facts.map((fact) => `${fact.key} ${Array.isArray(fact.value) ? fact.value.join(' ') : fact.value}`).join(' '), 4],
       [this.graphEdges.filter((edge) => edge.fromNodeId === node.id || edge.toNodeId === node.id).map(({ relation }) => relation).join(' '), 3],
     ])).slice(0, Math.max(1, Math.min(20, limit)));

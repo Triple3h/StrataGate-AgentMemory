@@ -230,6 +230,8 @@ export interface GraphNode {
   name: string;
   type: GraphNodeType;
   aliases: string[];
+  /** Optional semantic roles used for discovery and dynamic graph presentation. */
+  tags?: string[];
   currentState: string;
   facts: GraphFact[];
   status: GraphRecordStatus;
@@ -258,6 +260,8 @@ export interface GraphNodeProjection {
   name: string;
   type: GraphNodeType;
   aliases?: string[];
+  /** Semantic roles are additive metadata and never replace the stable node type. */
+  tags?: string[];
   state?: string;
   facts?: Array<{ key: string; value: string | string[]; sourceEventIds: string[] }>;
   status?: GraphRecordStatus;

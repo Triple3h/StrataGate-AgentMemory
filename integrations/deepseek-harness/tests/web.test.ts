@@ -193,6 +193,7 @@ describe('StrataGate admin routes', () => {
       migration: { projected: 1, total: 1, complete: true },
       nodes: [{ id: 'node_1', name: 'pnpm', supportingEvents: [{ id: 'evt_1' }] }],
       edges: [],
+      clusters: [{ label: '未连接节点', nodeIds: ['node_1'] }],
     })
 
     const blocks = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=blocks')

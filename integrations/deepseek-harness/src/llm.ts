@@ -155,7 +155,7 @@ const GRAPH_NODE: ValueSchemaSpec = {
   properties: {
     ref: { type: 'string', required: true }, name: { type: 'string', required: true },
     type: { type: 'string', enum: ['person', 'project', 'organization', 'tool', 'place'], required: true },
-    aliases: STRING_ARRAY, state: { type: 'string' }, facts: { type: 'array', items: GRAPH_FACT },
+    aliases: STRING_ARRAY, tags: { ...STRING_ARRAY, required: true }, state: { type: 'string' }, facts: { type: 'array', items: GRAPH_FACT },
     status: { type: 'string', enum: ['active', 'superseded', 'disputed', 'archived'] },
     validFrom: { type: 'string' }, validTo: { type: 'string' }, confidence: { type: 'number' },
     sourceEventIds: { ...STRING_ARRAY, required: true },
@@ -328,7 +328,7 @@ export class DshModelBridge {
   readonly graphProjector: GraphProjector = async (context: GraphProjectionContext): Promise<GraphProjectionResult> => {
     const eventIds = new Set(context.events.map((event) => event.id))
     const raw = object(await this.callStructured('graphProjector',
-      `Project the supplied Events into the current Knowledge Graph, then call ${STRUCTURED_TOOLS.graphProjector.name} exactly once. Events are the sole source of truth; never use legacy Element data. Return stable entity nodes for people, projects, organizations, tools, and places. Use aliases to merge spelling/case/separator variants. Put attributes in node facts and every relationship in a directed edge using fromRef/toRef—never encode a relationship as a fact string. Prefer concise canonical Chinese relation labels such as 使用、属于、创建、参与、贡献、依赖、位于、相关. Every node, fact, and edge must cite only supplied Event ids. Do not return text.`,
+      `Project the supplied Events into the current Knowledge Graph, then call ${STRUCTURED_TOOLS.graphProjector.name} exactly once. Events are the sole source of truth; never use legacy Element data. Return stable entity nodes for people, projects, organizations, tools, and places. Use aliases to merge spelling/case/separator variants. Give every returned node 1-6 concise semantic role tags such as benchmark, evaluation, memory-plugin, parser, or development-tool; tags describe the node's specific role and never replace its person/project/organization/tool/place type. Reuse stable tag wording when possible. Put attributes in node facts and every relationship in a directed edge using fromRef/toRef—never encode a relationship as a fact string. Prefer concise canonical Chinese relation labels such as 使用、属于、创建、参与、贡献、依赖、位于、相关. Every node, fact, and edge must cite only supplied Event ids. Do not return text.`,
       context,
     ))
     const nodes = (Array.isArray(raw.nodes) ? raw.nodes : []).flatMap((candidate) => {
@@ -345,7 +345,7 @@ export class DshModelBridge {
         return [{ key: text(fact.key), value, sourceEventIds }]
       })
       return [{
-        ref: text(item.ref), name: text(item.name), type, aliases: strings(item.aliases),
+        ref: text(item.ref), name: text(item.name), type, aliases: strings(item.aliases), tags: strings(item.tags).slice(0, 12),
         ...(text(item.state) ? { state: text(item.state) } : {}), facts,
         ...(typeof item.status === 'string' ? { status: item.status as 'active' } : {}),
         ...(text(item.validFrom) ? { validFrom: text(item.validFrom) } : {}),

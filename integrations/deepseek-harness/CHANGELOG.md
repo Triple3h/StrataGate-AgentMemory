@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.27 - 2026-08-25
+
+- Add optional semantic Tags to newly projected Knowledge Graph nodes for search, filtering, and understandable group names while keeping Node Type unchanged.
+- Detect dynamic communities with seeded, weighted Leiden using active edges, relationship density, shared Events, Node Type, and Tags; Tags only strengthen existing structural affinity.
+- Render ephemeral Cluster compound nodes with Cytoscape.js and fCoSE for clearer separation, overlap avoidance, pan/zoom, and relationship highlighting.
+- Keep existing graph snapshots untouched: the projector version is unchanged, no historical Events are requeued, and nodes without Tags continue to render and cluster normally.
+
 ## 0.2.26 - 2026-08-25
 
 - Size Knowledge Graph nodes by their long-term importance using supporting Events, active relationships, sustained recent activity, and current-workspace affinity.

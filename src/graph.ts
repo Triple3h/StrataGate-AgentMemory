@@ -63,6 +63,7 @@ export function applyGraphProjection(options: ApplyGraphProjectionOptions): { no
     const sources = validSources(proposal.sourceEventIds);
     if (!ref || !name || !NODE_TYPES.has(proposal.type) || sources.length === 0) continue;
     const aliases = strings(proposal.aliases, 20).filter((alias) => normalizeSearchText(alias) !== normalizeSearchText(name));
+    const tags = strings(proposal.tags, 12);
     let node = options.nodes.find((candidate) => sameEntity(candidate, { ...proposal, name, aliases }));
     if (!node) {
       node = {
@@ -73,6 +74,7 @@ export function applyGraphProjection(options: ApplyGraphProjectionOptions): { no
       options.nodes.push(node);
     }
     node.aliases = [...new Set([...node.aliases, ...aliases])];
+    if (tags.length > 0) node.tags = [...new Set([...(node.tags ?? []), ...tags])].slice(0, 12);
     node.status = STATUSES.has(proposal.status ?? 'active') ? proposal.status ?? 'active' : 'active';
     node.confidence = confidence(proposal.confidence);
     node.sourceEventIds = [...new Set([...node.sourceEventIds, ...sources])];

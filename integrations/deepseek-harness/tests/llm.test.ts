@@ -253,4 +253,29 @@ describe('DeepSeek Harness model JSON retries', () => {
     expect(calls.mock.calls[0]?.[0].reasoningEffort).toBe('off')
     expect(calls.mock.calls[0]?.[0].system).toContain('Call stratagate_project_element_cards exactly once')
   })
+
+  it('projects semantic Tags for newly processed Knowledge Graph nodes', async () => {
+    const event = {
+      id: 'evt_graph', title: 'Evaluate memory', summary: 'LoCoMo evaluates meow-memory',
+      narrative: '', tags: ['benchmark'], quotes: [], sourceMessageIds: ['msg_graph'], sourceBlockId: 'blk_graph',
+      temporal: {}, scope: 'project' as const, criticality: 'routine' as const, confidence: 0.9,
+      status: 'active' as const, supersededBy: null,
+      weight: { mentionCount: 1, lastAdoptedTurn: 1, lastRetrievedAt: null, pinned: false, floorWeight: 0, forcedCap: null },
+      createdAt: '2026-08-25T00:00:00.000Z', updatedAt: '2026-08-25T00:00:00.000Z',
+    }
+    const { bridge, session, calls } = modelBridge([{
+      tool: { reason: 'projected', nodes: [{
+        ref: 'locomo', name: 'LoCoMo', type: 'project', tags: ['benchmark', 'evaluation'], sourceEventIds: [event.id],
+      }], edges: [] },
+    }])
+
+    const result = await bridge.run(session, () => bridge.graphProjector({
+      jobId: 'gproj_1', projectorVersion: 1, events: [event], existingNodes: [], existingEdges: [],
+    }))
+
+    expect(result.nodes[0]?.tags).toEqual(['benchmark', 'evaluation'])
+    expect(calls.mock.calls[0]?.[0].tools?.[0]?.name).toBe('stratagate_project_knowledge_graph')
+    expect(calls.mock.calls[0]?.[0].tools?.[0]?.parameters?.properties?.nodes?.items?.required).toContain('tags')
+    expect(calls.mock.calls[0]?.[0].system).toContain('tags describe the node')
+  })
 })

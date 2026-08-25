@@ -24,9 +24,9 @@ describe('Event-backed knowledge graph', () => {
       graphProjector: async ({ events }) => ({
         reason: 'projected',
         nodes: [
-          { ref: 'person', name: 'chenhw7', type: 'person', sourceEventIds: [events[0]!.id] },
-          { ref: 'project', name: 'StrataGate', type: 'project', aliases: ['strata_gate'], state: '已发布', sourceEventIds: [events[0]!.id] },
-          { ref: 'tool', name: 'npm', type: 'tool', sourceEventIds: [events[0]!.id] },
+          { ref: 'person', name: 'chenhw7', type: 'person', tags: ['developer'], sourceEventIds: [events[0]!.id] },
+          { ref: 'project', name: 'StrataGate', type: 'project', tags: ['memory-plugin', 'dsh-plugin'], aliases: ['strata_gate'], state: '已发布', sourceEventIds: [events[0]!.id] },
+          { ref: 'tool', name: 'npm', type: 'tool', tags: ['package-manager'], sourceEventIds: [events[0]!.id] },
         ],
         edges: [
           { fromRef: 'person', toRef: 'project', relation: '贡献', sourceEventIds: [events[0]!.id], confidence: 0.95 },
@@ -48,6 +48,8 @@ describe('Event-backed knowledge graph', () => {
       participantNodeIds: expect.arrayContaining(memory.listGraphNodes().map(({ id }) => id)),
     });
     expect(memory.listGraphNodes().every((node) => node.sourceEventIds.includes(memory.listEvents()[0]!.id))).toBe(true);
+    expect(memory.listGraphNodes().find(({ name }) => name === 'StrataGate')?.tags).toEqual(['memory-plugin', 'dsh-plugin']);
+    expect((await memory.searchGraphNodes('memory-plugin'))[0]?.node.name).toBe('StrataGate');
     expect(memory.listGraphProjectionJobs()[0]).toMatchObject({ status: 'completed', projectorVersion: 1, attempts: 1 });
   });
 

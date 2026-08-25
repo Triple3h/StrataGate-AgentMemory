@@ -12,8 +12,9 @@ import {
   type UsageReceipt,
 } from '@diqier/stratagate'
 import type { StrataGateRuntime } from './runtime.js'
+import { clusterKnowledgeGraph } from './graph-clustering.js'
 
-const STRATAGATE_DSH_VERSION = '0.2.22'
+const STRATAGATE_DSH_VERSION = '0.2.27'
 const LEGACY_THREAD_ID = '__legacy__'
 const nodeRequire = createRequire(import.meta.url)
 
@@ -435,6 +436,7 @@ async function memories(runtime: StrataGateRuntime, url: URL): Promise<unknown> 
         supportingEvents: node.sourceEventIds.flatMap((id) => eventMap.get(id) ?? []).map(eventSummary),
       })),
       edges: snapshot.graphEdges,
+      clusters: clusterKnowledgeGraph(snapshot.graphNodes, snapshot.graphEdges),
       migration: (() => {
         const projected = new Set(snapshot.graphProjectionJobs
           .filter(({ status, projectorVersion }) => status === 'completed' && projectorVersion === KNOWLEDGE_GRAPH_PROJECTOR_VERSION)
