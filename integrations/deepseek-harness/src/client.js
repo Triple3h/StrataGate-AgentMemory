@@ -207,7 +207,88 @@ window.__ModuleLoader__.load({
         h('div', { className: 'sg-node-bubble-foot' }, h('span', null, eventCount + ' 条相关事件'), h('button', { type: 'button', onClick: onViewDetails }, '查看详情 →')))
     }
 
-    function GraphCanvas({ nodes, edges, selectedId, onSelect, showSummary = false, onViewDetails }) {
+    const GRAPH_NODE_RADIUS = { peripheral: 30, normal: 38, important: 46, core: 54 }
+    const GRAPH_IMPORTANCE_TEXT = { peripheral: '边缘节点', normal: '普通节点', important: '重要节点', core: '核心节点' }
+
+    function graphNameKey(value) {
+      return String(value || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+    }
+
+    function graphTimestamp(value) {
+      const timestamp = Date.parse(String(value || ''))
+      return Number.isFinite(timestamp) ? timestamp : 0
+    }
+
+    // Importance is derived from the complete persisted graph snapshot. The caller
+    // deliberately computes this before search/type filters are applied, so a view
+    // change never changes the meaning of a node's size.
+    function graphNodeImportance(nodes, edges, project) {
+      const activeEdges = edges.filter((edge) => edge.status === 'active')
+      const activeSupportingEvents = (node) => (node.supportingEvents || []).filter((event) => event.status !== 'forgotten' && event.status !== 'archived')
+      const relationCounts = new Map(nodes.map((node) => [node.id, 0]))
+      const neighbors = new Map(nodes.map((node) => [node.id, new Set()]))
+      for (const edge of activeEdges) {
+        relationCounts.set(edge.fromNodeId, (relationCounts.get(edge.fromNodeId) || 0) + 1)
+        relationCounts.set(edge.toNodeId, (relationCounts.get(edge.toNodeId) || 0) + 1)
+        neighbors.get(edge.fromNodeId)?.add(edge.toNodeId)
+        neighbors.get(edge.toNodeId)?.add(edge.fromNodeId)
+      }
+
+      const projectKey = graphNameKey(project)
+      const directWorkspaceNodes = new Set(nodes.filter((node) => projectKey && [node.name, ...(node.aliases || [])].some((name) => {
+        const key = graphNameKey(name)
+        return key === projectKey || (key.length >= 5 && projectKey.length >= 5 && (key.includes(projectKey) || projectKey.includes(key)))
+      })).map((node) => node.id))
+      const workspaceAffinity = new Map(nodes.map((node) => [node.id, directWorkspaceNodes.has(node.id) ? 1 : 0]))
+      for (const nodeId of directWorkspaceNodes) {
+        for (const neighborId of neighbors.get(nodeId) || []) {
+          workspaceAffinity.set(neighborId, Math.max(workspaceAffinity.get(neighborId) || 0, .55))
+          for (const secondHopId of neighbors.get(neighborId) || []) {
+            workspaceAffinity.set(secondHopId, Math.max(workspaceAffinity.get(secondHopId) || 0, .25))
+          }
+        }
+      }
+
+      const supportCounts = new Map(nodes.map((node) => {
+        const supportingEvents = activeSupportingEvents(node)
+        return [node.id, supportingEvents.length ? new Set(supportingEvents.map((event) => event.id)).size : new Set(node.sourceEventIds || []).size]
+      }))
+      const maxSupport = Math.max(1, ...supportCounts.values())
+      const maxRelations = Math.max(1, ...relationCounts.values())
+      let latestActivity = 0
+      for (const node of nodes) {
+        latestActivity = Math.max(latestActivity, graphTimestamp(node.updatedAt))
+        for (const event of activeSupportingEvents(node)) latestActivity = Math.max(latestActivity, graphTimestamp(event.updatedAt || event.createdAt))
+      }
+      for (const edge of activeEdges) latestActivity = Math.max(latestActivity, graphTimestamp(edge.updatedAt))
+      const halfLife = 90 * 24 * 60 * 60 * 1000
+      const recency = (timestamp) => timestamp && latestActivity ? Math.exp(-Math.max(0, latestActivity - timestamp) / halfLife) : 0
+
+      const scored = nodes.map((node) => {
+        const supportingEvents = activeSupportingEvents(node)
+        const sustainedMentions = supportingEvents.map((event) => recency(graphTimestamp(event.updatedAt || event.createdAt))).sort((left, right) => right - left).slice(0, 3)
+        const recentScore = .25 * recency(graphTimestamp(node.updatedAt)) + .75 * sustainedMentions.reduce((sum, value) => sum + value, 0) / 3
+        const supportScore = Math.log1p(supportCounts.get(node.id) || 0) / Math.log1p(maxSupport)
+        const relationScore = Math.log1p(relationCounts.get(node.id) || 0) / Math.log1p(maxRelations)
+        const score = .42 * supportScore + .28 * relationScore + .15 * recentScore + .15 * (workspaceAffinity.get(node.id) || 0)
+        return { id: node.id, score }
+      })
+      const ordered = scored.map(({ score }) => score).sort((left, right) => left - right)
+      const quantile = (ratio) => ordered[Math.ceil(Math.max(0, ordered.length - 1) * ratio)] || 0
+      const spread = (ordered[ordered.length - 1] || 0) - (ordered[0] || 0)
+      const thresholds = { normal: quantile(.25), important: quantile(.6), core: quantile(.85) }
+      return new Map(scored.map(({ id, score }) => {
+        let tier
+        if (spread < .02) tier = score >= .65 ? 'core' : score >= .38 ? 'important' : 'normal'
+        else if (score >= thresholds.core) tier = 'core'
+        else if (score >= thresholds.important) tier = 'important'
+        else if (score >= thresholds.normal) tier = 'normal'
+        else tier = 'peripheral'
+        return [id, { score, tier, radius: GRAPH_NODE_RADIUS[tier] }]
+      }))
+    }
+
+    function GraphCanvas({ nodes, edges, importance, selectedId, onSelect, showSummary = false, onViewDetails }) {
       if (!nodes.length) return h(Empty, { title: '知识图谱正在形成', copy: 'Event 会在后台分批投影为节点与关系。' })
       const width = 760; const height = 560; const cx = width / 2; const cy = height / 2
       const placed = nodes.slice(0, 40).map((node, index) => {
@@ -230,8 +311,9 @@ window.__ModuleLoader__.load({
           }),
           placed.map(({ node, x, y }) => {
             const meta = NODE_META[node.type] || ['实体', '#64748b', '•']; const selected = node.id === selectedId
-            return h('g', { key: node.id, className: 'sg-graph-node ' + (selected ? 'selected' : ''), onClick: () => onSelect(node.id), onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(node.id) } }, role: 'button', tabIndex: 0, 'aria-label': node.name + '，' + meta[0] },
-              h('circle', { cx: x, cy: y, r: selected ? 47 : 42, fill: meta[1], fillOpacity: '.28', stroke: meta[1], strokeWidth: selected ? '3' : '1.5' }),
+            const visualImportance = importance.get(node.id) || { tier: 'normal', radius: GRAPH_NODE_RADIUS.normal }
+            return h('g', { key: node.id, className: 'sg-graph-node ' + (selected ? 'selected' : ''), 'data-importance': visualImportance.tier, onClick: () => onSelect(node.id), onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(node.id) } }, role: 'button', tabIndex: 0, 'aria-label': node.name + '，' + meta[0] + '，' + GRAPH_IMPORTANCE_TEXT[visualImportance.tier] },
+              h('circle', { cx: x, cy: y, r: visualImportance.radius, fill: meta[1], fillOpacity: '.28', stroke: meta[1], strokeWidth: selected ? '3' : '1.5' }),
               h('text', { x, y: y - 7, textAnchor: 'middle', className: 'sg-node-name' }, node.name.slice(0, 14)),
               h('text', { x, y: y + 14, textAnchor: 'middle', className: 'sg-node-type' }, meta[0]))
           })),
@@ -325,6 +407,7 @@ window.__ModuleLoader__.load({
       const [filtersOpen, setFiltersOpen] = React.useState(false)
       const [fullScreen, setFullScreen] = React.useState(false)
       const nodes = graph.nodes || []; const edges = graph.edges || []; const normalized = query.trim().toLocaleLowerCase()
+      const nodeImportance = React.useMemo(() => graphNodeImportance(nodes, edges, project), [nodes, edges, project])
       React.useEffect(() => {
         if (!fullScreen) return undefined
         const previous = document.body.style.overflow
@@ -362,7 +445,7 @@ window.__ModuleLoader__.load({
         filtersOpen ? filterControls : null,
         mode === 'graph'
           ? h('div', { className: 'sg-long-layout ' + (fullScreen ? '' : 'sg-summary-layout') },
-            h(GraphCanvas, { nodes: visibleNodes, edges, selectedId: selectedNodeId, onSelect: setSelectedNodeId, showSummary: !fullScreen, onViewDetails: openExplorer }),
+            h(GraphCanvas, { nodes: visibleNodes, edges, importance: nodeImportance, selectedId: selectedNodeId, onSelect: setSelectedNodeId, showSummary: !fullScreen, onViewDetails: openExplorer }),
             fullScreen ? h(NodeDetailPanel, { node: nodes.find((node) => node.id === selectedNodeId), nodes, edges, events, onEvent: selectEvent }) : null)
           : h('div', { className: 'sg-long-layout ' + (fullScreen ? 'sg-timeline-layout' : 'sg-summary-layout') },
             h(TimelineList, { events, nodes, query, filters: eventFilters, onSelect: setSelectedEventId, selectedId: selectedEventId, floating: !fullScreen, onNode: selectNode, openSource: openEvent }),

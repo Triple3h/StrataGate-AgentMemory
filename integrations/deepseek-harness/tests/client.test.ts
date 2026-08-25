@@ -106,6 +106,50 @@ describe('StrataGate Web client contract', () => {
     expect(source).not.toContain("'Block · ' + event.sourceBlockId.slice")
   })
 
+  it('sizes graph nodes by stable long-term importance without conflating selection', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('function graphNodeImportance(nodes, edges, project)')
+    expect(source).toContain('const GRAPH_NODE_RADIUS = { peripheral: 30, normal: 38, important: 46, core: 54 }')
+    expect(source).toContain('new Set(node.sourceEventIds || []).size')
+    expect(source).toContain("event.status !== 'forgotten' && event.status !== 'archived'")
+    expect(source).toContain("edges.filter((edge) => edge.status === 'active')")
+    expect(source).toContain('node.supportingEvents || []')
+    expect(source).toContain('workspaceAffinity')
+    expect(source).toContain('React.useMemo(() => graphNodeImportance(nodes, edges, project), [nodes, edges, project])')
+    expect(source).toContain('nodes: visibleNodes, edges, importance: nodeImportance')
+    expect(source).toContain('r: visualImportance.radius')
+    expect(source).not.toContain('r: selected ? 47 : 42')
+  })
+
+  it('makes a well-supported workspace project larger than a sparsely mentioned tool', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    const start = source.indexOf('const GRAPH_NODE_RADIUS')
+    const end = source.indexOf('function GraphCanvas', start)
+    const context: any = {}
+    runInNewContext(source.slice(start, end) + '\nthis.graphNodeImportance = graphNodeImportance', context)
+    const event = (id: string, updatedAt: string) => ({ id, status: 'active', updatedAt })
+    const node = (id: string, name: string, eventCount: number, updatedAt: string) => ({
+      id, name, aliases: [], updatedAt, sourceEventIds: Array.from({ length: eventCount }, (_, index) => `${id}-event-${index}`),
+      supportingEvents: Array.from({ length: eventCount }, (_, index) => event(`${id}-event-${index}`, updatedAt)),
+    })
+    const nodes = [
+      node('project', 'StrataGate-AgentMemory', 8, '2026-08-25T00:00:00Z'),
+      node('memory', 'Memory Service', 5, '2026-08-20T00:00:00Z'),
+      node('agent', 'Agent', 3, '2026-07-01T00:00:00Z'),
+      node('json', 'parseJsonResponse', 1, '2025-08-25T00:00:00Z'),
+    ]
+    const edges = [
+      { id: 'edge-1', fromNodeId: 'project', toNodeId: 'memory', status: 'active', updatedAt: '2026-08-25T00:00:00Z' },
+      { id: 'edge-2', fromNodeId: 'project', toNodeId: 'agent', status: 'active', updatedAt: '2026-08-24T00:00:00Z' },
+      { id: 'edge-3', fromNodeId: 'memory', toNodeId: 'agent', status: 'active', updatedAt: '2026-08-20T00:00:00Z' },
+    ]
+    const importance = context.graphNodeImportance(nodes, edges, 'StrataGate-AgentMemory')
+    expect(importance.get('project').radius).toBe(54)
+    expect(importance.get('json').radius).toBe(30)
+    expect(importance.get('project').radius).toBeGreaterThan(importance.get('json').radius)
+    expect([...importance.values()].every(({ radius }: { radius: number }) => radius >= 30 && radius <= 54)).toBe(true)
+  })
+
   it('keeps failures reassuring and makes only lambda editable under More', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(source).toContain('lastErrorFull')
