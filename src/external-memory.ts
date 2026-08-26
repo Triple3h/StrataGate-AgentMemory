@@ -98,24 +98,439 @@ const LEGACY_EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN = `
 export const EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN = `
 请为我导出一份可以迁移到另一个 AI 系统的长期记忆。
 
-你的任务不是写总结文章，而是从你当前能够访问到的、与我有关的长期信息和本次会话上下文中，提取可以长期复用的事实、偏好、规则、项目状态和历史事件。只记录有明确依据的内容；不要把你的推测、建议、常识、臆测或助手自己的观点写成我的事实。
+你的任务不是写总结文章，而是从你当前能够访问到的、与我有关的长期信息和本次会话上下文中，提取可以长期复用的事实、偏好、规则、项目状态和历史事件。
 
-每条 candidate 必须包含 memoryKind 和 category。memoryKind 只能是 instruction、preference、fact、event：instruction 是长期行为规则，preference 是稳定偏好，fact 是相对稳定的事实，event 是发生、变化、决策或时间过程。category 只能是 instruction、identity、career、project、preference；memoryKind 与 category 是不同概念（例如“用户发布项目版本”是 event + project）。
+只记录有明确依据的内容。
 
-按 instruction、identity、career、project、preference 的顺序提取。每个 candidate 只表达一条可独立判断、合并或冲突处理的记忆；不要合并多个项目、决定或时间点。矛盾内容无法判断时分别输出，不要替用户选择。不要输出寒暄、重复内容、临时上下文、助手推测或敏感隐私（证件号、手机号、邮箱、密码、API Key、精确住址、账号凭证等）。
+不要把你的推测、建议、常识、臆测或助手自己的观点写成我的事实。
 
-时间必须宁缺毋滥：mentionedAt 是被提及/记录/确认的时间，happenedStart/happenedEnd 是实际发生、开始、结束或计划发生的时间，不能混用。只有来源明确给出，或相对时间能依据已知参照日期唯一换算时，才填写时间。不要把当前日期、导出时间、聊天排序或模型知识截止时间当作事件时间。“上周、最近、以前、明年”等缺少可靠参照时，保留 temporal.originalText，precision 和 basis 都写 unknown，并省略 happenedStart/happenedEnd。不要把“2024 年”变成某一天；时间精度只能是 instant、day、month、year、range、unknown。未知字段直接省略，不要输出 null。
+────────────────
+一、记忆类型
+────────────────
 
-只有 memoryKind=event 且存在明确事件语义时才填写 eventType；eventType 只能是 decision、release、task_completed、plan、change、cancellation、incident、meeting、collaboration、migration、other。temporal.status 只能是 occurred、planned、cancelled、ongoing、unknown。scope 只能是 user、project、session；criticality 只能是 routine、preference、identity、safety。confidence 为 0 到 1；quotes 只能是可确认的用户原话；tags 至少包含 category。
+每条 candidate 必须先判断 memoryKind：
 
-这是一次外部 AI 记忆导出。顶层输出 sourceType（固定为 external_ai_memory_export）、sourceSystem（当前 AI 名称，不确定写 unknown）、可可靠获得时才输出 exportedAt；coverage 只能是 full、partial、limited，并可附 coverageNote 和 uncertainItems。
+1. instruction
+我明确要求 AI 长期遵循的行为规则。
 
-只输出一个合法 JSON 对象，不要输出 Markdown 代码块、解释或分析过程：
+例如：
+- 回答风格
+- 输出格式
+- 始终做什么
+- 绝不要做什么
+- 对助手行为的长期纠正
+
+2. preference
+稳定、可跨会话复用的偏好。
+
+例如：
+- 工作方式
+- 工具偏好
+- 设计品味
+- 信息详细程度
+- 稳定习惯或观点
+
+一次性的临时要求不要提升为 preference。
+
+3. fact
+相对稳定的事实。
+
+例如：
+- 身份背景
+- 教育经历
+- 职业方向
+- 某个项目长期属性
+- 人物、组织、工具之间相对稳定的关系
+
+4. event
+具有发生、变化、决策或时间过程的信息。
+
+例如：
+- 完成某项工作
+- 做出某个决定
+- 发布版本
+- 改变计划
+- 开始或结束项目
+- 合作、会议、迁移、故障等
+
+────────────────
+二、Category
+────────────────
+
+category 只能是：
+
+- instruction
+- identity
+- career
+- project
+- preference
+
+memoryKind 与 category 是不同概念。
+
+例如：
+
+“用户偏好简洁回答”
+
+memoryKind = preference
+category = preference
+
+“用户发布 StrataGate 0.2.8”
+
+memoryKind = event
+category = project
+
+“用户是某学校研究生”
+
+memoryKind = fact
+category = identity
+
+────────────────
+三、提取范围
+────────────────
+
+请重点提取：
+
+1. instruction
+
+长期协作规则，包括：
+- 语气
+- 格式
+- 风格
+- 助手行为约束
+- 长期可复用的纠正规则
+
+2. identity
+
+用户主动分享的非敏感身份信息，包括：
+- 姓名
+- 年龄
+- 大致所在地
+- 教育背景
+- 家庭和人际关系
+- 语言能力
+- 长期兴趣
+
+不要输出：
+
+- 身份证号
+- 手机号
+- 邮箱
+- 密码
+- API Key
+- 精确住址
+- 账号凭证
+- 其他敏感隐私
+
+3. career
+
+用户明确提到的：
+
+- 当前或过去职位
+- 公司或组织
+- 职责
+- 技能领域
+- 职业方向
+- 长期职业计划
+
+4. project
+
+用户实际参与、维护或投入过精力的项目，包括：
+
+- 项目名称
+- 项目用途
+- 当前状态
+- 技术方案
+- 重要决策
+- 已完成工作
+- 计划工作
+- 取消或改变的工作
+
+项目的重要状态变化应拆成独立 candidate。
+
+5. preference
+
+可以跨会话长期复用的稳定偏好。
+
+────────────────
+四、拆分规则
+────────────────
+
+每个 candidate 只表达一条能够独立判断的记忆。
+
+不要把：
+
+- 多个项目
+- 多个决定
+- 多个不同时间点
+- 多个无直接依赖的事实
+
+合并成一条。
+
+如果同一事实出现多个版本，可以分别输出。
+
+如果内容互相矛盾，但无法可靠判断哪一条正确：
+
+分别输出。
+
+不要自行替用户选择。
+
+不要输出：
+
+- 寒暄
+- 重复信息
+- 无长期价值的闲聊
+- 临时上下文
+- 助手自己的推测
+
+不要把助手说“我记得……”本身作为用户事实。
+
+除非用户明确确认。
+
+────────────────
+五、时间规则
+────────────────
+
+时间必须谨慎处理。
+
+宁可缺失，也不要猜测。
+
+### mentionedAt
+
+表示这条信息被提及、记录或确认的时间。
+
+只有明确知道消息时间时才填写。
+
+不要使用：
+
+- 当前导出时间
+- 当前日期
+- 模型知识截止时间
+
+代替 mentionedAt。
+
+### happenedStart / happenedEnd
+
+表示事情实际：
+
+- 发生
+- 开始
+- 结束
+- 或计划发生
+
+的时间。
+
+消息发送时间不能直接作为事情发生时间。
+
+### 相对时间
+
+如果只知道：
+
+- 上周
+- 最近
+- 以前
+- 之后
+- 明年
+- 过几天
+- 不久前
+- 去年
+
+但不知道可靠参照日期：
+
+保留原始表达：
+
+temporal.originalText
+
+并设置：
+
+precision = unknown
+basis = unknown
+
+不要填写 happenedStart / happenedEnd。
+
+只有明确知道参照日期并能够可靠换算时，才允许换算相对时间。
+
+### precision
+
+只能使用：
+
+- instant
+- day
+- month
+- year
+- range
+- unknown
+
+不要人为制造更高时间精度。
+
+例如：
+
+“2024 年”
+
+只能：
+
+precision = year
+
+不能转换成：
+
+2024-01-01
+
+### 时间格式
+
+年：
+YYYY
+
+月：
+YYYY-MM
+
+日期：
+YYYY-MM-DD
+
+时刻：
+RFC 3339
+
+例如：
+
+2026-08-26T14:30:00+08:00
+
+只有明确知道时区和时刻时才填写 instant。
+
+────────────────
+六、Event 字段
+────────────────
+
+只有 memoryKind = event 时，eventType 才需要填写。
+
+eventType 只能是：
+
+- decision
+- release
+- task_completed
+- plan
+- change
+- cancellation
+- incident
+- meeting
+- collaboration
+- migration
+- other
+
+对于：
+
+instruction
+preference
+fact
+
+如果不存在明确事件语义，可以省略 eventType。
+
+temporal.status 只能是：
+
+- occurred
+- planned
+- cancelled
+- ongoing
+- unknown
+
+────────────────
+七、其他字段
+────────────────
+
+scope 只能是：
+
+- user
+- project
+- session
+
+criticality 只能是：
+
+- routine
+- preference
+- identity
+- safety
+
+confidence：
+
+必须为 0 到 1 之间的数字。
+
+明确、直接、重复得到确认的信息可以给予较高置信度。
+
+模糊、间接、可能过时或经过助手总结的信息，应降低 confidence。
+
+quotes：
+
+只能填写可以确认是用户说过的原话。
+
+无法逐字确认时，不要生成引号内容。
+
+participants：
+
+填写与该记忆相关的：
+
+- 人
+- 项目
+- 组织
+- 工具
+- 地点
+
+tags：
+
+至少包含 category。
+
+可以增加少量真正有帮助的主题标签。
+
+不要为了增加 tags 数量而生成宽泛标签。
+
+narrative：
+
+只有 summary 无法完整表达必要上下文时才填写。
+
+未知字段不要输出 null。
+
+直接省略。
+
+────────────────
+八、来源信息
+────────────────
+
+这是一次外部 AI 记忆导出。
+
+请在顶层输出来源信息：
+
+sourceSystem：
+当前 AI 系统名称。
+
+如果无法确定，填写 "unknown"。
+
+sourceType：
+
+固定为：
+
+"external_ai_memory_export"
+
+exportedAt：
+
+只有当前系统能够可靠获得当前时间时才填写。
+
+否则省略。
+
+────────────────
+九、输出格式
+────────────────
+
+只输出一个合法 JSON 对象。
+
+不要输出 Markdown 代码块。
+
+不要在 JSON 前后添加解释。
+
+不要输出分析过程。
+
+结构如下：
+
 {
   "schemaVersion": "stratagate.external-memory.v2",
   "sourceType": "external_ai_memory_export",
-  "sourceSystem": "unknown",
-  "exportedAt": "只有可靠知道当前时间时填写",
+  "sourceSystem": "ChatGPT",
+  "exportedAt": "2026-08-26T21:00:00+08:00",
   "candidates": [
     {
       "memoryKind": "event",
@@ -123,8 +538,13 @@ export const EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN = `
       "title": "简短、明确、方便检索的标题",
       "summary": "一条独立、客观、可以长期保存的记忆",
       "narrative": "必要的上下文",
-      "tags": ["project", "主题标签"],
-      "quotes": ["能够确认的用户原话"],
+      "tags": [
+        "project",
+        "主题标签"
+      ],
+      "quotes": [
+        "能够确认的用户原话"
+      ],
       "temporal": {
         "mentionedAt": "只有明确知道时填写",
         "happenedStart": "只有可靠确定时填写",
@@ -133,7 +553,9 @@ export const EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN = `
         "precision": "day",
         "basis": "explicit",
         "status": "occurred",
-        "participants": ["相关人物、项目、组织、工具或地点"],
+        "participants": [
+          "相关人物、项目、组织、工具或地点"
+        ],
         "eventType": "decision"
       },
       "scope": "project",
@@ -143,10 +565,38 @@ export const EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN = `
   ],
   "coverage": "full",
   "coverageNote": "必要时简短说明覆盖范围",
-  "uncertainItems": ["没有导出的内容以及具体原因"]
+  "uncertainItems": [
+    "没有导出的内容以及具体原因"
+  ]
 }
 
-如果没有符合条件的长期记忆，仍输出合法 JSON，令 candidates 为空数组，coverage 为 limited，并说明原因。
+coverage 只能是：
+
+- full
+- partial
+- limited
+
+请按照以下顺序输出 candidates：
+
+instruction
+→ identity
+→ career
+→ project
+→ preference
+
+同一 category 内，可以按照时间或重要程度排序。
+
+如果没有符合条件的长期记忆，请输出：
+
+{
+  "schemaVersion": "stratagate.external-memory.v2",
+  "sourceType": "external_ai_memory_export",
+  "sourceSystem": "unknown",
+  "candidates": [],
+  "coverage": "limited",
+  "coverageNote": "没有找到足够明确且适合长期保存的记忆",
+  "uncertainItems": []
+}
 `.trim();
 
 type JsonRecord = Record<string, unknown>;

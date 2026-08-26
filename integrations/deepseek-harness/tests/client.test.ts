@@ -88,7 +88,9 @@ describe('StrataGate Web client contract', () => {
     expect(source.indexOf("['import', '⇄', '导入别的 AI 记忆'")).toBeLessThan(source.indexOf("['structure', '◇', '记忆结构'"))
     expect(source).toContain("function ImportPage({ namespace, onBack, refresh })")
     expect(source).toContain("api('import', { namespace }")
-    expect(source).toContain('开始导入')
+    expect(source).toContain('复制以下提示词到其他 AI 对话中')
+    expect(source).toContain('将结果粘贴到下方，添加到 StrataGate 记忆')
+    expect(source).toContain('添加到记忆')
   })
 
   it('inherits the resolved light, dark, or system appearance from DSH theme tokens', () => {

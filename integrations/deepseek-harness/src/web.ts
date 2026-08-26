@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   deterministicBlockLayers,
+  EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN,
   getDecayedBlockLevel,
   KNOWLEDGE_GRAPH_PROJECTOR_VERSION,
   type ElementCard,
@@ -14,7 +15,7 @@ import {
 import type { StrataGateRuntime } from './runtime.js'
 import { clusterKnowledgeGraph } from './graph-clustering.js'
 
-const STRATAGATE_DSH_VERSION = '0.2.31'
+const STRATAGATE_DSH_VERSION = '0.2.32'
 const LEGACY_THREAD_ID = '__legacy__'
 const nodeRequire = createRequire(import.meta.url)
 
@@ -55,6 +56,7 @@ export interface WebRequest {
   url?: string
   /** Parsed JSON body supplied by the host web server (or a JSON string). */
   body?: unknown
+  [Symbol.asyncIterator]?: () => AsyncIterator<Uint8Array | string>
 }
 
 export interface WebServerLike {
@@ -274,11 +276,23 @@ async function updateSettings(runtime: StrataGateRuntime, url: URL): Promise<unk
 }
 
 async function importExternalMemory(runtime: StrataGateRuntime, req: WebRequest): Promise<unknown> {
+  let suppliedBody = req.body
+  if (suppliedBody === undefined && typeof req[Symbol.asyncIterator] === 'function') {
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of req as AsyncIterable<Uint8Array | string>) {
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += value.length
+      if (size > 4 * 1024 * 1024) throw new AdminHttpError(413, '导入数据不能超过 4 MB')
+      chunks.push(value)
+    }
+    suppliedBody = Buffer.concat(chunks).toString('utf8')
+  }
   let body: Record<string, unknown>
-  if (typeof req.body === 'string') {
-    try { body = JSON.parse(req.body) as Record<string, unknown> } catch { throw new AdminHttpError(400, '导入数据必须是合法 JSON') }
-  } else if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
-    body = req.body as Record<string, unknown>
+  if (typeof suppliedBody === 'string') {
+    try { body = JSON.parse(suppliedBody) as Record<string, unknown> } catch { throw new AdminHttpError(400, '导入数据必须是合法 JSON') }
+  } else if (suppliedBody && typeof suppliedBody === 'object' && !Array.isArray(suppliedBody)) {
+    body = suppliedBody as Record<string, unknown>
   } else {
     throw new AdminHttpError(400, '导入请求缺少 JSON body')
   }
@@ -287,6 +301,10 @@ async function importExternalMemory(runtime: StrataGateRuntime, req: WebRequest)
   if (!namespace) throw new AdminHttpError(400, 'namespace is required')
   if (!text) throw new AdminHttpError(400, 'text is required')
   return runtime.adminImportExternalMemory(namespace, text)
+}
+
+function externalMemoryPrompt(): unknown {
+  return { prompt: EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN, schemaVersion: 'stratagate.external-memory.v2' }
 }
 
 function receiptThreadId(id: string): string | null {
@@ -687,8 +705,9 @@ export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebReq
       if (req.method !== 'PATCH') throw new AdminHttpError(405, 'StrataGate Block expansion requires PATCH')
       sendJson(res, 200, await expandBlock(runtime, url))
     } else if (path === '/api/stratagate/import') {
-      if (req.method !== 'POST') throw new AdminHttpError(405, 'External memory import requires POST')
-      sendJson(res, 200, await importExternalMemory(runtime, req))
+      if (req.method === 'GET') sendJson(res, 200, externalMemoryPrompt())
+      else if (req.method === 'POST') sendJson(res, 200, await importExternalMemory(runtime, req))
+      else throw new AdminHttpError(405, 'External memory import requires GET or POST')
     } else if (req.method !== 'GET') throw new AdminHttpError(405, 'StrataGate memory data is read-only')
     else if (path === '/api/stratagate/overview') sendJson(res, 200, await overview(runtime))
     else if (path === '/api/stratagate/memories') sendJson(res, 200, await memories(runtime, url))

@@ -168,6 +168,14 @@ describe('StrataGate admin routes', () => {
     expect(received).toEqual({ namespace: 'dsh:project:test', text: '{"schemaVersion":"stratagate.external-memory.v2","candidates":[]}' })
   })
 
+  it('serves the complete external memory export prompt', async () => {
+    const result = await request('/api/stratagate/import')
+    expect(result).toMatchObject({ status: 200, body: { schemaVersion: 'stratagate.external-memory.v2' } })
+    expect(result.body.prompt).toContain('一、记忆类型')
+    expect(result.body.prompt).toContain('sourceType')
+    expect(result.body.prompt).toContain('如果没有符合条件的长期记忆，请输出')
+  })
+
   it('does not label a block without an extraction job as actively processing', async () => {
     const result = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Awaiting&kind=blocks', 'GET', waitingRuntime)
     expect(result.body.items[0]).toMatchObject({ status: 'waiting', eventExtraction: null })
