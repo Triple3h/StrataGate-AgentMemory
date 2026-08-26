@@ -82,6 +82,15 @@ describe('StrataGate Web client contract', () => {
     expect(source).not.toContain('封存时为 L5')
   })
 
+  it('places external AI memory import before memory structure in More', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain("['import', '⇄', '导入别的 AI 记忆'")
+    expect(source.indexOf("['import', '⇄', '导入别的 AI 记忆'")).toBeLessThan(source.indexOf("['structure', '◇', '记忆结构'"))
+    expect(source).toContain("function ImportPage({ namespace, onBack, refresh })")
+    expect(source).toContain("api('import', { namespace }")
+    expect(source).toContain('开始导入')
+  })
+
   it('inherits the resolved light, dark, or system appearance from DSH theme tokens', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(source).toContain('color-scheme:inherit')

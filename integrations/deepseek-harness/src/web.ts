@@ -14,7 +14,7 @@ import {
 import type { StrataGateRuntime } from './runtime.js'
 import { clusterKnowledgeGraph } from './graph-clustering.js'
 
-const STRATAGATE_DSH_VERSION = '0.2.30'
+const STRATAGATE_DSH_VERSION = '0.2.31'
 const LEGACY_THREAD_ID = '__legacy__'
 const nodeRequire = createRequire(import.meta.url)
 
@@ -53,6 +53,8 @@ export interface WebResponse {
 export interface WebRequest {
   method?: string
   url?: string
+  /** Parsed JSON body supplied by the host web server (or a JSON string). */
+  body?: unknown
 }
 
 export interface WebServerLike {
@@ -269,6 +271,22 @@ async function updateSettings(runtime: StrataGateRuntime, url: URL): Promise<unk
     throw new AdminHttpError(400, 'blockDecayLambda must be a non-negative finite number')
   }
   return { blockDecayLambda: await runtime.adminSetBlockDecayLambda(value) }
+}
+
+async function importExternalMemory(runtime: StrataGateRuntime, req: WebRequest): Promise<unknown> {
+  let body: Record<string, unknown>
+  if (typeof req.body === 'string') {
+    try { body = JSON.parse(req.body) as Record<string, unknown> } catch { throw new AdminHttpError(400, '导入数据必须是合法 JSON') }
+  } else if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    body = req.body as Record<string, unknown>
+  } else {
+    throw new AdminHttpError(400, '导入请求缺少 JSON body')
+  }
+  const namespace = typeof body.namespace === 'string' ? body.namespace.trim() : ''
+  const text = typeof body.text === 'string' ? body.text.trim() : ''
+  if (!namespace) throw new AdminHttpError(400, 'namespace is required')
+  if (!text) throw new AdminHttpError(400, 'text is required')
+  return runtime.adminImportExternalMemory(namespace, text)
 }
 
 function receiptThreadId(id: string): string | null {
@@ -668,6 +686,9 @@ export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebReq
     } else if (path === '/api/stratagate/blocks/expand') {
       if (req.method !== 'PATCH') throw new AdminHttpError(405, 'StrataGate Block expansion requires PATCH')
       sendJson(res, 200, await expandBlock(runtime, url))
+    } else if (path === '/api/stratagate/import') {
+      if (req.method !== 'POST') throw new AdminHttpError(405, 'External memory import requires POST')
+      sendJson(res, 200, await importExternalMemory(runtime, req))
     } else if (req.method !== 'GET') throw new AdminHttpError(405, 'StrataGate memory data is read-only')
     else if (path === '/api/stratagate/overview') sendJson(res, 200, await overview(runtime))
     else if (path === '/api/stratagate/memories') sendJson(res, 200, await memories(runtime, url))

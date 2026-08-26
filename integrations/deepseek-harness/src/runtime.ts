@@ -440,6 +440,49 @@ export class StrataGateRuntime {
     }
   }
 
+  /** Import a v2 external-AI export from the admin UI. */
+  async adminImportExternalMemory(namespace: string, text: string): Promise<unknown> {
+    const key = namespace.trim()
+    if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
+    await this.flush()
+    const active = this.spaces.get(key)
+    let memory: StrataGate
+    let owned = false
+    if (active) {
+      memory = await active
+    } else {
+      if (this.config.database === ':memory:' || !existsSync(this.config.database)) {
+        throw new Error(`Unknown StrataGate namespace: ${key}`)
+      }
+      memory = await StrataGate.open({
+        database: this.config.database,
+        namespace: key,
+        blockTurnSize: this.config.blockTurnSize,
+        blockDecayLambda: this.blockDecayLambda,
+        graphProjector: this.models.graphProjector,
+        disableElementProjection: true,
+      })
+      owned = true
+    }
+    try {
+      // The UI import is deliberately conservative. New candidates are added
+      // without guessing a merge target; the normal review/LLM workflow can
+      // adjudicate them afterwards using the stored source block.
+      const result = await memory.importExternalMemory({
+        text,
+        decider: async () => ({ action: 'ADD' }),
+      })
+      return {
+        sourceBlockId: result.sourceBlockId,
+        decisions: result.decisions,
+        importedCount: result.addedEvents.length,
+        changedEventIds: result.changedEventIds,
+      }
+    } finally {
+      if (owned) await memory.close()
+    }
+  }
+
   adminWorkspaceName(namespace: string): string | null {
     const remembered = this.workspaceNames.get(namespace)
     if (remembered) return remembered

@@ -8,6 +8,7 @@ import {
 } from './blocks.js';
 import { applyElementChanges, elementViewAt } from './elements.js';
 import { normalizeStandardEventType } from './events.js';
+import { externalMemoryJsonExtractor } from './external-memory.js';
 import { applyGraphProjection } from './graph.js';
 import { normalizeRetrievalAssessment, type RetrievalAssessment, type RetrievalAssessmentInput } from './retrieval.js';
 import { SqliteStorage } from './sqlite.js';
@@ -49,6 +50,13 @@ import type {
   EventCardInput,
   EventExtractor,
   EventSearchResult,
+  ExternalMemoryAction,
+  ExternalMemoryCandidate,
+  ExternalMemoryDecision,
+  ExternalMemoryExtractionResult,
+  ExternalMemoryImportDecision,
+  ExternalMemoryImportOptions,
+  ExternalMemoryImportResult,
   GraphEdge,
   GraphNode,
   GraphNodeSearchResult,
@@ -585,6 +593,102 @@ export class StrataGate {
     });
   }
 
+  /**
+   * Import a memory summary produced by another AI.
+   *
+   * The extractor turns prose into candidate Events. Each candidate is then
+   * matched against the local Event index (bounded by topK) and passed to the
+   * decider. Only ADD/MERGE/SUPERSEDE/CONFLICT decisions write Events; IGNORE
+   * is recorded in the returned audit result. Existing Events are never
+   * overwritten: MERGE and SUPERSEDE create a new canonical Event that points
+   * back to the older Events.
+   */
+  async importExternalMemory(options: ExternalMemoryImportOptions): Promise<ExternalMemoryImportResult> {
+    const text = options.text.trim();
+    if (!text) throw new TypeError('External memory text must not be empty');
+    if (typeof options.decider !== 'function') {
+      throw new TypeError('External memory decider is required');
+    }
+    const importedAt = toUtc8Iso(options.importedAt ?? this.now());
+    const extractor = options.extractor ?? externalMemoryJsonExtractor;
+    const extracted: ExternalMemoryExtractionResult = await extractor({ text, importedAt });
+    const candidates = Array.isArray(extracted?.candidates) ? extracted.candidates.slice(0, 200) : [];
+    const topK = Math.max(1, Math.min(20, Math.floor(options.topK ?? 5)));
+
+    const source = await this.commitMutation(() => this.createExternalSourceBlock(text, importedAt));
+    const prepared: Array<{
+      candidate: ExternalMemoryCandidate;
+      decision: ExternalMemoryDecision;
+      existingEventIds: string[];
+    }> = [];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate.title !== 'string' || typeof candidate.summary !== 'string') continue;
+      const query = `${candidate.title} ${candidate.summary} ${(candidate.tags ?? []).join(' ')}`.trim();
+      const matches = await this.searchEvents(query, { limit: topK });
+      const decision = await options.decider({ candidate, matches });
+      const allowed = new Set(matches.map(({ event }) => event.id));
+      const existingEventIds = [...new Set((decision.existingEventIds ?? []).filter((id) => allowed.has(id)))];
+      prepared.push({ candidate, decision, existingEventIds });
+    }
+
+    return this.commitMutation(() => {
+      const addedEvents: EventCard[] = [];
+      const changedEventIds = new Set<string>();
+      const decisions: ExternalMemoryImportDecision[] = [];
+      for (const item of prepared) {
+        const action = this.normalizeExternalAction(item.decision.action);
+        const targets = item.existingEventIds;
+        const reason = typeof item.decision.reason === 'string' ? item.decision.reason.trim().slice(0, 500) : undefined;
+        let createdEvent: EventCard | undefined;
+        const proposed = item.decision.mergedCandidate;
+        const candidate = proposed && typeof proposed.title === 'string' && typeof proposed.summary === 'string'
+          ? proposed : item.candidate;
+        if ((action === 'ADD' || action === 'MERGE' || action === 'SUPERSEDE' || action === 'CONFLICT')
+          && (action === 'ADD' || targets.length > 0)) {
+          const temporal = {
+            ...(candidate.temporal ?? {}),
+            ...(action === 'MERGE' || action === 'SUPERSEDE' ? { supersedesEventIds: targets } : {}),
+            ...(action === 'CONFLICT' ? { conflictsWithEventIds: targets } : {}),
+          };
+          createdEvent = this.addEventInMemory({
+            ...candidate,
+            sourceBlockId: source.id,
+            sourceMessageIds: [source.l5Raw[0]!.id],
+            temporal,
+          });
+          addedEvents.push(createdEvent);
+          changedEventIds.add(createdEvent.id);
+          if (action === 'CONFLICT') {
+            for (const id of targets) {
+              const existing = this.events.find((event) => event.id === id);
+              if (!existing) continue;
+              existing.temporal.conflictsWithEventIds = [...new Set([...(existing.temporal.conflictsWithEventIds ?? []), createdEvent.id])];
+              existing.updatedAt = importedAt;
+              changedEventIds.add(existing.id);
+            }
+          }
+        }
+        const audit: ExternalMemoryImportDecision = {
+          candidate: structuredClone(item.candidate), action, existingEventIds: targets,
+          ...(createdEvent ? { createdEventId: createdEvent.id } : {}),
+          ...(reason ? { reason } : {}),
+        };
+        decisions.push(audit);
+      }
+      if (addedEvents.length > 0) {
+        const ids = addedEvents.map(({ id }) => id);
+        this.queueElementProjection(ids);
+        this.queueGraphProjection(ids, 2_000);
+      }
+      return {
+        sourceBlockId: source.id,
+        decisions,
+        addedEvents,
+        changedEventIds: [...changedEventIds],
+      };
+    });
+  }
+
   async searchEvents(query: string, options: SearchOptions = {}): Promise<EventSearchResult[]> {
     const limit = Math.max(1, Math.min(20, options.limit ?? 6));
     const participants = (options.participants ?? []).map(normalizeSearchText).filter(Boolean);
@@ -1007,6 +1111,46 @@ export class StrataGate {
 
   async close(): Promise<void> {
     await this.storage?.close?.();
+  }
+
+  private normalizeExternalAction(value: unknown): ExternalMemoryAction {
+    const action = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    return action === 'ADD' || action === 'MERGE' || action === 'SUPERSEDE'
+      || action === 'CONFLICT' || action === 'IGNORE' ? action : 'IGNORE';
+  }
+
+  private createExternalSourceBlock(text: string, importedAt: string): MemoryBlock {
+    const blockId = this.idFactory('blk');
+    const threadId = `external-import:${blockId}`;
+    const message: RawMessage = {
+      id: this.idFactory('msg'),
+      role: 'user',
+      content: text,
+      createdAt: importedAt,
+      threadId,
+    };
+    const firstLine = text.split(/\r?\n/u).map((line) => line.trim()).find(Boolean) ?? 'External AI memory import';
+    const block: MemoryBlock = {
+      id: blockId,
+      threadId,
+      sequence: this.blocks.length + 1,
+      startTurn: 1,
+      endTurn: 1,
+      createdAt: importedAt,
+      l0Title: firstLine.slice(0, 80),
+      l0Tags: ['external-memory-import'],
+      l1Summary: text.replace(/\s+/gu, ' ').trim().slice(0, 500),
+      l2Keypoints: text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).slice(0, 8),
+      shouldExtract: false,
+      ...deterministicBlockLayers([message]),
+      pointerCurrentLevel: 5,
+      pointerAnchorLevel: 5,
+      pointerAnchorBlockPosition: 1,
+      lastLiftedAt: null,
+      lastLiftedBy: null,
+    };
+    this.blocks.push(block);
+    return block;
   }
 
   private addEventInMemory(input: EventCardInput): EventCard {

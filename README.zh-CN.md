@@ -205,6 +205,23 @@ await memory.recordMemoryUse({ eventIds, elementIds });
 以后更容易排在前面
 ```
 
+### 6. 外部 AI 记忆迁移
+
+可以把另一个 AI 的记忆总结直接迁移到 StrataGate。`importExternalMemory()` 将导入拆成固定的五步：
+
+```text
+外部 AI 总结
+    ↓ extractor：提取候选 Event
+    ↓ searchEvents：每个候选只检索现有 Event 的 Top-K
+    ↓ decider：ADD / MERGE / SUPERSEDE / CONFLICT / IGNORE
+    ↓ 写入新 Event，保留旧 Event 与来源链
+    ↓ 仅为新写入的规范 Event 创建图谱投影任务
+```
+
+库导出 `EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN`、`EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN` 和 `externalMemoryJsonExtractor`，可让外部 AI 输出可校验的 `stratagate.external-memory.v2` JSON，并让本地模型按五种动作裁决。v2 将 `memoryKind` 与 `category` 分开；时间字段严格区分“被提及时间”和“实际发生时间”：不确定时省略日期并保留 `originalText`，绝不从当前日期或聊天顺序猜测。
+
+完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。
+
 新事件可以取代旧事件，但旧事件及其来源仍然保留。遗忘可以让事件退出搜索，同时不破坏来源链路。
 
 ## 一次真实的检索

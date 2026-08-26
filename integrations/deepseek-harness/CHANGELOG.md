@@ -187,3 +187,6 @@
 ## 0.1.0
 
 - Initial DeepSeek Harness integration with automatic ingestion, retrieval, expansion, evidence assessment, and use-only reinforcement.
+# 0.2.31
+
+- Add v2 external AI memory export/import flow with time-safe candidate parsing and Event adjudication support.

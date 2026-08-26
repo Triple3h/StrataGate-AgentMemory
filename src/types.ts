@@ -147,6 +147,78 @@ export interface ExtractionResult {
 
 export type EventExtractor = (context: ExtractionContext) => Promise<ExtractionResult>;
 
+/** Memory kinds emitted by the v2 external AI export format. */
+export type ExternalMemoryKind = 'instruction' | 'preference' | 'fact' | 'event';
+
+/** A candidate memory produced by an external AI memory export. */
+export type ExternalMemoryCandidate = Omit<EventCardInput, 'id' | 'sourceMessageIds' | 'sourceBlockId'> & {
+  memoryKind?: ExternalMemoryKind;
+  category?: 'instruction' | 'identity' | 'career' | 'project' | 'preference';
+};
+
+export type ExternalMemoryAction = 'ADD' | 'MERGE' | 'SUPERSEDE' | 'CONFLICT' | 'IGNORE';
+
+export interface ExternalMemoryExtractionContext {
+  text: string;
+  importedAt: string;
+}
+
+export interface ExternalMemoryExtractionResult {
+  candidates: ExternalMemoryCandidate[];
+  reason?: string;
+}
+
+export interface ExternalMemoryMatch {
+  event: EventCard;
+  score: number;
+}
+
+export interface ExternalMemoryDecisionContext {
+  candidate: ExternalMemoryCandidate;
+  matches: ExternalMemoryMatch[];
+}
+
+export interface ExternalMemoryDecision {
+  action: ExternalMemoryAction;
+  /** Existing event IDs this decision refers to. */
+  existingEventIds?: string[];
+  /** Optional consolidated candidate used by MERGE. */
+  mergedCandidate?: ExternalMemoryCandidate;
+  reason?: string;
+}
+
+export type ExternalMemoryExtractor = (
+  context: ExternalMemoryExtractionContext,
+) => Promise<ExternalMemoryExtractionResult>;
+
+export type ExternalMemoryDecider = (
+  context: ExternalMemoryDecisionContext,
+) => Promise<ExternalMemoryDecision>;
+
+export interface ExternalMemoryImportOptions {
+  text: string;
+  /** Optional when `text` is the JSON format produced by the built-in prompt. */
+  extractor?: ExternalMemoryExtractor;
+  decider: ExternalMemoryDecider;
+  topK?: number;
+  importedAt?: string;
+}
+
+export interface ExternalMemoryImportDecision {
+  candidate: ExternalMemoryCandidate;
+  action: ExternalMemoryAction;
+  existingEventIds: string[];
+  createdEventId?: string;
+  reason?: string;
+}
+
+export interface ExternalMemoryImportResult {
+  sourceBlockId: string;
+  decisions: ExternalMemoryImportDecision[];
+  addedEvents: EventCard[];
+  changedEventIds: string[];
+}
+
 export type MemoryElementType = 'person' | 'project' | 'organization' | 'tool' | 'place';
 export type ElementFactMode = 'state' | 'set' | 'relation';
 export type ElementFactStatus = 'active' | 'superseded' | 'disputed';

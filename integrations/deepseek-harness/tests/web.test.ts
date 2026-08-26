@@ -139,7 +139,7 @@ const skippedRuntime = {
     : null,
 } as unknown as StrataGateRuntime
 
-async function request(url: string, method = 'GET', targetRuntime = runtime): Promise<{ status: number; body: any; headers: Record<string, string> }> {
+async function request(url: string, method = 'GET', targetRuntime = runtime, body?: unknown): Promise<{ status: number; body: any; headers: Record<string, string> }> {
   const headers: Record<string, string> = {}
   let text = ''
   const response: WebResponse = {
@@ -147,11 +147,27 @@ async function request(url: string, method = 'GET', targetRuntime = runtime): Pr
     setHeader: (name, value) => { headers[name] = value },
     end: (body) => { text = body },
   }
-  await handleAdminRequest(targetRuntime, { method, url }, response)
+  await handleAdminRequest(targetRuntime, { method, url, body }, response)
   return { status: response.statusCode, body: JSON.parse(text), headers }
 }
 
 describe('StrataGate admin routes', () => {
+  it('accepts external memory JSON through the import route', async () => {
+    let received: { namespace: string; text: string } | null = null
+    const importRuntime = {
+      adminImportExternalMemory: async (namespace: string, text: string) => {
+        received = { namespace, text }
+        return { importedCount: 2 }
+      },
+    } as unknown as StrataGateRuntime
+    const result = await request('/api/stratagate/import', 'POST', importRuntime, {
+      namespace: 'dsh:project:test',
+      text: '{"schemaVersion":"stratagate.external-memory.v2","candidates":[]}',
+    })
+    expect(result).toMatchObject({ status: 200, body: { importedCount: 2 } })
+    expect(received).toEqual({ namespace: 'dsh:project:test', text: '{"schemaVersion":"stratagate.external-memory.v2","candidates":[]}' })
+  })
+
   it('does not label a block without an extraction job as actively processing', async () => {
     const result = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Awaiting&kind=blocks', 'GET', waitingRuntime)
     expect(result.body.items[0]).toMatchObject({ status: 'waiting', eventExtraction: null })
