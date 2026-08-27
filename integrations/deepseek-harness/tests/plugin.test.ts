@@ -39,7 +39,7 @@ describe('DSH plugin composition', () => {
       const prompt = await ctx.systemPrompt.assemble()
       expect(prompt.sections).toContainEqual(expect.objectContaining({
         name: 'tool:stratagate-memory',
-        text: expect.stringContaining('StrataGate provides durable, evidence-gated memory'),
+        text: expect.stringMatching(/StrataGate provides durable, evidence-gated memory[\s\S]*independent batch[\s\S]*batch_id/),
       }))
 
       const session = {

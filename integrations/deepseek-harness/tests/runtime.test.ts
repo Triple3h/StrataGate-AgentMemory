@@ -588,4 +588,194 @@ describe('DSH runtime ingestion', () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+  it('keeps parallel retrieval batches independently assessable and recordable', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-parallel-batches-'))
+    const database = join(directory, 'memory.db')
+    const runtime = new StrataGateRuntime({
+      database,
+      namespaceMode: 'project',
+      namespacePrefix: 'dsh',
+      globalNamespace: 'global',
+      blockTurnSize: 1,
+      blockDecayLambda: 0.3,
+      ingestSubagents: false,
+      maxOutputTokens: 2048,
+    }, fakeModels)
+    const activeSession = {
+      ...session,
+      events: [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 10 } }],
+    } as unknown as Session
+    const namespace = runtime.namespaceFor(activeSession)
+
+    try {
+      const memory = await (runtime as unknown as { space: (active: Session) => Promise<StrataGate> })
+        .space(activeSession)
+      await memory.appendTurn({
+        user: 'Use pnpm for this project.',
+        assistant: 'Recorded.',
+        threadId: String(activeSession.id),
+      })
+      const sourceBlock = memory.listBlocks()[0]!
+      const event = await memory.addEvent({
+        title: 'Use pnpm',
+        summary: 'The project package manager is pnpm.',
+        sourceMessageIds: [sourceBlock.l5Raw[0]!.id],
+        sourceBlockId: sourceBlock.id,
+      })
+      const projection = await memory.claimNextGraphProjection()
+      expect(projection).not.toBeNull()
+      await memory.completeGraphProjection(projection!.jobId, {
+        reason: 'package manager state',
+        nodes: [{
+          ref: 'pnpm',
+          name: 'pnpm',
+          type: 'tool',
+          state: 'selected package manager',
+          facts: [{ key: 'role', value: 'project package manager', sourceEventIds: [event.id] }],
+          sourceEventIds: [event.id],
+        }],
+        edges: [],
+      })
+      await memory.addEvent({
+        title: 'pnpm compatibility note',
+        summary: 'A second pnpm Event should remain unreinforced unless its ref is assessed and used.',
+        sourceMessageIds: [sourceBlock.l5Raw[0]!.id],
+        sourceBlockId: sourceBlock.id,
+      })
+
+      type Batch = { batchId: string; evidenceRefs: string[] }
+      const [eventBatch, graphBatch, rawBatch, blockBatch] = await Promise.all([
+        runtime.searchEvents(activeSession, 'pnpm') as Promise<Batch>,
+        runtime.searchGraph(activeSession, 'pnpm') as Promise<Batch>,
+        runtime.searchRaw(activeSession, 'pnpm') as Promise<Batch>,
+        runtime.blocks(activeSession) as Promise<Batch>,
+      ])
+      expect(new Set([eventBatch.batchId, graphBatch.batchId, rawBatch.batchId, blockBatch.batchId]).size).toBe(4)
+      expect(eventBatch.evidenceRefs).not.toHaveLength(0)
+      expect(graphBatch.evidenceRefs).not.toHaveLength(0)
+      expect(rawBatch.evidenceRefs).not.toHaveLength(0)
+      expect(blockBatch.evidenceRefs).not.toHaveLength(0)
+      const pendingBatchIds = runtime.pendingBatchIds(activeSession)
+      expect(new Set(pendingBatchIds)).toEqual(new Set([
+        eventBatch.batchId,
+        graphBatch.batchId,
+        rawBatch.batchId,
+        blockBatch.batchId,
+      ]))
+      const latestBatchId = pendingBatchIds.at(-1)!
+
+      const eventRef = eventBatch.evidenceRefs[0]!
+      const graphRef = graphBatch.evidenceRefs[0]!
+      const assessment = await runtime.assess(activeSession, {
+        verdict: 'sufficient',
+        evidence_refs: [eventRef, graphRef, graphRef, 'event:not-real'],
+        fit: 'The Event directly records the decision.',
+        missing: '',
+        next_strategy: 'answer',
+      }, eventBatch.batchId) as {
+        batchId: string
+        evidenceRefs: string[]
+        rejectedEvidenceRefs: Array<{ ref: string; reason: string }>
+      }
+      expect(assessment).toMatchObject({
+        batchId: eventBatch.batchId,
+        evidenceRefs: [eventRef],
+        rejectedEvidenceRefs: [
+          { ref: graphRef, reason: 'not_in_batch' },
+          { ref: graphRef, reason: 'duplicate' },
+          { ref: 'event:not-real', reason: 'not_in_batch' },
+        ],
+      })
+
+      const invalidRefs = [
+        eventRef,
+        ...eventBatch.evidenceRefs.slice(1),
+        graphRef,
+        'event:not-real',
+        ' ',
+      ]
+      await expect(runtime.recordUse(
+        activeSession,
+        'parallel-invalid',
+        invalidRefs,
+        eventBatch.batchId,
+      )).rejects.toSatisfy((error: Error) => {
+        expect(error.message).toContain('memory_record_use rejected invalid evidence refs')
+        expect(error.message).toContain(eventBatch.batchId)
+        expect(error.message).toContain(graphRef)
+        expect(error.message).toContain('event:not-real')
+        expect(error.message).toContain('not_adopted')
+        expect(error.message).toContain('not_in_batch')
+        expect(error.message).toContain('invalid_ref')
+        expect(error.message).toContain(`Available refs for ${eventBatch.batchId}`)
+        expect(error.message).toContain(`Latest batch: ${latestBatchId}`)
+        for (const ref of eventBatch.evidenceRefs.slice(1)) expect(error.message).toContain(ref)
+        return true
+      })
+      expect(runtime.pendingBatchIds(activeSession)).toContain(eventBatch.batchId)
+
+      const recordedEvent = await runtime.recordUse(
+        activeSession,
+        'parallel-event',
+        [eventRef, eventRef],
+        eventBatch.batchId,
+      ) as { batchId: string; evidenceRefs: string[]; duplicateEvidenceRefs: string[] }
+      expect(recordedEvent).toMatchObject({
+        batchId: eventBatch.batchId,
+        evidenceRefs: [eventRef],
+        duplicateEvidenceRefs: [eventRef],
+      })
+
+      await runtime.assess(activeSession, {
+        verdict: 'sufficient',
+        evidence_refs: graphBatch.evidenceRefs,
+        fit: 'The graph node reflects Event-backed current state.',
+        missing: '',
+        next_strategy: 'answer',
+      }, graphBatch.batchId)
+      await runtime.recordUse(activeSession, 'parallel-graph', graphBatch.evidenceRefs, graphBatch.batchId)
+
+      // rawBatch is older than blockBatch but remains addressable after newer batches are created.
+      await runtime.assess(activeSession, {
+        verdict: 'sufficient',
+        evidence_refs: rawBatch.evidenceRefs,
+        fit: 'The archived source message directly states the choice.',
+        missing: '',
+        next_strategy: 'answer',
+      }, rawBatch.batchId)
+      await runtime.recordUse(activeSession, 'parallel-raw', rawBatch.evidenceRefs, rawBatch.batchId)
+      await runtime.recordUse(activeSession, 'parallel-block-empty', [], blockBatch.batchId)
+      expect(runtime.needsRecordUse(activeSession)).toBe(false)
+
+      const receipts = (await runtime.adminSnapshot(namespace))?.usageReceipts ?? []
+      expect(receipts).toContainEqual(expect.objectContaining({
+        id: 'dsh:session-runtime:tool:parallel-event',
+        audit: expect.objectContaining({ batchId: eventBatch.batchId, evidenceRefs: [eventRef] }),
+      }))
+      expect(receipts).toContainEqual(expect.objectContaining({
+        id: 'dsh:session-runtime:tool:parallel-graph',
+        audit: expect.objectContaining({ batchId: graphBatch.batchId, evidenceRefs: graphBatch.evidenceRefs }),
+      }))
+      expect(receipts).toContainEqual(expect.objectContaining({
+        id: 'dsh:session-runtime:tool:parallel-block-empty',
+        audit: expect.objectContaining({ batchId: blockBatch.batchId, evidenceRefs: [] }),
+      }))
+
+      // Existing sequential calls remain valid when batch_id is omitted.
+      const sequential = await runtime.searchEvents(activeSession, 'pnpm') as Batch
+      await runtime.assess(activeSession, {
+        verdict: 'sufficient',
+        evidence_refs: sequential.evidenceRefs,
+        fit: 'Direct Event evidence.',
+        missing: '',
+        next_strategy: 'answer',
+      })
+      await runtime.recordUse(activeSession, 'sequential-compatible', sequential.evidenceRefs)
+      expect(runtime.needsRecordUse(activeSession)).toBe(false)
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })

@@ -1034,8 +1034,8 @@ export class StrataGate {
     });
   }
 
-  assessRetrieval(input: RetrievalAssessmentInput, latestEvidenceRefs: ReadonlySet<string>): RetrievalAssessment {
-    return normalizeRetrievalAssessment(input, latestEvidenceRefs);
+  assessRetrieval(input: RetrievalAssessmentInput, batchEvidenceRefs: ReadonlySet<string>): RetrievalAssessment {
+    return normalizeRetrievalAssessment(input, batchEvidenceRefs);
   }
 
   async recordMemoryUse(refs: readonly string[] | MemoryUseRefs, options: RecordMemoryUseOptions = {}): Promise<void> {

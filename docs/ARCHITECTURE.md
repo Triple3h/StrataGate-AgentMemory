@@ -181,6 +181,12 @@ The assessment contract is deliberately small:
 interface RetrievalAssessment {
   verdict: 'sufficient' | 'partial' | 'wrong';
   evidenceRefs: string[];
+  rejectedEvidenceRefs: Array<{
+    inputIndex: number;
+    ref: string;
+    reason: 'invalid_ref' | 'duplicate' | 'not_in_batch' | 'limit_exceeded';
+    detail: string;
+  }>;
   fit: string;
   missing: string;
   nextStrategy:
@@ -196,7 +202,7 @@ interface RetrievalAssessment {
 
 Normalization enforces three conditions before `sufficient` is accepted:
 
-1. at least one evidence ID belongs to the latest retrieval batch;
+1. at least one evidence ID belongs to the selected retrieval batch;
 2. the chosen next strategy is `answer`;
 3. the assessment uses the bounded schema rather than carrying a growing private scratchpad.
 

@@ -87,7 +87,7 @@ Activated memory uses the current human message plus the latest two open-tail tu
 
 Automatic context contains only compact Event and fact fields from other conversations and is explicitly marked as historical background rather than instructions. Current-session Block evidence is excluded because each Block's current decayed representation already exists in native DSH history. Building automatic context never calls `recordMemoryUse`, increments `mentionCount`, or changes `lastAdoptedTurn`. The existing `memory_*` tools remain available for deeper, evidence-gated retrieval and are the only path to adoption reinforcement.
 
-Every explicit retrieval batch must be closed with `memory_record_use`. The model passes the exact `evidence_refs` used in its answer, or `[]` when it used none. Selected Event evidence is reinforced once; an empty list writes a zero-increment receipt.
+Every explicit retrieval creates an independent batch. The model passes its `batch_id` to `memory_assess`, then closes that same batch with `memory_record_use`. It passes the exact `evidence_refs` from that batch used in its answer, or `[]` when it used none. Selected Event evidence is reinforced once; an empty list writes a zero-increment receipt with the real batch ID.
 
 The plugin registers these tools:
 
@@ -101,7 +101,7 @@ memory_record_use
 
 Legacy Element tool names remain available only for compatibility with existing installations.
 
-The prompt protocol requires assessment before relying on retrieved evidence. Search does not strengthen a memory. Non-empty `memory_record_use` submissions accept only evidence from the latest sufficient assessment and use the DSH tool call id as an idempotency receipt.
+The prompt protocol requires assessment before relying on retrieved evidence. Search does not strengthen a memory. Non-empty `memory_record_use` submissions accept only evidence adopted by a sufficient assessment of the selected batch and use the DSH tool call id as an idempotency receipt. `batch_id` may be omitted for compatibility in strictly sequential flows, where it selects the latest batch; parallel or interleaved retrievals must pass it explicitly. Assessment responses list rejected refs and their reasons.
 
 ## Memory UI and usage audit
 

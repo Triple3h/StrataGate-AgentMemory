@@ -21,7 +21,7 @@ function sessionOf(exec: ToolRunContext): Session {
 export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): void {
   ctx.tools.register(defineTool({
     name: 'memory_search_events',
-    description: 'Search durable StrataGate event memories. Returns a batchId, evidenceRefs, and ranked event cards. Assess the returned batch before relying on it.',
+    description: 'Search durable StrataGate event memories. Returns a batchId, evidenceRefs, and ranked event cards. Pass that batchId to memory_assess before relying on its evidence.',
     parameters: {
       query: { type: 'string', required: true, description: 'What historical decision, event, preference, or outcome to find.' },
       limit: { type: 'integer', description: 'Maximum results, 1-20.' },
@@ -40,7 +40,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_search_graph',
-    description: 'Search the current Event-backed Knowledge Graph for people, projects, organizations, tools, places, facts, and relations.',
+    description: 'Search the current Event-backed Knowledge Graph for people, projects, organizations, tools, places, facts, and relations. Returns an independently assessable retrieval batch.',
     parameters: {
       query: { type: 'string', required: true },
       limit: { type: 'integer', description: 'Maximum results, 1-20.' },
@@ -76,7 +76,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_search_raw',
-    description: 'Search verbatim archived messages when summarized memories are insufficient. Returns raw evidence refs for assessment.',
+    description: 'Search verbatim archived messages when summarized memories are insufficient. Returns raw evidence refs and a batchId for assessment.',
     parameters: {
       query: { type: 'string', required: true },
       limit: { type: 'integer' },
@@ -87,7 +87,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_get_blocks',
-    description: 'List decayed conversation-block summaries and their current detail levels. Use this to browse memory structure before expanding a block.',
+    description: 'List decayed conversation-block summaries and their current detail levels. Returns block evidence refs and a batchId for assessment.',
     parameters: {},
     output: jsonOutput,
     execute: async (_args, exec) => runtime.blocks(sessionOf(exec)) as never,
@@ -95,7 +95,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_expand_block',
-    description: 'Expand one memory block to a more detailed layer. The result becomes the latest evidence batch and must be assessed.',
+    description: 'Expand one memory block to a more detailed layer. The result is a new evidence batch and must be assessed.',
     parameters: {
       id: { type: 'string', required: true },
       target: { oneOf: [{ type: 'string' }, { type: 'integer' }] },
@@ -106,7 +106,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_expand_event',
-    description: 'Retrieve one complete Event card by id. The result becomes the latest evidence batch and must be assessed.',
+    description: 'Retrieve one complete Event card by id. The result is a new evidence batch and must be assessed.',
     parameters: {
       id: { type: 'string', required: true },
     },
@@ -116,7 +116,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_expand_element',
-    description: 'Expand an Element card, optionally as it was at an ISO date. The result becomes the latest evidence batch and must be assessed.',
+    description: 'Expand an Element card, optionally as it was at an ISO date. The result is a new evidence batch and must be assessed.',
     parameters: {
       id: { type: 'string', required: true },
       at: { type: 'string' },
@@ -127,8 +127,9 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_assess',
-    description: 'Apply StrataGate Evidence Gate to the latest retrieval batch. A sufficient verdict requires real refs from that batch and nextStrategy=answer.',
+    description: 'Apply StrataGate Evidence Gate to a retrieval batch. Pass batch_id from the retrieval result; omitting it remains compatible with sequential flows and selects the latest batch. The response reports every input ref that was not adopted and why.',
     parameters: {
+      batch_id: { type: 'string', description: 'The batchId returned by the retrieval to assess. Omit only in a strictly sequential flow.' },
       verdict: { type: 'string', enum: ['sufficient', 'partial', 'wrong'] as const, required: true },
       evidence_refs: { type: 'array', items: { type: 'string' }, required: true },
       fit: { type: 'string', required: true },
@@ -140,13 +141,14 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
       },
     },
     output: jsonOutput,
-    execute: async (args, exec) => runtime.assess(sessionOf(exec), args) as never,
+    execute: async (args, exec) => runtime.assess(sessionOf(exec), args, args.batch_id) as never,
   }))
 
   ctx.tools.register(defineTool({
     name: 'memory_record_use',
-    description: 'Required after every StrataGate retrieval. Pass exactly the evidenceRefs actually used in the answer, or an empty array when none were used. Non-empty refs require a sufficient assessment of the latest batch.',
+    description: 'Close one StrataGate retrieval batch. Pass its batch_id and exactly the evidenceRefs from that batch actually used in the answer, or [] when none were used. Non-empty refs require that batch\'s sufficient assessment. Omitting batch_id selects the latest batch for sequential compatibility.',
     parameters: {
+      batch_id: { type: 'string', description: 'The batchId to close. Omit only in a strictly sequential flow.' },
       evidence_refs: { type: 'array', items: { type: 'string' }, required: true },
     },
     output: jsonOutput,
@@ -154,6 +156,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
       sessionOf(exec),
       String(exec.callId),
       args.evidence_refs,
+      args.batch_id,
     ) as never,
   }))
 }

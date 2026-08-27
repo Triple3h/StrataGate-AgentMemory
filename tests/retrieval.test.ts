@@ -9,7 +9,11 @@ describe('evidence gate', () => {
       fit: 'looks relevant',
       missing: '',
       next_strategy: 'answer',
-    }, new Set(['fresh'])).verdict).toBe('partial');
+    }, new Set(['fresh']))).toMatchObject({
+      verdict: 'partial',
+      evidenceRefs: [],
+      rejectedEvidenceRefs: [{ ref: 'old', reason: 'not_in_batch' }],
+    });
 
     expect(normalizeRetrievalAssessment({
       verdict: 'sufficient',
@@ -20,7 +24,26 @@ describe('evidence gate', () => {
     }, new Set(['fresh']))).toMatchObject({
       verdict: 'sufficient',
       evidenceRefs: ['fresh'],
+      rejectedEvidenceRefs: [],
       nextStrategy: 'answer',
+    });
+  });
+
+  it('reports every evidence ref that was not adopted', () => {
+    expect(normalizeRetrievalAssessment({
+      verdict: 'sufficient',
+      evidence_refs: ['fresh', 'fresh', 'old', ''],
+      fit: 'one direct source',
+      missing: '',
+      next_strategy: 'answer',
+    }, new Set(['fresh']))).toMatchObject({
+      verdict: 'sufficient',
+      evidenceRefs: ['fresh'],
+      rejectedEvidenceRefs: [
+        { inputIndex: 1, ref: 'fresh', reason: 'duplicate' },
+        { inputIndex: 2, ref: 'old', reason: 'not_in_batch' },
+        { inputIndex: 3, ref: '', reason: 'invalid_ref' },
+      ],
     });
   });
 });

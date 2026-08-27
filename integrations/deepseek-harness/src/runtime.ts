@@ -32,14 +32,18 @@ interface EvidenceTarget {
   elementIds: string[]
 }
 
-interface AdoptedEvidence extends EvidenceTarget {
-  batchId: string
-  assessment: RetrievalAssessment
-}
-
 interface RetrievalBatch {
   id: string
   refs: Map<string, EvidenceTarget>
+  status: 'unresolved' | 'recorded'
+  assessment?: RetrievalAssessment
+}
+
+interface RecordRefIssue {
+  inputIndex: number
+  ref: string
+  reason: 'invalid_ref' | 'not_in_batch' | 'not_adopted'
+  detail: string
 }
 
 const AUTO_EVENT_LIMIT = 4
@@ -64,9 +68,8 @@ function workspaceDisplayName(cwd: string | undefined): string {
 export class StrataGateRuntime {
   private readonly folder = new TurnFolder()
   private readonly spaces = new Map<string, Promise<StrataGate>>()
-  private readonly batches = new Map<string, RetrievalBatch>()
-  private readonly adopted = new Map<string, AdoptedEvidence>()
-  private readonly pendingUse = new Set<string>()
+  private readonly batches = new Map<string, Map<string, RetrievalBatch>>()
+  private readonly latestBatchIds = new Map<string, string>()
   private readonly workspaceNames = new Map<string, string>()
   private readonly migrationTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private ingestTail: Promise<void> = Promise.resolve()
@@ -175,59 +178,100 @@ export class StrataGateRuntime {
     }], event)
   }
 
-  async assess(session: Session, input: RetrievalAssessmentInput): Promise<unknown> {
-    const key = String(session.id)
-    const batch = this.batches.get(key)
-    if (!batch) throw new Error('No StrataGate retrieval batch exists for this session')
+  async assess(session: Session, input: RetrievalAssessmentInput, batchId?: string): Promise<unknown> {
+    const batch = this.requireBatch(session, batchId, 'memory_assess')
+    if (batch.status !== 'unresolved') {
+      throw new Error(this.batchError(
+        session,
+        batch,
+        `Batch ${batch.id} was already recorded and cannot be assessed again.`,
+      ))
+    }
     const memory = await this.space(session)
     const assessment = memory.assessRetrieval(input, new Set(batch.refs.keys()))
-    if (assessment.verdict === 'sufficient') {
-      const eventIds = new Set<string>()
-      const elementIds = new Set<string>()
-      for (const ref of assessment.evidenceRefs) {
-        const target = batch.refs.get(ref)
-        for (const id of target?.eventIds ?? []) eventIds.add(id)
-        for (const id of target?.elementIds ?? []) elementIds.add(id)
-      }
-      this.adopted.set(key, {
-        eventIds: [...eventIds],
-        elementIds: [...elementIds],
-        batchId: batch.id,
-        assessment,
-      })
-    } else {
-      this.adopted.delete(key)
+    batch.assessment = assessment
+    return {
+      batchId: batch.id,
+      batchStatus: batch.status,
+      latestBatchId: this.latestBatchIds.get(String(session.id)),
+      ...assessment,
     }
-    return { batchId: batch.id, ...assessment }
   }
 
-  async recordUse(session: Session, receiptId: string, evidenceRefs: readonly string[]): Promise<unknown> {
+  async recordUse(
+    session: Session,
+    receiptId: string,
+    evidenceRefs: readonly string[],
+    batchId?: string,
+  ): Promise<unknown> {
     const key = String(session.id)
-    const selectedRefs = [...new Set(evidenceRefs.map((ref) => ref.trim()).filter(Boolean))]
-    const batch = this.batches.get(key)
-    if (!this.pendingUse.has(key) || !batch) {
-      throw new Error('No unresolved StrataGate retrieval batch exists for this session')
+    const batch = this.requireBatch(session, batchId, 'memory_record_use')
+    if (batch.status !== 'unresolved') {
+      throw new Error(this.batchError(
+        session,
+        batch,
+        `Batch ${batch.id} was already recorded and has no pending usage receipt.`,
+      ))
     }
-    if (selectedRefs.length === 0) {
-      await (await this.space(session)).recordMemoryUse({ eventIds: [], elementIds: [] }, {
-        receiptId: `dsh:${key}:tool:${receiptId}`,
-      })
-      this.pendingUse.delete(key)
-      this.adopted.delete(key)
-      return { recorded: true, incremented: 0, evidenceRefs: [] }
+    const selectedRefInputs: Array<{ inputIndex: number; ref: string }> = []
+    const duplicateEvidenceRefs: string[] = []
+    const issues: RecordRefIssue[] = []
+    const seen = new Set<string>()
+    for (const [inputIndex, value] of evidenceRefs.entries()) {
+      const ref = value.trim()
+      if (!ref) {
+        issues.push({
+          inputIndex,
+          ref,
+          reason: 'invalid_ref',
+          detail: 'Evidence refs must be non-empty strings returned by the selected retrieval batch.',
+        })
+        continue
+      }
+      if (seen.has(ref)) {
+        duplicateEvidenceRefs.push(ref)
+        continue
+      }
+      seen.add(ref)
+      selectedRefInputs.push({ inputIndex, ref })
+    }
+    const selectedRefs = selectedRefInputs.map(({ ref }) => ref)
+
+    const assessment = batch.assessment
+    const assessedRefs = new Set(assessment?.verdict === 'sufficient' ? assessment.evidenceRefs : [])
+    for (const { inputIndex, ref } of selectedRefInputs) {
+      if (!batch.refs.has(ref)) {
+        issues.push({
+          inputIndex,
+          ref,
+          reason: 'not_in_batch',
+          detail: `This ref was not returned by batch ${batch.id}.`,
+        })
+      } else if (!assessedRefs.has(ref)) {
+        issues.push({
+          inputIndex,
+          ref,
+          reason: 'not_adopted',
+          detail: assessment?.verdict === 'sufficient'
+            ? `This ref was not adopted by the sufficient assessment for batch ${batch.id}.`
+            : `Batch ${batch.id} has no sufficient assessment that adopts this ref.`,
+        })
+      }
+    }
+    if (issues.length > 0) {
+      throw new Error(this.batchError(
+        session,
+        batch,
+        'memory_record_use rejected invalid evidence refs.',
+        issues,
+      ))
     }
 
-    const adopted = this.adopted.get(key)
-    if (!adopted || adopted.batchId !== batch.id) {
-      throw new Error('Non-empty evidence_refs require a sufficient assessment of the latest retrieval batch')
-    }
-    const assessedRefs = new Set(adopted.assessment.evidenceRefs)
     const eventIds = new Set<string>()
     const elementIds = new Set<string>()
     for (const ref of selectedRefs) {
-      if (!assessedRefs.has(ref)) throw new Error(`Evidence ref was not adopted by the latest assessment: ${ref}`)
       const target = batch.refs.get(ref)
-      if (!target) throw new Error(`Evidence ref does not belong to the latest retrieval batch: ${ref}`)
+      if (!target) continue
       for (const id of target.eventIds) eventIds.add(id)
       for (const id of target.elementIds) elementIds.add(id)
     }
@@ -240,27 +284,36 @@ export class StrataGateRuntime {
       audit: {
         sessionId: key,
         ...(turn === undefined ? {} : { turn }),
-        batchId: adopted.batchId,
+        batchId: batch.id,
         evidenceRefs: selectedRefs,
-        verdict: adopted.assessment.verdict,
-        fit: adopted.assessment.fit,
-        missing: adopted.assessment.missing,
-        nextStrategy: adopted.assessment.nextStrategy,
+        ...(assessment === undefined ? {} : {
+          verdict: assessment.verdict,
+          fit: assessment.fit,
+          missing: assessment.missing,
+          nextStrategy: assessment.nextStrategy,
+        }),
       },
     })
-    this.pendingUse.delete(key)
-    this.adopted.delete(key)
+    batch.status = 'recorded'
     return {
+      batchId: batch.id,
+      batchStatus: batch.status,
       recorded: true,
       incremented: eventIds.size + elementIds.size,
       evidenceRefs: selectedRefs,
+      duplicateEvidenceRefs,
       eventIds: [...eventIds],
       elementIds: [...elementIds],
+      unresolvedBatchIds: this.unresolvedBatchIds(session),
     }
   }
 
   needsRecordUse(session: Session): boolean {
-    return this.pendingUse.has(String(session.id))
+    return this.unresolvedBatchIds(session).length > 0
+  }
+
+  pendingBatchIds(session: Session): string[] {
+    return this.unresolvedBatchIds(session)
   }
 
   async flush(): Promise<void> {
@@ -691,10 +744,62 @@ export class StrataGateRuntime {
     const id = `batch_${++this.batchSequence}`
     const refs = new Map(evidence.map(({ ref, target }) => [ref, target]))
     const key = String(session.id)
-    this.batches.set(key, { id, refs })
-    this.pendingUse.add(key)
-    this.adopted.delete(key)
+    let sessionBatches = this.batches.get(key)
+    if (!sessionBatches) {
+      sessionBatches = new Map()
+      this.batches.set(key, sessionBatches)
+    }
+    sessionBatches.set(id, { id, refs, status: 'unresolved' })
+    this.latestBatchIds.set(key, id)
     return { batchId: id, evidenceRefs: [...refs.keys()], results }
+  }
+
+  private requireBatch(session: Session, batchId: string | undefined, operation: string): RetrievalBatch {
+    const key = String(session.id)
+    const selectedId = batchId?.trim() || this.latestBatchIds.get(key)
+    const sessionBatches = this.batches.get(key)
+    const batch = selectedId ? sessionBatches?.get(selectedId) : undefined
+    if (batch) return batch
+    const availableBatchIds = [...(sessionBatches?.keys() ?? [])]
+    const unresolvedBatchIds = this.unresolvedBatchIds(session)
+    const requested = batchId?.trim()
+      ? `Unknown retrieval batch: ${batchId.trim()}.`
+      : 'No StrataGate retrieval batch exists for this session.'
+    throw new Error([
+      `${operation} could not select a retrieval batch. ${requested}`,
+      `Latest batch: ${this.latestBatchIds.get(key) ?? 'none'}.`,
+      `Unresolved batches: ${JSON.stringify(unresolvedBatchIds)}.`,
+      `Available batches: ${JSON.stringify(availableBatchIds)}.`,
+    ].join(' '))
+  }
+
+  private unresolvedBatchIds(session: Session): string[] {
+    const sessionBatches = this.batches.get(String(session.id))
+    if (!sessionBatches) return []
+    return [...sessionBatches.values()]
+      .filter(({ status }) => status === 'unresolved')
+      .map(({ id }) => id)
+  }
+
+  private batchError(
+    session: Session,
+    batch: RetrievalBatch,
+    summary: string,
+    invalidEvidenceRefs: readonly RecordRefIssue[] = [],
+  ): string {
+    const key = String(session.id)
+    const assessmentStatus = batch.assessment?.verdict ?? 'not_assessed'
+    const latestBatch = this.latestBatchIds.get(key)
+    const latestState = latestBatch ? this.batches.get(key)?.get(latestBatch) : undefined
+    return [
+      summary,
+      `Invalid evidence refs: ${JSON.stringify(invalidEvidenceRefs)}.`,
+      `Requested batch: ${batch.id} (status=${batch.status}, assessment=${assessmentStatus}).`,
+      `Latest batch: ${latestBatch ?? 'none'}${latestState ? ` (status=${latestState.status}, assessment=${latestState.assessment?.verdict ?? 'not_assessed'})` : ''}.`,
+      `Unresolved batches: ${JSON.stringify(this.unresolvedBatchIds(session))}.`,
+      `Available refs for ${batch.id}: ${JSON.stringify([...batch.refs.keys()])}.`,
+      `Adopted refs for ${batch.id}: ${JSON.stringify(batch.assessment?.evidenceRefs ?? [])}.`,
+    ].join(' ')
   }
 }
 

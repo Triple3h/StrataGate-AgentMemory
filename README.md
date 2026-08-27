@@ -164,7 +164,7 @@ After every retrieval, the system must answer five questions explicitly:
 
 The system accepts `sufficient` only when all of the following are true:
 
-1. at least one evidence item comes from the latest retrieval batch;
+1. at least one evidence item comes from the selected retrieval batch;
 2. `next_strategy` is explicitly `answer`;
 3. the judgment uses a fixed, bounded structure instead of an ever-growing private retrieval scratchpad.
 

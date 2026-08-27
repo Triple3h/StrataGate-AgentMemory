@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.33 - 2026-08-27
+
+- Keep concurrent retrieval batches independently addressable through optional `batch_id` parameters on assessment and usage recording while preserving latest-batch defaults for sequential calls.
+- Report every assessment rejection and aggregate all invalid usage refs with batch status, available refs, and adopted refs; zero-use audits now retain the real batch ID.
+
 ## 0.2.30 - 2026-08-25
 
 - Add compact minus, slider, and plus controls to the Knowledge Graph for faster zoom adjustments.
