@@ -3,6 +3,20 @@ name: Release DeepSeek Harness plugin
 on:
   push:
     tags: [stratagate-dsh-v*]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package version contained in the staged tarball
+        required: true
+        type: string
+      sha256:
+        description: Expected SHA-256 digest of the staged tarball
+        required: true
+        type: string
+      staging_tag:
+        description: Temporary GitHub release tag containing the tarball
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -10,6 +24,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,3 +56,36 @@ jobs:
         run: |
           version="$(node -p 'require("./integrations/deepseek-harness/package.json").version')"
           gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "StrataGate DSH $version"
+
+  publish-artifact:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      EXPECTED_SHA256: ${{ inputs.sha256 }}
+      STAGING_TAG: ${{ inputs.staging_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+      - name: Install npm with trusted-publishing support
+        run: npm install --global npm@^11.15.0
+      - name: Download and verify staged package
+        shell: bash
+        run: |
+          filename="stratagate-dsh-${VERSION}.tgz"
+          gh release download "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$filename"
+          echo "${EXPECTED_SHA256}  ${filename}" | sha256sum --check --strict
+          tar -xOf "$filename" package/package.json > package-manifest.json
+          test "$(node -p 'require("./package-manifest.json").name')" = "stratagate-dsh"
+          test "$(node -p 'require("./package-manifest.json").version')" = "$VERSION"
+      - name: Publish exact package artifact
+        run: npm publish "stratagate-dsh-${VERSION}.tgz" --provenance --access public
+      - name: Create GitHub release with verified artifact
+        shell: bash
+        run: |
+          tag="stratagate-dsh-v${VERSION}"
+          filename="stratagate-dsh-${VERSION}.tgz"
+          gh release create "$tag" "$filename" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "StrataGate DSH $VERSION"
