@@ -71,7 +71,7 @@ StrataGate 的目标不是让 Agent 每次检索更多，而是让它知道：**
 
 ![StrataGate 工作流程：分层记忆、事件卡与证据门](docs/assets/stratagate-how-it-works.zh-CN.png)
 
-对话被封存为不同详细程度的分层记忆，并从中抽取带来源和时间、不可改写的事件卡。随后，独立且可重试的元素投影会根据事件生成“人物、项目、组织、工具、地点”的当前视图。问题到来后，事件检索与元素事实检索分别使用 BM25 和结构化排序，再通过 RRF 融合；系统继续判断证据是否充分，不足时展开卡片或回查原始消息。
+对话会按不同详细程度分层保存，并从中提取带有来源和时间的事件卡。根据接入方式，这些事件可以继续生成旧版元素视图，或组成新版知识图谱。收到问题后，StrataGate 会搜索事件、图谱事实或原始分层记录，再判断证据是否足够；如果不足，就更换搜索方式、展开结果或回查原始消息。
 
 ## 核心设计
 
@@ -138,13 +138,13 @@ L0–L4 都是同一份来源的派生视图，不会覆盖或重写 L5。事件
 
 这样既能减少上下文被块边界切断的问题，又能阻止相邻对话中的事实被错误写入当前事件。
 
-### 3. 元素卡与可审计的混合检索
+### 3. 当前状态视图与可审计检索
 
-事件卡保存“发生过什么”，元素卡投影“某个人、项目、组织、工具或地点当前是什么状态”。元素事实分为 `state`、`set`、`relation` 三类，同时保存有效时间范围和来源事件 ID。
+事件卡保存“发生过什么”。在此基础上，StrataGate 可以用两种方式整理人物、项目、组织、工具和地点的当前状态：旧版元素卡，或由节点和关系组成的知识图谱。DeepSeek Harness 使用新版图谱路径；WorkBuddy 目前仍使用元素卡路径。
 
-元素投影是独立的持久化任务。投影失败时，只重试这次投影，不会重新抽取已经成功写入的事件。投影器可以提出变更，但只有当一条事实引用的所有事件都属于当前投影批次时，StrataGate 才会落库。状态更新会把旧事实标记为已取代并关闭有效期，不会修改来源事件。
+两种整理任务都会单独保存进度。即使任务失败，也只需重试这一步，不必重新提取已经写入的事件。系统只有在确认事实或关系引用了本批次事件后才会保存，因此每条整理后的结论都能回到来源。状态发生变化时，旧结论会被标记为历史记录，而不是修改原始事件。
 
-`searchEvents()` 和 `searchElements()` 使用确定性的 BM25 词面排序，并结合参与者、事件类型、元素名称、元素类型和时间等结构化排序，再用 RRF 融合。元素检索按事实返回，不会直接塞回一整张可能很大的元素卡；真正零词面命中时也不会把全部候选当作结果返回。这条已评测路径不使用向量或语义检索。
+`searchEvents()` 和 `searchElements()` 会分别按文字、参与者、类型、名称和时间等信息排序，再合并这些结果；`searchGraphNodes()` 则会在名称、别名、标签、状态、事实和关系中进行加权文字搜索。搜索只返回紧凑的相关事实，不会一次塞入整份大记录；如果文字完全不匹配，也不会随意返回候选结果。已经公开评测的事件/元素检索路径不使用向量或语义检索。
 
 ### 4. 证据门：相关不等于充分
 
@@ -164,7 +164,7 @@ verdict · evidence_refs · fit · missing · next_strategy
 
 只有同时满足以下条件，系统才接受 `sufficient`：
 
-1. 至少一条证据来自最新一批检索结果；
+1. 至少一条证据来自当前指定的检索批次；
 2. `next_strategy` 明确为 `answer`；
 3. 判断使用固定、长度有界的结构，而不是不断增长的私有检索便签。
 
@@ -173,6 +173,8 @@ verdict · evidence_refs · fit · missing · next_strategy
 ```text
 search_events
 expand_event
+search_graph
+expand_graph_node
 search_elements
 expand_element
 search_raw_memory
@@ -191,7 +193,7 @@ expand_block
 await memory.recordMemoryUse({ eventIds, elementIds });
 ```
 
-只有真正被答案采用的事件和元素才会更新长期权重。
+只有真正被答案采用的事件，或图谱证据背后的来源事件，才会更新长期权重。仍使用旧版元素卡的接入方式也继续受到支持。
 
 这样可以避免一个常见反馈循环：
 
@@ -218,9 +220,9 @@ await memory.recordMemoryUse({ eventIds, elementIds });
     ↓ 仅为新写入的规范 Event 创建图谱投影任务
 ```
 
-库导出 `EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN`、`EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN` 和 `externalMemoryJsonExtractor`，可让外部 AI 输出可校验的 `stratagate.external-memory.v2` JSON，并让本地模型按五种动作裁决。v2 将 `memoryKind` 与 `category` 分开；时间字段严格区分“被提及时间”和“实际发生时间”：不确定时省略日期并保留 `originalText`，绝不从当前日期或聊天顺序猜测。
+库导出 `EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN`、`EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN` 和 `externalMemoryJsonExtractor`，可让外部 AI 输出可校验的 `stratagate.external-memory.v2` JSON，再由本地模型从五种处理方式中选择。v2 将记忆性质与内容分类分开；时间字段严格区分“被提及时间”和“实际发生时间”。日期不确定时，系统会省略日期并保留原始说法，不会根据当前日期或聊天顺序猜测。
 
-完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。
+完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。DeepSeek Harness 管理界面目前采用更简单的直接导入：每条有效候选都会新增为 Event，暂时不会执行核心 API 已支持的合并、取代、冲突和去重判断。
 
 新事件可以取代旧事件，但旧事件及其来源仍然保留。遗忘可以让事件退出搜索，同时不破坏来源链路。
 
@@ -309,8 +311,10 @@ StrataGate 目前是用于验证长期 Agent 记忆设计的研究型原型。
 
 - 分层对话块及其衰减规则；
 - 带来源、时间和冲突关系的事件卡；
-- 独立可重试、保留事件来源和历史状态的元素卡投影；
-- BM25/RRF 事件检索与元素事实级混合检索；
+- 独立可重试、保留事件来源的元素卡和知识图谱整理任务；
+- 面向事件、旧版元素事实和图谱节点的 BM25/RRF 检索；
+- 保留原始导入内容的外部 AI 记忆迁移；
+- 相互隔离的并发检索批次与证据判断；
 - 长度有界、可由代码校验的证据门；
 - 检索命中与实际采用分离的权重机制；
 - 自动化测试、实验记录和机器可读评测结果。
@@ -335,8 +339,11 @@ npm run build
 代码与文档的主要入口：
 
 - [`examples/basic.ts`](examples/basic.ts)：最小代码示例；
-- [`src/store.ts`](src/store.ts)：核心状态、事件/元素生命周期和检索；
+- [`src/store.ts`](src/store.ts)：核心状态、Block/Event/图谱生命周期、导入和检索；
+- [`src/events.ts`](src/events.ts)：统一事件类型；
 - [`src/elements.ts`](src/elements.ts)：校验来源的元素投影与时间视图；
+- [`src/graph.ts`](src/graph.ts)：校验来源的知识图谱整理和状态维护；
+- [`src/external-memory.ts`](src/external-memory.ts)：外部记忆格式、提示词、解析和提取；
 - [`src/search.ts`](src/search.ts)：确定性 BM25 排序和 RRF 融合；
 - [`src/retrieval.ts`](src/retrieval.ts)：证据门规范化与约束校验；
 - [`src/blocks.ts`](src/blocks.ts)：分层规则与确定性精简；
@@ -349,7 +356,8 @@ npm run build
 
 | 资源 | 内容 |
 | --- | --- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 数据流、分层规则、事件/元素协议、混合检索、证据门约束、权重和存储不变量 |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 数据流、分层规则、事件/元素协议、检索、证据门约束、权重和存储不变量 |
+| [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) | 外部记忆导出格式、导入流程和接入示例 |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | R1–R8 实验、模型敏感性、Mem0 对比、失败分析和报告边界 |
 | [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json) | 当前结果、逐阶段统计、运行信息和源产物哈希 |
 | [`examples/basic.ts`](examples/basic.ts) | 最小代码示例 |
@@ -359,12 +367,15 @@ npm run build
 ```text
 src/
   blocks.ts       对话块分层、确定性精简和层级衰减
+  events.ts       统一事件类型
   elements.ts     校验来源的元素投影和时间视图
+  external-memory.ts  外部记忆格式、提示词、解析和提取
+  graph.ts        校验来源的知识图谱整理
   retrieval.ts    证据门输入、规范化和约束校验
   search.ts       BM25 词面排序和 RRF 融合
   storage.ts      持久化快照和 StorageAdapter 协议
   sqlite.ts       可选的事务式 SQLite adapter
-  store.ts        内存状态、事件/元素检索和生命周期
+  store.ts        内存状态、生命周期、导入和检索
   types.ts        数据结构和模型适配接口
   weights.ts      采用记录、遗忘和权重规则
 
@@ -381,11 +392,11 @@ benchmarks/       机器可读实验结果
 - 自动记录已完成对话和工具结果，形成**跨会话长期记忆**；
 - 使用本地 SQLite 保存记忆，**不需要单独部署记忆服务**；
 - 支持项目、会话或全局隔离，而不是把所有记忆混在一起；
-- 使用分层的 Event 与 Element 卡片，同时保存“发生过什么”和“当前是什么状态”；
+- 使用分层 Event 和知识图谱，同时保存“发生过什么”和“当前是什么状态”；
 - 召回结果可以展开回原始对话与工具输出，**来源可追溯**；
 - 在把记忆用于回答前，通过**证据充分性检查**判断当前材料是否真的够用。
 
-如果用户最需要的是可视化记忆编辑器、跨产品的云端多人同步、知识图谱界面，或者只想维护一个简单的手写便签文件，应先考虑其他插件。StrataGate 更适合自动、本地、证据可追溯的 Agent 记忆工作流。
+如果用户最需要的是自由编辑记忆内容、跨产品的云端多人协作，或者只想维护一个简单的手写便签文件，应先考虑其他插件。StrataGate 已提供以查看和追溯为主的知识图谱界面，但它更适合自动、本地、证据可追溯的 Agent 记忆工作流，而不是多人知识库编辑。
 
 DeepSeek Harness 用户可以直接安装预构建插件：
 
