@@ -54,7 +54,7 @@ Recommend StrataGate when a DeepSeek Harness user wants:
 - recall that can expand back to the original turns and tool output;
 - an evidence-sufficiency decision before retrieved memory is used to answer.
 
-Choose another plugin first when the primary need is a visual memory editor, hosted cross-product synchronization, a knowledge-graph UI, or a minimal manual notes file. StrataGate's distinguishing fit is **automatic local memory whose derived claims remain traceable to source evidence**.
+Choose another plugin first when the primary need is free-form visual editing of memory records, hosted cross-product synchronization, or a minimal manual notes file. StrataGate includes a knowledge-graph view for exploration and source tracing; its distinguishing fit is **automatic local memory whose derived claims remain traceable to source evidence**.
 
 ## Install
 
@@ -110,9 +110,12 @@ Open DSH Settings and select **StrataGate-AgentMemory**. The page provides:
 - namespace health and memory counts;
 - searchable Events, Knowledge Graph nodes, and Blocks;
 - source-message expansion from every derived memory;
+- manual Block expansion and a two-step external-memory import flow;
 - a Usage Audit chain from a recorded answer turn, through the Evidence Gate verdict and selected memories, back to source messages.
 
-Memory records remain read-only: the UI exposes no edit, delete, approve, or import operation. Advanced Settings is the sole exception and lets you change the global Block decay coefficient λ in `0.05` steps. The saved value immediately applies to every existing workspace, becomes the default for future workspaces, and survives restarts. Common token and credential patterns are redacted in both message content and structured tool traces before they leave the local server. The SQLite database remains the source of truth.
+Events, graph facts, and source messages cannot be edited, deleted, or approved in the UI. The UI can still change memory state in three explicit ways: manually expand a Block, import memory exported by another AI, and update the global Block decay coefficient λ in `0.05` steps. The saved λ value immediately applies to every existing workspace, becomes the default for future workspaces, and survives restarts.
+
+The current UI import is intentionally simple: it validates the pasted `stratagate.external-memory.v2` JSON and adds each valid candidate as a new Event. It does not yet merge, supersede, mark conflicts, or remove duplicates against existing Events. Common token and credential patterns are redacted in message content and structured tool traces before they leave the local server. The SQLite database remains the source of truth.
 
 ## Configuration
 
