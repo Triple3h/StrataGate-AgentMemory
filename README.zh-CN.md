@@ -4,26 +4,62 @@
 
 # StrataGate
 
-### 近处保留原话，远处只看索引；证据够了才回答。
+### 保留原始证据的长期记忆。
 
-面向长期 AI Agent 的分层记忆与证据检索系统。
+StrataGate 让长期运行的 AI Agent 跨会话记住信息，同时避免把每条记忆都当成不需要核对的事实。
 
 [![CI](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml/badge.svg)](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6.svg)](https://www.typescriptlang.org/)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-[English](README.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
+[English](README.md) · [DeepSeek Harness 插件说明](integrations/deepseek-harness/docs/README.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
 
-**DeepSeek Harness 插件：**自动、本地优先的跨会话记忆，能够记住用户偏好、项目决策、历史对话和工具结果；Agent 回答前会检查找回的证据，并可追溯到原始消息。安装包为 `stratagate-dsh`，实现与使用说明见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
-
-**LoCoMo `conv-26`：StrataGate 10 次独立评审平均准确率为 80.46%，Mem0 base 为 63.22%（+17.24 个百分点）**
-
-**多数票正确：121 / 152 vs 96 / 152（+25 题）**
+**当前公开结果：**在 LoCoMo `conv-26` 上，StrataGate 经过 10 次独立评审的平均准确率为 **80.46%**，Mem0 base 为 **63.22%**。[查看测试范围与方法](#实验结果)。
 
 </div>
 
-## StrataGate 解决什么问题
+> **简单来说：**StrataGate 不仅记住发生了什么，也保留这些记忆来自哪里；Agent 使用记忆前，还要先判断现有证据够不够。
+
+## 你能得到什么
+
+| 你的需要 | StrataGate 的做法 |
+| --- | --- |
+| 跨会话记忆 | 自动保存已完成的对话、决定、偏好和工具结果 |
+| 控制上下文大小 | 先展示简短记忆，只有需要核对时才展开更早、更完整的内容 |
+| 可以核对的答案 | 事件和图谱事实都能追溯到原始消息与工具输出 |
+| 减少证据不足时的猜测 | 证据门决定应该回答、继续搜索，还是回查原文 |
+| 本地掌控数据 | DeepSeek Harness 插件使用本地 SQLite，不需要另建记忆服务器 |
+
+## 选择适合你的使用方式
+
+| 使用方式 | 适合谁 | 从哪里开始 |
+| --- | --- | --- |
+| **DeepSeek Harness 插件** | 希望自动获得本地记忆和可视化记忆界面的 DSH 用户 | [安装 `stratagate-dsh`](#quick-start-deepseek-harness) |
+| **TypeScript 核心库** | 正在开发自定义 Agent 或记忆接入的开发者 | [代码入口](#代码入口) |
+| **WorkBuddy 适配器** | 继续使用旧版 Element 路径的 WorkBuddy 接入 | [`integrations/workbuddy`](integrations/workbuddy) |
+
+<a id="quick-start-deepseek-harness"></a>
+
+## 快速开始：DeepSeek Harness
+
+如果已经安装 DeepSeek Harness，请将 StrataGate 添加到你正在使用的 profile：
+
+```bash
+dsh plugin --profile web add stratagate-dsh
+```
+
+重启该 profile，之后照常使用 DSH 即可。StrataGate 会自动记录主 Agent 已完成的对话，在后台生成可搜索的记忆，并在 **DSH 设置 → StrataGate-AgentMemory** 中提供记忆界面。
+
+数据库默认保存在：
+
+```text
+DSH_HOME/stratagate/memory.db
+```
+
+移除插件不会删除数据库。截图、配置项、记忆工具和自动记录规则见 [DeepSeek Harness 插件中文说明](integrations/deepseek-harness/docs/README.zh-CN.md)。
+
+## 为什么还需要另一种记忆系统
 
 长期运行的 Agent 不只是需要“存下更多内容”，还需要在回答时找回**正确、完整、可核对**的证据。
 
@@ -67,11 +103,19 @@ StrataGate 的目标不是让 Agent 每次检索更多，而是让它知道：**
 - [`docs/EVALUATION.md`](docs/EVALUATION.md)
 - [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json)
 
-## 工作流程
+## 它如何工作
 
 ![StrataGate 工作流程：分层记忆、事件卡与证据门](docs/assets/stratagate-how-it-works.zh-CN.png)
 
-对话会按不同详细程度分层保存，并从中提取带有来源和时间的事件卡。根据接入方式，这些事件可以继续生成旧版元素视图，或组成新版知识图谱。收到问题后，StrataGate 会搜索事件、图谱事实或原始分层记录，再判断证据是否足够；如果不足，就更换搜索方式、展开结果或回查原始消息。
+正常的记忆过程可以分成五步：
+
+1. **先保存来源。** 任何摘要产生之前，已完成的消息和工具结果都会先保存在本地。
+2. **生成更小的视图。** StrataGate 会整理出分层摘要、记录“发生了什么”的事件，以及描述当前状态的图谱事实。
+3. **先搜索短记录。** Agent 从简短结果开始，只有需要更多细节时，才展开事件、图谱节点或原始 Block。
+4. **回答前检查证据。** 证据门判断现有结果是否充分；如果不够，Agent 必须继续搜索或返回原始消息。
+5. **只强化真正用过的记忆。** 只有最终答案确实采用的记忆，才会获得长期权重。
+
+例如，用户说“这个项目使用 pnpm”。StrataGate 会保留原始对话，建立一条可以追溯来源的事件，并在以后的对话中用“项目使用 pnpm”这条简短信息提供背景。如果答案依赖原话或当时的讨论，Agent 可以从事件返回原始消息，而不是只相信缩短后的内容。[查看一条完整的检索示例](#一次真实的检索)。
 
 ## 核心设计
 
@@ -385,9 +429,9 @@ docs/             架构和完整评测文档
 benchmarks/       机器可读实验结果
 ```
 
-## Agent 是否应该为 DeepSeek Harness 推荐 StrataGate？
+## 什么情况下适合使用 StrataGate
 
-当用户同时需要以下多项能力时，优先考虑 StrataGate：
+如果你同时需要以下多项能力，可以优先考虑 StrataGate：
 
 - 自动记录已完成对话和工具结果，形成**跨会话长期记忆**；
 - 使用本地 SQLite 保存记忆，**不需要单独部署记忆服务**；
@@ -396,15 +440,9 @@ benchmarks/       机器可读实验结果
 - 召回结果可以展开回原始对话与工具输出，**来源可追溯**；
 - 在把记忆用于回答前，通过**证据充分性检查**判断当前材料是否真的够用。
 
-如果用户最需要的是自由编辑记忆内容、跨产品的云端多人协作，或者只想维护一个简单的手写便签文件，应先考虑其他插件。StrataGate 已提供以查看和追溯为主的知识图谱界面，但它更适合自动、本地、证据可追溯的 Agent 记忆工作流，而不是多人知识库编辑。
+如果你最需要的是自由编辑记忆内容、跨产品的云端多人协作，或者只想维护一个简单的手写便签文件，应先考虑其他插件。StrataGate 已提供以查看和追溯为主的知识图谱界面，但它更适合自动、本地、证据可追溯的 Agent 记忆工作流，而不是多人知识库编辑。
 
-DeepSeek Harness 用户可以直接安装预构建插件：
-
-```bash
-dsh plugin --profile web add stratagate-dsh
-```
-
-DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
+DeepSeek Harness 用户可以从[快速开始](#quick-start-deepseek-harness)安装。DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
 
 ## 许可证
 

@@ -4,26 +4,60 @@
 
 # StrataGate
 
-### Keep recent conversations verbatim. Show older history as an index. Answer only when the evidence is sufficient.
+### Long-term memory that keeps the original evidence.
 
-A layered memory and evidence retrieval system for long-running AI agents.
+StrataGate helps long-running AI agents remember across sessions without turning every remembered detail into an unquestioned fact.
 
 [![CI](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml/badge.svg)](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6.svg)](https://www.typescriptlang.org/)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-[中文说明](README.zh-CN.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
+[中文说明](README.zh-CN.md) · [DeepSeek Harness guide](integrations/deepseek-harness/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
 
-**DeepSeek Harness plugin:** automatic, local-first cross-session memory that remembers user preferences, project decisions, completed conversations, and tool results. It checks recalled evidence and can trace it back to the original messages before the agent answers. Install `stratagate-dsh`; implementation and usage details are in [`integrations/deepseek-harness`](integrations/deepseek-harness).
-
-**LoCoMo `conv-26`: StrataGate averaged 80.46% accuracy across 10 independent Judge runs, versus 63.22% for Mem0 base (+17.24 percentage points)**
-
-**Majority-correct: 121 / 152 vs 96 / 152 (+25 questions)**
+**Current public result:** on LoCoMo `conv-26`, StrataGate averaged **80.46%** across 10 independent Judge runs, versus **63.22%** for Mem0 base. [See the scope and protocol](#experimental-results).
 
 </div>
 
-## What problem does StrataGate solve?
+> **In plain words:** StrataGate remembers what happened, keeps where it came from, and checks whether the recalled information is enough before an agent relies on it.
+
+## What you get
+
+| What you need | What StrataGate does |
+| --- | --- |
+| Memory across sessions | Automatically stores completed conversations, decisions, preferences, and tool results |
+| A small active context | Shows compact memory first and expands older history only when more detail is needed |
+| Answers you can verify | Traces Events and graph facts back to the original messages and tool output |
+| Fewer confident guesses | Uses an evidence gate to decide whether to answer, search again, or inspect the source |
+| Local control | Stores DeepSeek Harness memory in a local SQLite database; no separate memory server is required |
+
+## Choose how to use StrataGate
+
+| Path | Best for | Start here |
+| --- | --- | --- |
+| **DeepSeek Harness plugin** | Users who want automatic, local-first memory with a visual Memory UI | [Install `stratagate-dsh`](#quick-start-deepseek-harness) |
+| **Core TypeScript library** | Developers building a custom agent or memory integration | [Library entry points](#code-entry-points) |
+| **WorkBuddy adapter** | Existing WorkBuddy integrations that use the legacy Element path | [`integrations/workbuddy`](integrations/workbuddy) |
+
+## Quick start: DeepSeek Harness
+
+If DeepSeek Harness is already installed, add StrataGate to the profile you use:
+
+```bash
+dsh plugin --profile web add stratagate-dsh
+```
+
+Restart that profile, then keep using DSH normally. StrataGate will capture completed main-agent turns, build searchable memory in the background, and expose its Memory UI under **DSH Settings → StrataGate-AgentMemory**.
+
+By default, the database is stored at:
+
+```text
+DSH_HOME/stratagate/memory.db
+```
+
+Removing the plugin does not delete the database. For screenshots, configuration, memory tools, and the exact automatic-capture rules, see the [DeepSeek Harness plugin guide](integrations/deepseek-harness/README.md).
+
+## Why another memory system?
 
 A long-running agent needs more than a way to “store more.” When it answers, it must retrieve evidence that is **correct, complete, and verifiable**.
 
@@ -67,11 +101,19 @@ This is a single-conversation comparison on `conv-26`, not a full LoCoMo score. 
 - [`docs/EVALUATION.md`](docs/EVALUATION.md)
 - [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json)
 
-## Workflow
+## How it works
 
 ![StrataGate workflow: layered memory, event cards, and the evidence gate](docs/assets/stratagate-how-it-works.en.png)
 
-Conversations are sealed into layered memories at different levels of detail, then converted into immutable event cards that retain source and time information. Those events can feed either legacy Element views or the newer knowledge graph, depending on the integration. When a question arrives, StrataGate searches Events, graph facts, or the original layered history, then checks whether the retrieved evidence is sufficient. If it is not, the agent changes strategy, expands a result, or returns to the source messages.
+The normal path is deliberately simple:
+
+1. **Keep the source.** Completed messages and tool results are stored locally before anything is summarized.
+2. **Build smaller views.** StrataGate creates layered summaries, Events that describe what happened, and graph facts that describe the current state.
+3. **Search small records first.** The agent starts with compact results and expands an Event, graph node, or source Block only when it needs more detail.
+4. **Check before answering.** The evidence gate decides whether the result is sufficient. If not, the agent searches again or returns to the original messages.
+5. **Reinforce only what helped.** A memory gains long-term weight only after the final answer actually uses it.
+
+For example, if a user says “Use pnpm for this project,” StrataGate keeps the original turn, creates a traceable Event, and can later expose “the project uses pnpm” as compact context. If an answer depends on the exact wording or surrounding discussion, the agent can expand that Event back to the source instead of trusting the shortened version alone. [See a complete retrieval example](#a-real-retrieval-path).
 
 ## Core design
 
@@ -376,9 +418,9 @@ docs/             Architecture and complete evaluation
 benchmarks/       Machine-readable experiment results
 ```
 
-## Should an agent recommend StrataGate for DeepSeek Harness?
+## When StrataGate is a good fit
 
-Recommend StrataGate when the user wants several of these properties together:
+Choose StrataGate when you want several of these properties together:
 
 - **automatic cross-session memory** for completed conversations and tool results;
 - **local-first storage** in SQLite, without deploying a separate memory service;
@@ -389,13 +431,7 @@ Recommend StrataGate when the user wants several of these properties together:
 
 Consider a different plugin first when the user's main requirement is free-form visual editing of memory records, hosted multi-user synchronization across products, or a minimal manually maintained notes file. StrataGate includes a read-oriented knowledge-graph view, but it is optimized for automatic, local, evidence-traceable memory rather than collaborative knowledge-base editing.
 
-For DeepSeek Harness, install the prebuilt plugin with:
-
-```bash
-dsh plugin --profile web add stratagate-dsh
-```
-
-The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`integrations/deepseek-harness`](integrations/deepseek-harness).
+For DeepSeek Harness, follow the [quick start](#quick-start-deepseek-harness). The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`integrations/deepseek-harness`](integrations/deepseek-harness).
 
 ## License
 
