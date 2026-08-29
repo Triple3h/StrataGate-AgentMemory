@@ -99,6 +99,21 @@ memory_expand_block    memory_assess
 memory_record_use
 ```
 
+`memory_get_blocks` 支持 `scope=session`（默认值，保留历史上的当前会话隔离语义）和
+`scope=namespace`（当前 project、session 或 global 命名空间中的全部 thread）。每次响应都会
+包含实际 `scope`、`namespace`、`threadId`、Block 计数，以及机器可读的 `emptyReason`：返回
+Block 时为 `null`；`no_blocks_in_namespace` 表示命名空间没有已封存 Block；
+`blocks_exist_in_other_threads` 表示只有其他 thread 有已封存 Block；`open_tail_pending`
+表示匹配的轮次存在但尚未封存。`memory_search_raw` 默认使用 namespace 范围，也接受同样的
+`scope` 过滤，因此可以用 `memory_get_blocks(scope=namespace)` 或 `memory_expand_block`
+继续浏览 raw 命中的 `blockId`，不会再出现范围不明的空结果。
+
+搜索默认返回紧凑卡片：Event 保留 `id`、标题、摘要、时间、状态/范围和 `sourceBlockId`；Graph
+保留 `id`、名称、类型、别名、当前状态及可解释的 `matchedFields`/`matchReason`；Raw 保留消息
+ID、`blockId`、角色、轮次和有界摘录。`narrative`、`quotes`、来源消息列表、完整 facts/edges
+及邻近原文请通过对应 expand 工具获取。`rankScore` 仅是 BM25/RRF 排序指标，不是概率、置信度或
+事实准确率。
+
 旧 Element 工具名仅作为已有安装的兼容接口保留。
 
 提示词协议要求模型在依赖检索证据前完成评估。仅搜索不会强化记忆。非空的 `memory_record_use` 只接受所选批次中被“证据充分”评估采纳的证据，并使用 DSH 工具调用 ID 作为幂等回执。严格顺序调用可省略 `batch_id`，此时兼容地选择最新批次；并行或交错检索必须显式传入。评估响应会列出未被采纳的 ref 及原因。
@@ -113,7 +128,7 @@ memory_record_use
 - 手动展开 Block，以及分两步导入其他 AI 的记忆；
 - Usage Audit（使用审计）链路：从已记录的回答轮次出发，经由 Evidence Gate 的判断与选中的记忆，追溯到来源消息。
 
-界面不允许直接编辑、删除或批准 Event、图谱事实和来源消息，但可以通过三种明确操作改变记忆状态：手动展开 Block、导入其他 AI 的记忆，以及在“高级设置”中调整全局 Block 衰减系数 λ。λ 可按 `0.05` 步长调节；保存后会立即应用到所有已有工作区，同时成为新工作区的默认值，并在重启后保留。
+界面不允许直接编辑、删除或批准 Event、图谱事实和来源消息，但可以通过三种明确操作改变记忆状态：手动展开 Block、导入其他 AI 的记忆，以及在“高级设置”中修改每个 Block 包含的完整对话轮数或全局 Block 衰减系数 λ。修改轮数时，界面会解释两者关系并给出保持单位对话衰减速度的建议 λ，是否采用由用户决定。保存后设置立即应用到所有已有工作区，同时成为新工作区默认值，并在重启后保持；已封存 Block 不会重新切分。
 
 当前界面的导入流程有意保持简单：它会校验粘贴的 `stratagate.external-memory.v2` JSON，并把每条有效候选新增为 Event；暂时不会与已有 Event 自动合并、取代、标记冲突或去重。消息内容和结构化工具轨迹中的常见令牌及凭证格式，会在离开本地服务器前被脱敏。SQLite 数据库始终是唯一可信数据源。
 
@@ -134,11 +149,11 @@ config:
   # model: deepseek-chat
 ```
 
-配置文件中的 `blockDecayLambda` 是初始后备值；一旦在“高级设置”中修改，持久化的界面值优先生效。默认值为 `0.3`；数字越小，记忆遗忘越慢、消耗 token 越多，不建议大于 `0.4`。
+配置文件中的 `blockTurnSize` 和 `blockDecayLambda` 是初始后备值；一旦在“高级设置”中修改，持久化的界面值优先生效。λ 默认值为 `0.3`；数字越小，记忆遗忘越慢、消耗 token 越多，不建议大于 `0.4`。
 
 `project` 会根据规范化后的会话工作目录生成稳定的命名空间；`session` 会隔离每个 DSH 会话；`global` 则让所有会话共享同一个命名空间。
 
-`blockTurnSize` 控制每个 Block 封存多少个已完成的 DSH 轮次。插件默认值为 `6`，用于平衡模型调用成本与 Event 提取及时性；用户可以配置任意正整数。
+`blockTurnSize` 控制每个 Block 封存多少个已完成的 DSH 轮次；一轮是一次用户提问和 AI 完整回复。插件默认值为 `6`，用于平衡模型调用成本与 Event 提取及时性；用户可以配置任意正整数。
 
 `blockDecayLambda` 按当前 Block 锚点与同一 DSH 会话中最新已封存 Block 的距离控制衰减。默认值为 `0.3`；数字越小衰减越慢，不建议大于 `0.4`。open tail 中尚未封存的轮次不会增加 Block age。
 

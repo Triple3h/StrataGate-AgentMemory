@@ -21,7 +21,7 @@ function sessionOf(exec: ToolRunContext): Session {
 export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): void {
   ctx.tools.register(defineTool({
     name: 'memory_search_events',
-    description: 'Search durable StrataGate event memories. Returns a batchId, evidenceRefs, and ranked event cards. Pass that batchId to memory_assess before relying on its evidence.',
+    description: 'Search durable StrataGate event memories. Returns a compact batch of event cards (id, title, summary, time, and evidence refs); call memory_expand_event for narrative/quotes/source messages. rankScore is BM25/RRF ordering only, never confidence or factual accuracy. Pass batchId to memory_assess before relying on evidence.',
     parameters: {
       query: { type: 'string', required: true, description: 'What historical decision, event, preference, or outcome to find.' },
       limit: { type: 'integer', description: 'Maximum results, 1-20.' },
@@ -40,7 +40,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_search_graph',
-    description: 'Search the current Event-backed Knowledge Graph for people, projects, organizations, tools, places, facts, and relations. Returns an independently assessable retrieval batch.',
+    description: 'Search the current Event-backed Knowledge Graph for people, projects, organizations, tools, places, facts, and relations. Returns compact node cards with matchedFields/matchReason; call memory_expand_graph_node for complete facts and edges. rankScore is BM25/RRF ordering only, never confidence or factual accuracy. Results are independently assessable.',
     parameters: {
       query: { type: 'string', required: true },
       limit: { type: 'integer', description: 'Maximum results, 1-20.' },
@@ -59,7 +59,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_search_elements',
-    description: 'Deprecated compatibility search for legacy Element-card data. Prefer memory_search_graph.',
+    description: 'Deprecated compatibility search for legacy Element-card data. Returns compact fact hits; rankScore is BM25/RRF ordering only, never confidence or factual accuracy. Prefer memory_search_graph.',
     parameters: {
       query: { type: 'string', required: true },
       limit: { type: 'integer' },
@@ -76,21 +76,24 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_search_raw',
-    description: 'Search verbatim archived messages when summarized memories are insufficient. Returns raw evidence refs and a batchId for assessment.',
+    description: 'Search archived messages when summarized memories are insufficient. Returns compact raw hits (message id, blockId, excerpt, role, and time); use memory_expand_block with blockId for complete source details. By default searches the whole current namespace; use scope=session for the active thread. Returns evidence refs and batchId for assessment.',
     parameters: {
       query: { type: 'string', required: true },
       limit: { type: 'integer' },
+      scope: { type: 'string', enum: ['namespace', 'session'] as const, description: 'Search range. Defaults to namespace for compatibility with historical raw search behavior.' },
     },
     output: jsonOutput,
-    execute: async (args, exec) => runtime.searchRaw(sessionOf(exec), args.query, args.limit) as never,
+    execute: async (args, exec) => runtime.searchRaw(sessionOf(exec), args.query, args.limit, args.scope) as never,
   }))
 
   ctx.tools.register(defineTool({
     name: 'memory_get_blocks',
-    description: 'List decayed conversation-block summaries and their current detail levels. Returns block evidence refs and a batchId for assessment.',
-    parameters: {},
+    description: 'List decayed conversation-block summaries and their current detail levels. Defaults to the active session only; use scope=namespace to inspect every thread in the current namespace. The response always reports scope, namespace, threadId, counts, and a machine-readable emptyReason when no blocks match.',
+    parameters: {
+      scope: { type: 'string', enum: ['session', 'namespace'] as const, description: 'Query range. Defaults to session to preserve existing isolation behavior.' },
+    },
     output: jsonOutput,
-    execute: async (_args, exec) => runtime.blocks(sessionOf(exec)) as never,
+    execute: async (args, exec) => runtime.blocks(sessionOf(exec), args.scope) as never,
   }))
 
   ctx.tools.register(defineTool({

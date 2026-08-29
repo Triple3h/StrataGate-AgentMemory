@@ -45,6 +45,127 @@ function turnEvents(): SessionEvent[] {
 }
 
 describe('DSH runtime ingestion', () => {
+  it('returns compact event/graph/raw cards while expand preserves full details', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-compact-search-'))
+    const database = join(directory, 'memory.db')
+    const runtime = new StrataGateRuntime({
+      database, namespaceMode: 'project', namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 1, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, fakeModels)
+    const active = { ...session, id: 'compact-session', header: { ...session.header, id: 'compact-session' } } as unknown as Session
+    try {
+      const memory = await (runtime as unknown as { space: (value: Session) => Promise<StrataGate> }).space(active)
+      await memory.appendTurn({ user: 'Remember the memory plugin release.', assistant: 'Saved.', threadId: String(active.id) })
+      const block = memory.listBlocks()[0]!
+      const event = await memory.addEvent({
+        title: 'Memory plugin released',
+        summary: 'The memory plugin was released.',
+        narrative: 'Full narrative detail.',
+        quotes: ['Exact source quote.'],
+        sourceMessageIds: [block.l5Raw[0]!.id],
+        sourceBlockId: block.id,
+        temporal: { happenedStart: '2026-08-20T00:00:00Z', eventType: 'release' },
+      })
+      const projection = await memory.claimNextGraphProjection()
+      expect(projection).not.toBeNull()
+      await memory.completeGraphProjection(projection!.jobId, {
+        reason: 'graph',
+        nodes: [
+          { ref: 'project', name: 'StrataGate', type: 'project', tags: ['memory plugin'], state: 'released', sourceEventIds: [event.id] },
+          { ref: 'tool', name: 'MCP tool', type: 'tool', sourceEventIds: [event.id] },
+          { ref: 'tool-name', name: 'StrataGate', type: 'tool', tags: ['cli'], sourceEventIds: [event.id] },
+        ],
+        edges: [{ fromRef: 'project', toRef: 'tool', relation: 'memory plugin', sourceEventIds: [event.id] }],
+      })
+
+      const eventBatch = await runtime.searchEvents(active, 'memory plugin') as { results: Array<Record<string, unknown>>; evidenceRefs: string[] }
+      expect(eventBatch.results[0]).toMatchObject({ id: event.id, title: event.title, summary: event.summary, rankScore: expect.any(Number) })
+      expect(eventBatch.results[0]).not.toHaveProperty('narrative')
+      expect(eventBatch.results[0]).not.toHaveProperty('quotes')
+      expect(eventBatch.results[0]).not.toHaveProperty('sourceMessageIds')
+      expect(eventBatch.results[0]).not.toHaveProperty('score')
+      expect(eventBatch.results[0]?.scoreMeaning).toContain('not confidence')
+
+      const expandedEvent = await runtime.expandEvent(active, event.id) as { results: { narrative: string; quotes: string[]; sourceMessageIds: string[] } }
+      expect(expandedEvent.results.narrative).toBe('Full narrative detail.')
+      expect(expandedEvent.results.quotes).toEqual(['Exact source quote.'])
+
+      const graphBatch = await runtime.searchGraph(active, 'memory plugin') as { results: Array<Record<string, unknown>> }
+      expect(graphBatch.results.map((item) => item.name)).toEqual(['StrataGate'])
+      expect(graphBatch.results[0]).toMatchObject({ type: 'project', matchedFields: expect.arrayContaining(['tags']) })
+      expect(graphBatch.results[0]).not.toHaveProperty('facts')
+      expect(graphBatch.results[0]).not.toHaveProperty('score')
+      const sameName = await runtime.searchGraph(active, 'StrataGate') as { results: Array<{ name: string; type: string }> }
+      expect(sameName.results.filter((item) => item.name === 'StrataGate').map((item) => item.type).sort()).toEqual(['project', 'tool'])
+      const expandedGraph = await runtime.expandGraphNode(active, String(graphBatch.results[0]!.id)) as { results: { node: { facts: unknown[] }; edges: unknown[] } }
+      expect(expandedGraph.results.node.facts).toBeDefined()
+      expect(expandedGraph.results.edges).toHaveLength(1)
+
+      const rawBatch = await runtime.searchRaw(active, 'memory plugin', 4, 'namespace') as { results: Array<Record<string, unknown>> }
+      expect(rawBatch.results[0]).toMatchObject({ blockId: block.id, message: { id: block.l5Raw[0]!.id } })
+      expect(rawBatch.results[0]).not.toHaveProperty('nearby')
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['project', 'session', 'global'] as const)('reports block query scope and empty reasons in %s namespace mode', async (namespaceMode) => {
+    const directory = await mkdtemp(join(tmpdir(), `stratagate-dsh-block-scope-${namespaceMode}-`))
+    const database = join(directory, 'memory.db')
+    const sessionA = { ...session, id: `scope-a-${namespaceMode}`, header: { ...session.header, id: `scope-a-${namespaceMode}` } } as unknown as Session
+    const sessionB = { ...session, id: `scope-b-${namespaceMode}`, header: { ...session.header, id: `scope-b-${namespaceMode}` } } as unknown as Session
+    const runtime = new StrataGateRuntime({
+      database, namespaceMode, namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 1, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, fakeModels)
+    try {
+      const memory = await (runtime as unknown as { space: (active: Session) => Promise<StrataGate> }).space(sessionA)
+      await memory.appendTurn({ user: 'namespace-visible marker', assistant: 'saved', threadId: String(sessionA.id) })
+
+      const sessionResult = await runtime.blocks(sessionB) as {
+        results: unknown[]; scope: string; threadId: string; emptyReason: string | null; namespaceBlockCount: number
+      }
+      expect(sessionResult.scope).toBe('session')
+      expect(sessionResult.threadId).toBe(String(sessionB.id))
+      expect(sessionResult.results).toEqual([])
+      expect(sessionResult.namespaceBlockCount).toBe(namespaceMode === 'session' ? 0 : 1)
+      expect(sessionResult.emptyReason).toBe(namespaceMode === 'session' ? 'no_blocks_in_namespace' : 'blocks_exist_in_other_threads')
+
+      const namespaceResult = await runtime.blocks(sessionB, 'namespace') as { results: Array<{ threadId?: string }>; scope: string }
+      expect(namespaceResult.scope).toBe('namespace')
+      expect(namespaceResult.results).toHaveLength(namespaceMode === 'session' ? 0 : 1)
+      if (namespaceMode !== 'session') expect(namespaceResult.results[0]?.threadId).toBe(String(sessionA.id))
+
+      const raw = await runtime.searchRaw(sessionB, 'namespace-visible') as { results: Array<{ message: { threadId?: string } }> }
+      expect(raw.results).toHaveLength(namespaceMode === 'session' ? 0 : 1)
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('distinguishes an unsealed open tail from an empty namespace', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-block-open-tail-'))
+    const database = join(directory, 'memory.db')
+    const runtime = new StrataGateRuntime({
+      database, namespaceMode: 'project', namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 2, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, fakeModels)
+    try {
+      const active = { ...session, id: 'open-tail-session', header: { ...session.header, id: 'open-tail-session' } } as unknown as Session
+      await (await (runtime as unknown as { space: (value: Session) => Promise<StrataGate> }).space(active))
+        .appendTurn({ user: 'not sealed yet', assistant: 'pending', threadId: String(active.id) })
+      const result = await runtime.blocks(active) as { results: unknown[]; emptyReason: string; openTailCount: number }
+      expect(result.results).toEqual([])
+      expect(result.emptyReason).toBe('open_tail_pending')
+      expect(result.openTailCount).toBeGreaterThan(0)
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('builds compact automatic context without reinforcing retrieved memories', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-auto-context-'))
     const database = join(directory, 'memory.db')
@@ -255,7 +376,7 @@ describe('DSH runtime ingestion', () => {
     }
   })
 
-  it('persists the UI lambda globally for existing and future workspaces', async () => {
+  it('persists the UI block settings globally for existing and future workspaces', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-cadence-'))
     const database = join(directory, 'memory.db')
     const namespace = 'dsh:project:cadence'
@@ -277,9 +398,6 @@ describe('DSH runtime ingestion', () => {
       expect((await runtime.adminSnapshot(namespace))?.blockTurnSize).toBe(6)
       expect((await runtime.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.3)
 
-      await runtime.adminSetBlockDecayLambda(0.15)
-      expect((await runtime.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.15)
-
       const futureSession = {
         ...session,
         id: 'future-workspace',
@@ -288,6 +406,14 @@ describe('DSH runtime ingestion', () => {
       futureNamespace = runtime.namespaceFor(futureSession)
       const future = await (runtime as unknown as { space: (active: Session) => Promise<StrataGate> })
         .space(futureSession)
+      expect(future.blockTurnSize).toBe(6)
+      expect(future.blockDecayLambda).toBe(0.3)
+
+      await runtime.adminSetBlockTurnSize(3)
+      await runtime.adminSetBlockDecayLambda(0.15)
+      expect((await runtime.adminSnapshot(namespace))?.blockTurnSize).toBe(3)
+      expect((await runtime.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.15)
+      expect(future.blockTurnSize).toBe(3)
       expect(future.blockDecayLambda).toBe(0.15)
       expect(runtime.adminWorkspaceName(futureNamespace)).toBe('StrataGate')
     } finally {
@@ -306,7 +432,9 @@ describe('DSH runtime ingestion', () => {
     }, fakeModels)
     try {
       await restored.syncConfiguredSettings()
+      expect((await restored.adminSnapshot(namespace))?.blockTurnSize).toBe(3)
       expect((await restored.adminSnapshot(namespace))?.blockDecayLambda).toBe(0.15)
+      expect((await restored.adminSnapshot(futureNamespace))?.blockTurnSize).toBe(3)
       expect((await restored.adminSnapshot(futureNamespace))?.blockDecayLambda).toBe(0.15)
       expect(restored.adminWorkspaceName(futureNamespace)).toBe('StrataGate')
     } finally {

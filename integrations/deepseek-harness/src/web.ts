@@ -15,7 +15,7 @@ import {
 import type { StrataGateRuntime } from './runtime.js'
 import { clusterKnowledgeGraph } from './graph-clustering.js'
 
-const STRATAGATE_DSH_VERSION = '0.2.32'
+const STRATAGATE_DSH_VERSION = '0.2.36'
 const LEGACY_THREAD_ID = '__legacy__'
 const nodeRequire = createRequire(import.meta.url)
 
@@ -267,12 +267,31 @@ async function overview(runtime: StrataGateRuntime): Promise<unknown> {
 }
 
 async function updateSettings(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
-  const raw = url.searchParams.get('blockDecayLambda')?.trim() ?? ''
-  const value = Number(raw)
-  if (!raw || !Number.isFinite(value) || value < 0) {
-    throw new AdminHttpError(400, 'blockDecayLambda must be a non-negative finite number')
+  const rawTurnSize = url.searchParams.get('blockTurnSize')?.trim()
+  const rawLambda = url.searchParams.get('blockDecayLambda')?.trim()
+  if (rawTurnSize === undefined && rawLambda === undefined) {
+    throw new AdminHttpError(400, 'blockTurnSize or blockDecayLambda is required')
   }
-  return { blockDecayLambda: await runtime.adminSetBlockDecayLambda(value) }
+  let turnSize: number | undefined
+  let lambda: number | undefined
+  if (rawTurnSize !== undefined) {
+    const value = Number(rawTurnSize)
+    if (!rawTurnSize || !Number.isSafeInteger(value) || value < 1) {
+      throw new AdminHttpError(400, 'blockTurnSize must be a positive integer')
+    }
+    turnSize = value
+  }
+  if (rawLambda !== undefined) {
+    const value = Number(rawLambda)
+    if (!rawLambda || !Number.isFinite(value) || value < 0) {
+      throw new AdminHttpError(400, 'blockDecayLambda must be a non-negative finite number')
+    }
+    lambda = value
+  }
+  const result: { blockTurnSize?: number; blockDecayLambda?: number } = {}
+  if (turnSize !== undefined) result.blockTurnSize = await runtime.adminSetBlockTurnSize(turnSize)
+  if (lambda !== undefined) result.blockDecayLambda = await runtime.adminSetBlockDecayLambda(lambda)
+  return result
 }
 
 async function importExternalMemory(runtime: StrataGateRuntime, req: WebRequest): Promise<unknown> {

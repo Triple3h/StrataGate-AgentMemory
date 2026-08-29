@@ -151,6 +151,12 @@ Event and fact-level element search use two inspectable ranking sources:
 
 Reciprocal-rank fusion combines the available rankings. A non-empty query with no lexical or structured match returns an empty result rather than all candidates. Element search returns the matched fact plus its element ID, validity interval, and event provenance; callers expand the full element card only when needed. The reference path does not use embeddings or vector similarity.
 
+Integration tool responses intentionally expose compact search cards. They retain stable IDs, summaries,
+timestamps, and evidence references while leaving narrative/quotes/source-message lists and full graph
+facts/edges to the expand tools. `rankScore` is a BM25/RRF ordering metric only, not confidence or
+factual accuracy. Graph relation-only hits are filtered as likely adjacency noise; name, alias, tag,
+state, fact, type, and other descriptive matches remain eligible across all supported node types.
+
 ## Event weight and adoption
 
 Event decay uses:

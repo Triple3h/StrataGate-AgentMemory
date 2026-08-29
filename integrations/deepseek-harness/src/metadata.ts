@@ -22,6 +22,20 @@ export class DshMetadataStore {
     this.database.exec(METADATA_SCHEMA)
   }
 
+  blockTurnSize(): number | null {
+    const row = this.database.prepare("SELECT value FROM stratagate_dsh_settings WHERE key = 'blockTurnSize'")
+      .get() as { value: string } | undefined
+    const value = Number(row?.value)
+    return Number.isSafeInteger(value) && value >= 1 ? value : null
+  }
+
+  setBlockTurnSize(value: number): void {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new TypeError('blockTurnSize must be a positive integer')
+    }
+    this.setSetting('blockTurnSize', value)
+  }
+
   blockDecayLambda(): number | null {
     const row = this.database.prepare("SELECT value FROM stratagate_dsh_settings WHERE key = 'blockDecayLambda'")
       .get() as { value: string } | undefined
@@ -33,11 +47,15 @@ export class DshMetadataStore {
     if (!Number.isFinite(value) || value < 0) {
       throw new TypeError('blockDecayLambda must be a non-negative finite number')
     }
+    this.setSetting('blockDecayLambda', value)
+  }
+
+  private setSetting(key: string, value: number): void {
     this.database.prepare(`
       INSERT INTO stratagate_dsh_settings (key, value, updated_at)
-      VALUES ('blockDecayLambda', ?, ?)
+      VALUES (?, ?, ?)
       ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(String(value), new Date().toISOString())
+    `).run(key, String(value), new Date().toISOString())
   }
 
   workspaceName(namespace: string): string | null {

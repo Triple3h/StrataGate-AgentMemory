@@ -381,6 +381,7 @@ export interface SearchOptions {
 
 export interface EventSearchResult {
   event: EventCard;
+  /** BM25/RRF ordering score; never a probability, confidence, or accuracy. */
   score: number;
 }
 
@@ -396,12 +397,18 @@ export interface ElementSearchResult {
   name: string;
   type: MemoryElementType;
   fact: ElementFact;
+  /** BM25/RRF ordering score; never a probability, confidence, or accuracy. */
   score: number;
 }
 
 export interface GraphNodeSearchResult {
   node: GraphNode;
+  /** BM25/RRF ordering score; never a probability, confidence, or accuracy. */
   score: number;
+  /** Fields that contained a lexical query-term match (for explainability). */
+  matchedFields?: string[];
+  /** Human-readable explanation of why this node passed the lexical filter. */
+  matchReason?: string;
 }
 
 export interface RawSearchHit {

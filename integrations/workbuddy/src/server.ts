@@ -71,7 +71,7 @@ server.registerResource('stratagate-star-prompt', STAR_WIDGET_URI, {
 
 server.registerTool('memory_search_events', {
   title: 'Search StrataGate events',
-  description: 'Search source-traceable historical decisions, outcomes, plans, corrections, and time-based events. Results must be assessed before use.',
+  description: 'Search source-traceable historical decisions, outcomes, plans, corrections, and time-based events. Results are compact by default; use memory_expand_event for narrative/quotes/source messages. rankScore is BM25/RRF ordering only, not confidence or factual accuracy. Results must be assessed before use.',
   inputSchema: {
     query: z.string().min(1).max(2_000),
     session_id: session,
@@ -111,21 +111,25 @@ server.registerTool('memory_search_elements', {
 
 server.registerTool('memory_search_raw', {
   title: 'Search raw StrataGate memory',
-  description: 'Search recent or archived L5 source messages when derived memory is missing exact wording, dates, constraints, or tool results.',
+  description: 'Search recent or archived L5 source messages when derived memory is missing exact wording, dates, constraints, or tool results. Results include a bounded excerpt and blockId; expand the block for complete source details. Defaults to the whole current namespace; use scope=session for the active thread.',
   inputSchema: {
     query: z.string().min(1).max(2_000),
     session_id: session,
     limit: z.number().int().min(1).max(20).optional(),
+    scope: z.enum(['session', 'namespace']).default('namespace'),
   },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-}, (args) => safe(() => runtime.searchRaw(args.query, args.session_id, args.limit)))
+}, (args) => safe(() => runtime.searchRaw(args.query, args.session_id, args.limit, args.scope)))
 
 server.registerTool('memory_get_blocks', {
   title: 'List StrataGate memory blocks',
-  description: 'List the current decayed L0-L5 block views. Use when event or element search does not identify the right source.',
-  inputSchema: { session_id: session },
+  description: 'List decayed L0-L5 block views. Defaults to the active session; use scope=namespace to inspect all threads in the current namespace. The response includes scope, namespace, threadId, counts, and a machine-readable emptyReason when no block matches.',
+  inputSchema: {
+    session_id: session,
+    scope: z.enum(['session', 'namespace']).default('session'),
+  },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-}, (args) => safe(() => runtime.getBlocks(args.session_id)))
+}, (args) => safe(() => runtime.getBlocks(args.session_id, args.scope)))
 
 server.registerTool('memory_expand_event', {
   title: 'Expand a StrataGate event',

@@ -25,17 +25,40 @@ import {
 export interface EvidenceItem {
   ref: string
   kind: 'event' | 'element' | 'raw' | 'tail' | 'block'
+  id?: string
+  blockId?: string
+  messageId?: string
+  type?: string
   title: string
   content: string
+  summary?: string
+  currentState?: string
+  rankScore?: number
+  scoreMeaning?: string
+  matchedFields?: string[]
+  matchReason?: string
+  turnRange?: [number, number]
   sourceTime?: string
   target: EvidenceTarget
+  threadId?: string
 }
 
 export interface BatchResult {
   batchId: string
   evidenceRefs: string[]
   results: EvidenceItem[]
+  scope?: BlockQueryScope
+  namespace?: string
+  threadId?: string
+  blockCount?: number
+  namespaceBlockCount?: number
+  namespaceThreadIds?: string[]
+  openTailCount?: number
+  emptyReason?: BlockEmptyReason | null
 }
+
+export type BlockQueryScope = 'session' | 'namespace'
+type BlockEmptyReason = 'no_blocks_in_namespace' | 'blocks_exist_in_other_threads' | 'open_tail_pending'
 
 export interface RecordUseResult {
   recorded: true
@@ -120,27 +143,40 @@ export class WorkBuddyRuntime {
       }).slice(-4)
 
       const output: EvidenceItem[] = []
-      for (const { event } of events) output.push({
+      for (const { event, score } of events) output.push({
         ref: `event:${event.id}`,
         kind: 'event',
+        id: event.id,
         title: event.title,
         content: short(event.summary),
+        summary: short(event.summary),
+        rankScore: score,
+        scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
         sourceTime: event.temporal.happenedStart ?? event.temporal.mentionedAt ?? event.createdAt,
         target: { eventIds: [event.id], elementIds: [] },
       })
       for (const result of elements) output.push({
         ref: `element:${result.elementId}:fact:${result.id}`,
         kind: 'element',
+        id: result.id,
+        type: result.type,
         title: `${result.name} · ${result.fact.key}`,
         content: short(valueText(result.fact.value)),
+        summary: short(valueText(result.fact.value)),
+        rankScore: result.score,
+        scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
         ...(result.fact.validFrom ? { sourceTime: result.fact.validFrom } : {}),
         target: { eventIds: result.fact.sourceEventIds, elementIds: [result.elementId] },
       })
       for (const result of raw) output.push({
         ref: `raw:${result.blockId}:${result.message.id}`,
         kind: 'raw',
+        id: result.message.id,
+        messageId: result.message.id,
+        blockId: result.blockId,
         title: `Raw ${result.message.role} message`,
         content: short(result.message.content),
+        turnRange: result.turnRange,
         sourceTime: result.message.createdAt,
         target: { eventIds: [], elementIds: [] },
       })
@@ -158,11 +194,15 @@ export class WorkBuddyRuntime {
   }
 
   async searchEvents(query: string, sessionId = sessionIdFallback(), options: SearchOptions = {}): Promise<BatchResult> {
-    const items = await this.withMemory(async (memory) => (await memory.searchEvents(query, options)).map(({ event }) => ({
+    const items = await this.withMemory(async (memory) => (await memory.searchEvents(query, options)).map(({ event, score }) => ({
       ref: `event:${event.id}`,
       kind: 'event' as const,
+      id: event.id,
       title: event.title,
       content: short(event.summary),
+      summary: short(event.summary),
+      rankScore: score,
+      scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
       sourceTime: event.temporal.happenedStart ?? event.temporal.mentionedAt ?? event.createdAt,
       target: { eventIds: [event.id], elementIds: [] },
     })))
@@ -173,50 +213,89 @@ export class WorkBuddyRuntime {
     const items = await this.withMemory(async (memory) => (await memory.searchElements(query, options)).map((result) => ({
       ref: `element:${result.elementId}:fact:${result.id}`,
       kind: 'element' as const,
+      id: result.id,
+      type: result.type,
       title: `${result.name} · ${result.fact.key}`,
       content: short(valueText(result.fact.value)),
+      summary: short(valueText(result.fact.value)),
+      rankScore: result.score,
+      scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
       ...(result.fact.validFrom ? { sourceTime: result.fact.validFrom } : {}),
       target: { eventIds: result.fact.sourceEventIds, elementIds: [result.elementId] },
     })))
     return this.createBatch(sessionId, items)
   }
 
-  async searchRaw(query: string, sessionId = sessionIdFallback(), limit?: number): Promise<BatchResult> {
+  async searchRaw(query: string, sessionId = sessionIdFallback(), limit?: number, scope: BlockQueryScope = 'namespace'): Promise<BatchResult> {
     const items = await this.withMemory(async (memory) => {
-      const archived: EvidenceItem[] = memory.searchRawMemory(query, limit).map((result) => ({
+      const archived: EvidenceItem[] = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER)
+        .filter((result) => scope === 'namespace' || result.message.threadId === sessionId)
+        .map((result) => ({
         ref: `raw:${result.blockId}:${result.message.id}`,
         kind: 'raw',
+        id: result.message.id,
+        messageId: result.message.id,
+        blockId: result.blockId,
         title: `Raw ${result.message.role} message`,
-        content: short(result.message.content),
+        content: short(result.message.content, 500),
+        turnRange: result.turnRange,
         sourceTime: result.message.createdAt,
+        ...(result.message.threadId ? { threadId: result.message.threadId } : {}),
         target: { eventIds: [], elementIds: [] },
       }))
       const tokens = searchTokens(query)
       const recent: EvidenceItem[] = memory.listOpenTail().filter((message) => {
+        if (scope === 'session' && message.threadId !== undefined && message.threadId !== sessionId) return false
         const haystack = new Set(searchTokens(message.content))
         return tokens.some((token) => haystack.has(token))
       }).slice(0, limit ?? 6).map((message) => ({
         ref: `tail:${message.id}`,
         kind: 'tail',
+        id: message.id,
+        messageId: message.id,
         title: `Recent ${message.role} message`,
-        content: short(message.content),
+        content: short(message.content, 500),
         sourceTime: message.createdAt,
+        ...(message.threadId ? { threadId: message.threadId } : {}),
         target: { eventIds: [], elementIds: [] },
       }))
       return [...recent, ...archived].slice(0, limit ?? 6)
     })
-    return this.createBatch(sessionId, items)
+    return this.createBatch(sessionId, items, { scope, namespace: this.config.namespace, threadId: sessionId })
   }
 
-  async getBlocks(sessionId = sessionIdFallback()): Promise<BatchResult> {
-    const items = await this.withMemory(async (memory) => memory.getBlockContext().map((block) => ({
+  async getBlocks(sessionId = sessionIdFallback(), scope: BlockQueryScope = 'session'): Promise<BatchResult> {
+    const outcome = await this.withMemory(async (memory) => {
+      const snapshot = memory.exportSnapshot()
+      const all = memory.getBlockContext()
+      const items = (scope === 'namespace' ? all : all.filter((block) => block.threadId === sessionId || block.threadId === undefined)).map((block) => ({
       ref: `block:${block.id}:level:${block.level}`,
       kind: 'block' as const,
       title: `Block ${block.turnRange[0]}–${block.turnRange[1]} · ${block.label}`,
       content: short(block.content),
+      ...(block.threadId ? { threadId: block.threadId } : {}),
       target: { eventIds: [], elementIds: [] },
-    })))
-    return this.createBatch(sessionId, items)
+      }))
+      const namespaceBlockCount = snapshot.blocks.length
+      const namespaceThreadIds = [...new Set(snapshot.blocks.map((block) => block.threadId).filter((value): value is string => Boolean(value)))]
+      const openTailCount = snapshot.openTail.filter((message) => scope === 'namespace' || message.threadId === undefined || message.threadId === sessionId).length
+      const emptyReason: BlockEmptyReason | null = items.length > 0
+        ? null
+        : namespaceBlockCount === 0
+          ? (openTailCount > 0 ? 'open_tail_pending' : 'no_blocks_in_namespace')
+          : (openTailCount > 0 ? 'open_tail_pending' : 'blocks_exist_in_other_threads')
+      return { items, blockCount: items.length, namespaceBlockCount, namespaceThreadIds, openTailCount, emptyReason }
+    })
+    return this.createBatch(sessionId, outcome.items, {
+      scope,
+      namespace: this.config.namespace,
+      threadId: sessionId,
+      blockCount: outcome.blockCount,
+      namespaceBlockCount: outcome.namespaceBlockCount,
+      namespaceThreadIds: outcome.namespaceThreadIds,
+      openTailCount: outcome.openTailCount,
+      emptyReason: outcome.emptyReason,
+    })
   }
 
   async expandEvent(sourceBatchId: string, eventId: string): Promise<BatchResult> {
@@ -346,7 +425,7 @@ export class WorkBuddyRuntime {
     }
   }
 
-  private async createBatch(sessionId: string, items: EvidenceItem[]): Promise<BatchResult> {
+  private async createBatch(sessionId: string, items: EvidenceItem[], metadata: Partial<BatchResult> = {}): Promise<BatchResult> {
     const id = `batch_${randomUUID()}`
     const batch: StoredBatch = {
       id,
@@ -357,7 +436,7 @@ export class WorkBuddyRuntime {
       refs: Object.fromEntries(items.map((item) => [item.ref, item.target])),
     }
     await this.state.writeBatch(batch)
-    return { batchId: id, evidenceRefs: Object.keys(batch.refs), results: items }
+    return { batchId: id, evidenceRefs: Object.keys(batch.refs), results: items, ...metadata }
   }
 
   private async requireBatch(batchId: string): Promise<StoredBatch> {

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.36 - 2026-08-28
+
+- Make completed conversation turns per Block editable in Advanced Settings, persist it globally, and suggest an optional λ adjustment that preserves decay speed per turn.
+
+## 0.2.35 - 2026-08-27
+
+- Return compact Event, Knowledge Graph, and raw-memory search cards while keeping full details in expand tools.
+- Rename tool-facing ranking output to `rankScore` and document that it is not confidence or factual accuracy.
+- Filter relation-only Knowledge Graph matches, report matched fields, and preserve distinct same-name entity types.
+
+## 0.2.34 - 2026-08-27
+
+- Add explicit `session` and `namespace` scopes to block and raw-memory retrieval.
+- Return namespace, thread, counts, and machine-readable empty reasons for block queries.
+- Keep session namespace isolation and make open-tail and cross-thread empty results explainable.
+
 ## 0.2.33 - 2026-08-27
 
 - Keep concurrent retrieval batches independently addressable through optional `batch_id` parameters on assessment and usage recording while preserving latest-batch defaults for sequential calls.

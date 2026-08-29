@@ -16,6 +16,7 @@ import {
   type MemoryElementType,
   type MemoryBlock,
   type RawMessage,
+  type RawSearchHit,
   type RetrievalAssessment,
   type RetrievalAssessmentInput,
   type SearchOptions,
@@ -37,6 +38,22 @@ interface RetrievalBatch {
   refs: Map<string, EvidenceTarget>
   status: 'unresolved' | 'recorded'
   assessment?: RetrievalAssessment
+}
+
+export type BlockQueryScope = 'session' | 'namespace'
+
+type BlockEmptyReason = 'no_blocks_in_namespace' | 'blocks_exist_in_other_threads' | 'open_tail_pending'
+
+interface BlockQueryStatus {
+  [key: string]: unknown
+  scope: BlockQueryScope
+  namespace: string
+  threadId: string
+  blockCount: number
+  namespaceBlockCount: number
+  namespaceThreadIds: string[]
+  openTailCount: number
+  emptyReason: BlockEmptyReason | null
 }
 
 interface RecordRefIssue {
@@ -77,6 +94,7 @@ export class StrataGateRuntime {
   private batchSequence = 0
   private closed = false
   private ingestError: unknown
+  private blockTurnSize: number
   private blockDecayLambda: number
 
   constructor(
@@ -85,6 +103,7 @@ export class StrataGateRuntime {
     private readonly onIngestError: (error: unknown) => void = () => {},
     private readonly flushNativeSession: (session: Session) => Promise<void> = async () => {},
   ) {
+    this.blockTurnSize = config.blockTurnSize
     this.blockDecayLambda = config.blockDecayLambda
   }
 
@@ -120,7 +139,7 @@ export class StrataGateRuntime {
     return this.batch(session, results.map(({ event }) => ({
       ref: `event:${event.id}`,
       target: { eventIds: [event.id], elementIds: [] },
-    })), results)
+    })), results.map(({ event, score }) => compactEvent(event, score)))
   }
 
   async searchElements(session: Session, query: string, options: ElementSearchOptions = {}): Promise<unknown> {
@@ -129,25 +148,63 @@ export class StrataGateRuntime {
     return this.batch(session, results.map((result) => ({
       ref: `element:${result.elementId}:fact:${result.id}`,
       target: { eventIds: [], elementIds: [result.elementId] },
-    })), results)
+    })), results.map((result) => ({
+      id: result.id,
+      elementId: result.elementId,
+      name: result.name,
+      type: result.type,
+      factKey: result.fact.key,
+      value: Array.isArray(result.fact.value) ? result.fact.value.join(', ') : result.fact.value,
+      validFrom: result.fact.validFrom,
+      validTo: result.fact.validTo,
+      rankScore: result.score,
+      scoreMeaning: 'Ranking-only BM25/RRF score; not confidence or factual accuracy.',
+    })))
   }
 
-  async searchRaw(session: Session, query: string, limit?: number): Promise<unknown> {
+  async searchRaw(session: Session, query: string, limit?: number, scope: BlockQueryScope = 'namespace'): Promise<unknown> {
     await this.flush()
-    const results = (await this.space(session)).searchRawMemory(query, limit)
+    const memory = await this.space(session)
+    const threadId = String(session.id)
+    const results = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER)
+      .filter((result) => scope === 'namespace' || result.message.threadId === threadId || result.message.threadId === undefined)
+      .slice(0, limit)
     return this.batch(session, results.map((result, index) => ({
       ref: `raw:${result.blockId}:${result.message.id}:${index}`,
       target: { eventIds: [], elementIds: [] },
-    })), results)
+    })), results.map(compactRawHit), { scope, namespace: this.namespaceFor(session), threadId })
   }
 
-  async blocks(session: Session): Promise<unknown> {
+  async blocks(session: Session, scope: BlockQueryScope = 'session'): Promise<unknown> {
     await this.flush()
-    const results = (await this.space(session)).getBlockContext(String(session.id))
+    const memory = await this.space(session)
+    const threadId = String(session.id)
+    const snapshot = memory.exportSnapshot()
+    const namespaceBlockCount = snapshot.blocks.length
+    const namespaceThreadIds = [...new Set(snapshot.blocks.map((block) => block.threadId).filter((value): value is string => Boolean(value)))]
+    const openTailCount = snapshot.openTail.filter((message) => scope === 'namespace' || message.threadId === threadId || message.threadId === undefined).length
+    const results = scope === 'namespace'
+      ? memory.getBlockContext()
+      : memory.getBlockContext().filter((block) => block.threadId === threadId || block.threadId === undefined)
+    const emptyReason: BlockEmptyReason | null = results.length > 0
+      ? null
+      : namespaceBlockCount === 0
+        ? (openTailCount > 0 ? 'open_tail_pending' : 'no_blocks_in_namespace')
+        : (openTailCount > 0 ? 'open_tail_pending' : 'blocks_exist_in_other_threads')
+    const status: BlockQueryStatus = {
+      scope,
+      namespace: this.namespaceFor(session),
+      threadId,
+      blockCount: results.length,
+      namespaceBlockCount,
+      namespaceThreadIds,
+      openTailCount,
+      emptyReason,
+    }
     return this.batch(session, results.map((result) => ({
       ref: `block:${result.id}:level:${result.level}`,
       target: { eventIds: [], elementIds: [] },
-    })), results)
+    })), results, status)
   }
 
   async expandBlock(session: Session, id: string, target?: string | number): Promise<unknown> {
@@ -458,6 +515,7 @@ export class StrataGateRuntime {
     if (this.config.database === ':memory:' || !existsSync(this.config.database)) return
     const metadata = new DshMetadataStore(this.config.database)
     try {
+      this.blockTurnSize = metadata.blockTurnSize() ?? this.config.blockTurnSize
       this.blockDecayLambda = metadata.blockDecayLambda() ?? this.config.blockDecayLambda
     } finally {
       metadata.close()
@@ -467,12 +525,12 @@ export class StrataGateRuntime {
       for (const namespace of storage.listNamespaces()) {
         const loaded = await storage.load(namespace)
         if (!loaded || (
-          loaded.snapshot.blockTurnSize === this.config.blockTurnSize
+          loaded.snapshot.blockTurnSize === this.blockTurnSize
           && loaded.snapshot.blockDecayLambda === this.blockDecayLambda
         )) continue
         await storage.save(namespace, {
           ...loaded.snapshot,
-          blockTurnSize: this.config.blockTurnSize,
+          blockTurnSize: this.blockTurnSize,
           blockDecayLambda: this.blockDecayLambda,
         }, loaded.revision)
       }
@@ -510,7 +568,7 @@ export class StrataGateRuntime {
       memory = await StrataGate.open({
         database: this.config.database,
         namespace: key,
-        blockTurnSize: this.config.blockTurnSize,
+        blockTurnSize: this.blockTurnSize,
         blockDecayLambda: this.blockDecayLambda,
         graphProjector: this.models.graphProjector,
         disableElementProjection: true,
@@ -558,6 +616,16 @@ export class StrataGateRuntime {
     return value
   }
 
+  async adminSetBlockTurnSize(value: number): Promise<number> {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new TypeError('blockTurnSize must be a positive integer')
+    }
+    const update = this.settingsTail.catch(() => {}).then(() => this.applyBlockTurnSize(value))
+    this.settingsTail = update.then(() => {}, () => {})
+    await update
+    return value
+  }
+
   async adminExpandBlock(namespace: string, id: string, target: string | number): Promise<unknown> {
     const key = namespace.trim()
     if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
@@ -571,7 +639,7 @@ export class StrataGateRuntime {
       const memory = await StrataGate.open({
         database: this.config.database,
         namespace: key,
-        blockTurnSize: this.config.blockTurnSize,
+        blockTurnSize: this.blockTurnSize,
         blockDecayLambda: this.blockDecayLambda,
         summarizer: this.models.summarizer,
         extractor: this.models.extractor,
@@ -621,6 +689,39 @@ export class StrataGateRuntime {
     }
   }
 
+  private async applyBlockTurnSize(value: number): Promise<void> {
+    await this.flush()
+    this.blockTurnSize = value
+    if (this.config.database !== ':memory:') {
+      const metadata = new DshMetadataStore(this.config.database)
+      try {
+        metadata.setBlockTurnSize(value)
+      } finally {
+        metadata.close()
+      }
+    }
+
+    const openNamespaces = new Set<string>()
+    for (const [namespace, opening] of this.spaces) {
+      const memory = await opening
+      await memory.setBlockTurnSize(value)
+      openNamespaces.add(namespace)
+    }
+    if (this.config.database !== ':memory:' && existsSync(this.config.database)) {
+      const storage = new SqliteStorage({ filename: this.config.database })
+      try {
+        for (const namespace of storage.listNamespaces()) {
+          if (openNamespaces.has(namespace)) continue
+          const loaded = await storage.load(namespace)
+          if (!loaded || loaded.snapshot.blockTurnSize === value) continue
+          await storage.save(namespace, { ...loaded.snapshot, blockTurnSize: value }, loaded.revision)
+        }
+      } finally {
+        await storage.close()
+      }
+    }
+  }
+
   private space(session: Session): Promise<StrataGate> {
     const namespace = this.namespaceFor(session)
     this.rememberWorkspace(namespace, session.header.cwd)
@@ -629,7 +730,7 @@ export class StrataGateRuntime {
       opening = StrataGate.open({
         database: this.config.database,
         namespace,
-        blockTurnSize: this.config.blockTurnSize,
+        blockTurnSize: this.blockTurnSize,
         blockDecayLambda: this.blockDecayLambda,
         summarizer: this.models.summarizer,
         extractor: this.models.extractor,
@@ -675,7 +776,7 @@ export class StrataGateRuntime {
     return this.batch(session, results.map(({ node }) => ({
       ref: `graph-node:${node.id}`,
       target: { eventIds: node.sourceEventIds, elementIds: [] },
-    })), results)
+    })), results.map(({ node, score, matchedFields, matchReason }) => compactGraphNode(node, score, matchedFields, matchReason)))
   }
 
   async expandGraphNode(session: Session, id: string): Promise<unknown> {
@@ -740,6 +841,7 @@ export class StrataGateRuntime {
     session: Session,
     evidence: Array<{ ref: string; target: EvidenceTarget }>,
     results: unknown,
+    metadata: Record<string, unknown> = {},
   ): unknown {
     const id = `batch_${++this.batchSequence}`
     const refs = new Map(evidence.map(({ ref, target }) => [ref, target]))
@@ -751,7 +853,7 @@ export class StrataGateRuntime {
     }
     sessionBatches.set(id, { id, refs, status: 'unresolved' })
     this.latestBatchIds.set(key, id)
-    return { batchId: id, evidenceRefs: [...refs.keys()], results }
+    return { batchId: id, evidenceRefs: [...refs.keys()], results, ...metadata }
   }
 
   private requireBatch(session: Session, batchId: string | undefined, operation: string): RetrievalBatch {
@@ -908,6 +1010,77 @@ function renderBlockSurfaceMessage(context: BlockContextEntry): string {
     '',
     context.content,
   ].join('\n')
+}
+
+function compactTemporal(event: EventCard): Record<string, unknown> {
+  const temporal = event.temporal
+  return Object.fromEntries(Object.entries({
+    mentionedAt: temporal.mentionedAt,
+    happenedStart: temporal.happenedStart,
+    happenedEnd: temporal.happenedEnd,
+    precision: temporal.precision,
+    status: temporal.status,
+    eventType: temporal.eventType,
+  }).filter(([, value]) => value !== undefined))
+}
+
+function compactText(value: string, limit = 800): string {
+  return value.replace(/\s+/gu, ' ').trim().slice(0, limit)
+}
+
+function compactEvent(event: EventCard, score: number): Record<string, unknown> {
+  return {
+    id: event.id,
+    title: compactText(event.title, 240),
+    summary: compactText(event.summary),
+    sourceTime: event.temporal.happenedStart ?? event.temporal.mentionedAt ?? event.createdAt,
+    temporal: compactTemporal(event),
+    sourceBlockId: event.sourceBlockId,
+    status: event.status,
+    scope: event.scope,
+    criticality: event.criticality,
+    rankScore: score,
+    scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
+  }
+}
+
+function compactGraphNode(
+  node: GraphNode,
+  score: number,
+  matchedFields?: readonly string[],
+  matchReason?: string,
+): Record<string, unknown> {
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    aliases: node.aliases.map((alias) => compactText(alias, 160)),
+    currentState: compactText(node.currentState, 500),
+    status: node.status,
+    rankScore: score,
+    ...(matchedFields ? { matchedFields } : {}),
+    ...(matchReason ? { matchReason } : {}),
+    scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
+  }
+}
+
+function compactRawHit(result: RawSearchHit): Record<string, unknown> {
+  const message = {
+    id: result.message.id,
+    role: result.message.role,
+    content: compactText(result.message.content, 500),
+    createdAt: result.message.createdAt,
+    ...(result.message.threadId ? { threadId: result.message.threadId } : {}),
+  }
+  return {
+    id: result.message.id,
+    blockId: result.blockId,
+    turnRange: result.turnRange,
+    message,
+    sourceTime: result.message.createdAt,
+    ...(result.message.threadId ? { threadId: result.message.threadId } : {}),
+    detailHint: 'Use memory_expand_block with blockId for complete block/source details.',
+  }
 }
 
 function currentBlockSurfaceMessages(session: Session): Map<string, { seq: number; text: string }> {

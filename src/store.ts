@@ -202,8 +202,7 @@ function errorMessage(error: unknown): string {
 const STRATAGATE_CONSTRUCTOR_TOKEN = Symbol('StrataGate constructor');
 
 export class StrataGate {
-  readonly blockTurnSize: number;
-
+  private blockTurnSizeValue: number;
   private blockDecayLambdaValue: number;
   private readonly summarizer: BlockSummarizer | undefined;
   private readonly extractor: EventExtractor | undefined;
@@ -236,7 +235,7 @@ export class StrataGate {
     if (token !== STRATAGATE_CONSTRUCTOR_TOKEN) {
       throw new TypeError('Use StrataGate.open() for SQLite or StrataGate.inMemory() for explicit ephemeral storage');
     }
-    this.blockTurnSize = Math.max(1, Math.floor(options.blockTurnSize ?? DEFAULT_BLOCK_TURN_SIZE));
+    this.blockTurnSizeValue = Math.max(1, Math.floor(options.blockTurnSize ?? DEFAULT_BLOCK_TURN_SIZE));
     const blockDecayLambda = options.blockDecayLambda ?? BLOCK_DECAY_LAMBDA;
     if (!Number.isFinite(blockDecayLambda) || blockDecayLambda < 0) {
       throw new TypeError('blockDecayLambda must be a non-negative finite number');
@@ -390,6 +389,20 @@ export class StrataGate {
 
   get storageRevision(): number {
     return this.revision;
+  }
+
+  get blockTurnSize(): number {
+    return this.blockTurnSizeValue;
+  }
+
+  async setBlockTurnSize(value: number): Promise<void> {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new TypeError('blockTurnSize must be a positive integer');
+    }
+    if (value === this.blockTurnSizeValue) return;
+    await this.commitMutation(() => {
+      this.blockTurnSizeValue = value;
+    });
   }
 
   get blockDecayLambda(): number {
@@ -976,6 +989,11 @@ export class StrataGate {
     return hits;
   }
 
+  /**
+   * Return decayed block views. Passing a threadId limits the result to that
+   * conversation; omitting it intentionally returns every thread in this
+   * StrataGate namespace (never another namespace).
+   */
   getBlockContext(threadId?: string): BlockContextEntry[] {
     const blocks = threadId === undefined
       ? this.blocks
@@ -1218,13 +1236,46 @@ export class StrataGate {
 
   async searchGraphNodes(query: string, limit = 8): Promise<GraphNodeSearchResult[]> {
     const candidates = this.graphNodes.filter((node) => node.status === 'active' || node.status === 'disputed');
+    const queryTokens = [...new Set(searchTokens(query))];
+    const fieldValues = (node: GraphNode): Array<readonly [string, string]> => [
+      ['name', node.name],
+      ['aliases', node.aliases.join(' ')],
+      ['tags', (node.tags ?? []).join(' ')],
+      ['type', node.type],
+      ['currentState', node.currentState],
+      ['facts', node.facts.map((fact) => `${fact.key} ${Array.isArray(fact.value) ? fact.value.join(' ') : fact.value}`).join(' ')],
+      ['relations', this.graphEdges.filter((edge) => edge.fromNodeId === node.id || edge.toNodeId === node.id).map(({ relation }) => relation).join(' ')],
+    ];
     const ranked = bm25Rank(candidates, query, (node) => weightedSearchTokens([
       [node.name, 6], [node.aliases.join(' '), 5], [(node.tags ?? []).join(' '), 5], [node.type, 2], [node.currentState, 4],
       [node.facts.map((fact) => `${fact.key} ${Array.isArray(fact.value) ? fact.value.join(' ') : fact.value}`).join(' '), 4],
       [this.graphEdges.filter((edge) => edge.fromNodeId === node.id || edge.toNodeId === node.id).map(({ relation }) => relation).join(' '), 3],
-    ])).slice(0, Math.max(1, Math.min(20, limit)));
+    ])).filter(({ item }) => {
+      const fields = fieldValues(item);
+      const matches = fields.filter(([, value]) => {
+        const haystack = new Set(searchTokens(value));
+        return queryTokens.some((token) => haystack.has(token));
+      }).map(([field]) => field);
+      // Relation text is useful context, but relation-only hits are commonly
+      // adjacent/noise nodes. Keep type-only hits so valid project/tool/etc.
+      // searches continue to work, while requiring a descriptive field for
+      // ordinary lexical queries.
+      if (!matches.some((field) => field !== 'relations')) return false;
+      return matches.some((field) => field !== 'relations');
+    }).slice(0, Math.max(1, Math.min(20, limit)));
     if (searchTokens(query).length > 0 && ranked.length === 0) return [];
-    return ranked.map(({ item: node, score }) => ({ node, score }));
+    return ranked.map(({ item: node, score }) => {
+      const matchedFields = fieldValues(node).filter(([, value]) => {
+        const haystack = new Set(searchTokens(value));
+        return queryTokens.some((token) => haystack.has(token));
+      }).map(([field]) => field);
+      return {
+        node,
+        score,
+        matchedFields,
+        matchReason: `Lexical match in ${matchedFields.join(', ') || 'indexed fields'}; score is ranking-only.`,
+      };
+    });
   }
 
   private requireGraphProjectionJob(id: string): GraphProjectionJob {

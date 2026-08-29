@@ -195,7 +195,7 @@ describe('StrataGate Web client contract', () => {
     expect([...importance.values()].every(({ radius }: { radius: number }) => radius >= 30 && radius <= 54)).toBe(true)
   })
 
-  it('keeps failures reassuring and makes only lambda editable under More', () => {
+  it('keeps failures reassuring and exposes related Block settings under More', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     expect(source).toContain('lastErrorFull')
     expect(source).toContain('原始内容已经保存，不会丢失。')
@@ -206,7 +206,12 @@ describe('StrataGate Web client contract', () => {
     expect(source).toContain("['settings', '⚙', '高级设置'")
     expect(source).not.toContain("['responses', '模型响应']")
     expect(source).toContain("type: 'number'")
+    expect(source).toContain("step: '1'")
     expect(source).toContain("step: '0.05'")
+    expect(source).toContain('每个 Block 的对话轮数')
+    expect(source).toContain('尚未封存的内容按新阈值继续处理。')
+    expect(source).toContain('为保持按对话轮数计算的遗忘速度，建议 λ 调整为')
+    expect(source).toContain('采用建议值')
     expect(source).toContain('默认 0.3；数字越小，记忆遗忘越慢，消耗 token 越多，不建议大于 0.4。')
     expect(source).toContain("method: 'PATCH'")
     expect(source).toContain('当前工作区')

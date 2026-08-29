@@ -25,6 +25,24 @@ async function runtime(): Promise<WorkBuddyRuntime> {
 }
 
 describe('WorkBuddyRuntime', () => {
+  it('makes block scope and empty reasons explicit', async () => {
+    const memory = await runtime()
+    await memory.appendTurn({ user: 'thread A marker', assistant: 'saved', threadId: 'thread-a', receiptId: 'turn-a' })
+    await memory.processPending()
+
+    const session = await memory.getBlocks('thread-b')
+    expect(session).toMatchObject({
+      scope: 'session',
+      threadId: 'thread-b',
+      results: [],
+      namespaceBlockCount: 1,
+      emptyReason: 'blocks_exist_in_other_threads',
+    })
+
+    const namespace = await memory.getBlocks('thread-b', 'namespace')
+    expect(namespace).toMatchObject({ scope: 'namespace', results: [{ threadId: 'thread-a' }] })
+  })
+
   it('persists L5 first and derives blocks in the background', async () => {
     const memory = await runtime()
     await memory.appendTurn({

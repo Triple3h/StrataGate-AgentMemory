@@ -346,7 +346,9 @@ describe('SQLite persistence', () => {
     expect(changed.blockTurnSize).toBe(6);
     expect(changed.blockDecayLambda).toBe(0.35);
     expect(changed.listOpenTail()).toHaveLength(2);
+    await changed.setBlockTurnSize(3);
     await changed.setBlockDecayLambda(0.15);
+    expect(changed.blockTurnSize).toBe(3);
     expect(changed.blockDecayLambda).toBe(0.15);
     await changed.close();
 
@@ -356,7 +358,7 @@ describe('SQLite persistence', () => {
       now: fixedNow,
       idFactory: ids(),
     });
-    expect(restored.blockTurnSize).toBe(6);
+    expect(restored.blockTurnSize).toBe(3);
     expect(restored.blockDecayLambda).toBe(0.15);
     await restored.close();
   });

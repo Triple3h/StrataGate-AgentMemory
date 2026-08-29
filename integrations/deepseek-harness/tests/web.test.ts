@@ -110,11 +110,16 @@ const snapshot: StrataGateSnapshot = {
 }
 
 let updatedLambda: number | null = null
+let updatedTurnSize: number | null = null
 let expandedBlock: { namespace: string; id: string; target: string | number } | null = null
 const runtime = {
   adminNamespaces: async () => ['dsh:project:test'],
   adminSnapshot: async (namespace: string) => namespace === 'dsh:project:test' ? snapshot : null,
   adminWorkspaceName: () => 'StrataGate',
+  adminSetBlockTurnSize: async (value: number) => {
+    updatedTurnSize = value
+    return value
+  },
   adminSetBlockDecayLambda: async (value: number) => {
     updatedLambda = value
     return value
@@ -351,14 +356,18 @@ describe('StrataGate admin routes', () => {
     })
   })
 
-  it('updates the global Block decay setting while memory routes remain read-only', async () => {
+  it('updates the global Block settings while memory routes remain read-only', async () => {
     updatedLambda = null
-    const settings = await request('/api/stratagate/settings?blockDecayLambda=0.15', 'PATCH')
-    expect(settings).toMatchObject({ status: 200, body: { blockDecayLambda: 0.15 } })
+    updatedTurnSize = null
+    const settings = await request('/api/stratagate/settings?blockTurnSize=3&blockDecayLambda=0.15', 'PATCH')
+    expect(settings).toMatchObject({ status: 200, body: { blockTurnSize: 3, blockDecayLambda: 0.15 } })
+    expect(updatedTurnSize).toBe(3)
     expect(updatedLambda).toBe(0.15)
 
     const invalid = await request('/api/stratagate/settings?blockDecayLambda=nope', 'PATCH')
     expect(invalid).toMatchObject({ status: 400, body: { error: expect.stringContaining('blockDecayLambda') } })
+    const invalidTurnSize = await request('/api/stratagate/settings?blockTurnSize=2.5', 'PATCH')
+    expect(invalidTurnSize).toMatchObject({ status: 400, body: { error: expect.stringContaining('blockTurnSize') } })
 
     const result = await request('/api/stratagate/memories', 'POST')
     expect(result).toMatchObject({ status: 405, body: { error: expect.stringContaining('read-only') } })

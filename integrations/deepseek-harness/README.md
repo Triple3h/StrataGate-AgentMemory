@@ -99,6 +99,24 @@ memory_expand_block    memory_assess
 memory_record_use
 ```
 
+`memory_get_blocks` accepts `scope=session` (the default, preserving the historical
+session-local behavior) or `scope=namespace` (all threads in the active project,
+session, or global namespace). Every response includes the selected `scope`,
+`namespace`, `threadId`, block counts, and `emptyReason`. A `null` reason means
+blocks were returned; `no_blocks_in_namespace` means the namespace has no sealed
+blocks, `blocks_exist_in_other_threads` means only another thread has sealed
+blocks, and `open_tail_pending` means matching turns exist but have not sealed yet.
+`memory_search_raw` defaults to namespace scope and accepts the same `scope` filter,
+so a raw hit's `blockId` can be followed by `memory_get_blocks(scope=namespace)`
+or `memory_expand_block` without an unexplained visibility mismatch.
+
+Search responses use compact cards by default. Event cards keep `id`, `title`, `summary`, source time,
+status/scope, `sourceBlockId`, `batchId`, and `evidenceRefs`; graph cards keep `id`, `name`, type,
+aliases, current state, status, and explainable `matchedFields`/`matchReason`; raw cards keep the
+message id, `blockId`, role, turn range, and a bounded excerpt. Narrative, quotes, source message lists,
+full graph facts/edges, and nearby raw messages are available through the corresponding expand tools.
+`rankScore` is a BM25/RRF ordering metric only—it is not a probability, confidence, or factual-accuracy score.
+
 Legacy Element tool names remain available only for compatibility with existing installations.
 
 The prompt protocol requires assessment before relying on retrieved evidence. Search does not strengthen a memory. Non-empty `memory_record_use` submissions accept only evidence adopted by a sufficient assessment of the selected batch and use the DSH tool call id as an idempotency receipt. `batch_id` may be omitted for compatibility in strictly sequential flows, where it selects the latest batch; parallel or interleaved retrievals must pass it explicitly. Assessment responses list rejected refs and their reasons.
@@ -113,7 +131,7 @@ Open DSH Settings and select **StrataGate-AgentMemory**. The page provides:
 - manual Block expansion and a two-step external-memory import flow;
 - a Usage Audit chain from a recorded answer turn, through the Evidence Gate verdict and selected memories, back to source messages.
 
-Events, graph facts, and source messages cannot be edited, deleted, or approved in the UI. The UI can still change memory state in three explicit ways: manually expand a Block, import memory exported by another AI, and update the global Block decay coefficient λ in `0.05` steps. The saved λ value immediately applies to every existing workspace, becomes the default for future workspaces, and survives restarts.
+Events, graph facts, and source messages cannot be edited, deleted, or approved in the UI. The UI can still change memory state in three explicit ways: manually expand a Block, import memory exported by another AI, and use Advanced Settings to change the completed turns per Block or the global Block decay coefficient λ. When the Block size changes, the UI explains their relationship and suggests a λ that preserves the decay rate per conversation turn; the user decides whether to adopt it. Saved settings immediately apply to every existing workspace, become the defaults for future workspaces, and survive restarts. Existing sealed Blocks are never repartitioned.
 
 The current UI import is intentionally simple: it validates the pasted `stratagate.external-memory.v2` JSON and adds each valid candidate as a new Event. It does not yet merge, supersede, mark conflicts, or remove duplicates against existing Events. Common token and credential patterns are redacted in message content and structured tool traces before they leave the local server. The SQLite database remains the source of truth.
 
@@ -134,11 +152,11 @@ config:
   # model: deepseek-chat
 ```
 
-`blockDecayLambda` is the initial fallback. Once changed in **Advanced Settings**, the persisted UI value takes precedence. The default is `0.3`; smaller values forget more slowly and consume more tokens, and values above `0.4` are not recommended.
+`blockTurnSize` and `blockDecayLambda` are initial fallbacks. Once changed in **Advanced Settings**, persisted UI values take precedence. λ defaults to `0.3`; smaller values forget more slowly and consume more tokens, and values above `0.4` are not recommended.
 
 `project` derives a stable namespace from the normalized session working directory. `session` isolates every DSH session. `global` shares one namespace.
 
-`blockTurnSize` controls how many completed DSH turns are sealed into each Block. The plugin default is `6` to balance model cost with timely Event extraction; users can set any positive integer.
+`blockTurnSize` controls how many completed DSH turns are sealed into each Block; one turn is one user request plus the completed AI response. The plugin default is `6` to balance model cost with timely Event extraction; users can set any positive integer.
 
 `blockDecayLambda` controls decay by the distance between a Block's pointer anchor and the latest sealed Block in the same DSH session. It defaults to `0.3`. Smaller values decay more slowly; values above `0.4` are not recommended. Turns in the open tail do not increase Block age.
 
