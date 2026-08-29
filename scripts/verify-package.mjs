@@ -38,7 +38,10 @@ try {
     'package.json',
     'cordis.patch.yml',
     'README.md',
-    'docs/README.zh-CN.md',
+    'README.zh-CN.md',
+    'docs/DSH.md',
+    'docs/DSH.zh-CN.md',
+    'screenshots.json',
     'CHANGELOG.md',
     'LICENSE',
     'dist/index.js',
@@ -47,13 +50,14 @@ try {
     'dist/client.d.ts',
   ]
   for (const path of required) assert(files.has(path), `Packed artifact is missing ${path}`)
-  assert(!files.has('README.zh-CN.md'), 'Localized README must not compete with README.md at the package root')
   for (const path of files) {
     assert(!/^(src|tests|scripts|benchmarks)\//.test(path), `Development file leaked into package: ${path}`)
     assert(!/\.(?:db|sqlite3?|pem|key)$/i.test(path), `Sensitive/runtime file leaked into package: ${path}`)
   }
 
   const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
+  assert(manifest.name === 'stratagate-dsh', 'Repository root is not the DSH package')
+  assert(manifest.repository?.directory === undefined, 'Root package must not declare a repository subdirectory')
   assert(manifest.dsh?.bundle?.patch === './cordis.patch.yml', 'Missing DSH bundle patch metadata')
   assert(manifest.dsh?.client?.platform === 'web', 'Missing DSH web client metadata')
   assert(manifest.dshWorkshop?.integration?.protocol === 'harness-profile', 'Missing Workshop integration metadata')

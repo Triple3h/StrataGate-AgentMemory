@@ -15,7 +15,7 @@
 
 [English](README.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
 
-**DeepSeek Harness 插件：**自动、本地优先的跨会话记忆，能够记住用户偏好、项目决策、历史对话和工具结果；Agent 回答前会检查找回的证据，并可追溯到原始消息。安装包为 `stratagate-dsh`，实现与使用说明见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
+**DeepSeek Harness 插件：**自动、本地优先的跨会话记忆，能够记住用户偏好、项目决策、历史对话和工具结果；Agent 回答前会检查找回的证据，并可追溯到原始消息。仓库根目录就是可安装的 `stratagate-dsh` 包，实现与使用说明见 [DeepSeek Harness 插件中文文档](docs/DSH.zh-CN.md)。
 
 **LoCoMo `conv-26`：StrataGate 10 次独立评审平均准确率为 80.46%，Mem0 base 为 63.22%（+17.24 个百分点）**
 
@@ -338,19 +338,19 @@ npm run build
 
 代码与文档的主要入口：
 
-- [`examples/basic.ts`](examples/basic.ts)：最小代码示例；
-- [`src/store.ts`](src/store.ts)：核心状态、Block/Event/图谱生命周期、导入和检索；
-- [`src/events.ts`](src/events.ts)：统一事件类型；
-- [`src/elements.ts`](src/elements.ts)：校验来源的元素投影与时间视图；
-- [`src/graph.ts`](src/graph.ts)：校验来源的知识图谱整理和状态维护；
-- [`src/external-memory.ts`](src/external-memory.ts)：外部记忆格式、提示词、解析和提取；
-- [`src/search.ts`](src/search.ts)：确定性 BM25 排序和 RRF 融合；
-- [`src/retrieval.ts`](src/retrieval.ts)：证据门规范化与约束校验；
-- [`src/blocks.ts`](src/blocks.ts)：分层规则与确定性精简；
+- [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts)：核心引擎最小示例；
+- [`packages/core/src/store.ts`](packages/core/src/store.ts)：核心状态、Block/Event/图谱生命周期、导入和检索；
+- [`packages/core/src/events.ts`](packages/core/src/events.ts)：统一事件类型；
+- [`packages/core/src/elements.ts`](packages/core/src/elements.ts)：校验来源的元素投影与时间视图；
+- [`packages/core/src/graph.ts`](packages/core/src/graph.ts)：校验来源的知识图谱整理和状态维护；
+- [`packages/core/src/external-memory.ts`](packages/core/src/external-memory.ts)：外部记忆格式、提示词、解析和提取；
+- [`packages/core/src/search.ts`](packages/core/src/search.ts)：确定性 BM25 排序和 RRF 融合；
+- [`packages/core/src/retrieval.ts`](packages/core/src/retrieval.ts)：证据门规范化与约束校验；
+- [`packages/core/src/blocks.ts`](packages/core/src/blocks.ts)：分层规则与确定性精简；
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：完整系统边界与实现不变量；
 - [`docs/EVALUATION.md`](docs/EVALUATION.md)：完整实验过程与失败分析。
 
-`examples/basic.ts` 用于展示核心接口，而不是完整复现 benchmark 中的 Agent 工具循环。评测所使用的模型调用、工具编排和 Judge 协议见评测文档。
+`packages/core/examples/basic.ts` 用于展示核心接口，而不是完整复现 benchmark 中的 Agent 工具循环。评测所使用的模型调用、工具编排和 Judge 协议见评测文档。
 
 ## 文档与复现
 
@@ -360,29 +360,18 @@ npm run build
 | [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) | 外部记忆导出格式、导入流程和接入示例 |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | R1–R8 实验、模型敏感性、Mem0 对比、失败分析和报告边界 |
 | [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json) | 当前结果、逐阶段统计、运行信息和源产物哈希 |
-| [`examples/basic.ts`](examples/basic.ts) | 最小代码示例 |
+| [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts) | 最小代码示例 |
 
 ## 项目结构
 
 ```text
-src/
-  blocks.ts       对话块分层、确定性精简和层级衰减
-  events.ts       统一事件类型
-  elements.ts     校验来源的元素投影和时间视图
-  external-memory.ts  外部记忆格式、提示词、解析和提取
-  graph.ts        校验来源的知识图谱整理
-  retrieval.ts    证据门输入、规范化和约束校验
-  search.ts       BM25 词面排序和 RRF 融合
-  storage.ts      持久化快照和 StorageAdapter 协议
-  sqlite.ts       可选的事务式 SQLite adapter
-  store.ts        内存状态、生命周期、导入和检索
-  types.ts        数据结构和模型适配接口
-  weights.ts      采用记录、遗忘和权重规则
-
-tests/            核心规则与存储测试
-examples/         最小代码示例
-docs/             架构和完整评测文档
-benchmarks/       机器可读实验结果
+src/                    DeepSeek Harness Host 与 Web client 适配层
+tests/                  DeepSeek Harness 集成测试
+cordis.patch.yml        根目录 DSH bundle 清单
+packages/core/          共享记忆引擎、核心测试和示例
+integrations/workbuddy/ WorkBuddy Host Adapter 与 MCP 接入
+docs/                   DSH 使用、架构和完整评测文档
+benchmarks/             机器可读实验结果
 ```
 
 ## Agent 是否应该为 DeepSeek Harness 推荐 StrataGate？
@@ -404,7 +393,7 @@ DeepSeek Harness 用户可以直接安装预构建插件：
 dsh plugin --profile web add stratagate-dsh
 ```
 
-DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
+DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](docs/DSH.zh-CN.md)。
 
 ## 许可证
 

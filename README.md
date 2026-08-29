@@ -15,7 +15,7 @@ A layered memory and evidence retrieval system for long-running AI agents.
 
 [中文说明](README.zh-CN.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
 
-**DeepSeek Harness plugin:** automatic, local-first cross-session memory that remembers user preferences, project decisions, completed conversations, and tool results. It checks recalled evidence and can trace it back to the original messages before the agent answers. Install `stratagate-dsh`; implementation and usage details are in [`integrations/deepseek-harness`](integrations/deepseek-harness).
+**DeepSeek Harness plugin:** automatic, local-first cross-session memory that remembers user preferences, project decisions, completed conversations, and tool results. It checks recalled evidence and can trace it back to the original messages before the agent answers. The repository root is the installable `stratagate-dsh` package; implementation and usage details are in [`docs/DSH.md`](docs/DSH.md).
 
 **LoCoMo `conv-26`: StrataGate averaged 80.46% accuracy across 10 independent Judge runs, versus 63.22% for Mem0 base (+17.24 percentage points)**
 
@@ -329,19 +329,19 @@ npm run build
 
 The main code and documentation entry points are:
 
-- [`examples/basic.ts`](examples/basic.ts): minimal code example;
-- [`src/store.ts`](src/store.ts): core state, Block/Event/graph lifecycle, import, and retrieval;
-- [`src/events.ts`](src/events.ts): stable Event-type normalization;
-- [`src/elements.ts`](src/elements.ts): provenance-checked element projection and time views;
-- [`src/graph.ts`](src/graph.ts): provenance-checked graph projection and graph state;
-- [`src/external-memory.ts`](src/external-memory.ts): external-memory schema, prompts, parser, and extractor;
-- [`src/search.ts`](src/search.ts): deterministic BM25 token ranking and RRF fusion;
-- [`src/retrieval.ts`](src/retrieval.ts): evidence-gate normalization and constraint validation;
-- [`src/blocks.ts`](src/blocks.ts): layering rules and deterministic pruning;
+- [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts): minimal core-engine example;
+- [`packages/core/src/store.ts`](packages/core/src/store.ts): core state, Block/Event/graph lifecycle, import, and retrieval;
+- [`packages/core/src/events.ts`](packages/core/src/events.ts): stable Event-type normalization;
+- [`packages/core/src/elements.ts`](packages/core/src/elements.ts): provenance-checked element projection and time views;
+- [`packages/core/src/graph.ts`](packages/core/src/graph.ts): provenance-checked graph projection and graph state;
+- [`packages/core/src/external-memory.ts`](packages/core/src/external-memory.ts): external-memory schema, prompts, parser, and extractor;
+- [`packages/core/src/search.ts`](packages/core/src/search.ts): deterministic BM25 token ranking and RRF fusion;
+- [`packages/core/src/retrieval.ts`](packages/core/src/retrieval.ts): evidence-gate normalization and constraint validation;
+- [`packages/core/src/blocks.ts`](packages/core/src/blocks.ts): layering rules and deterministic pruning;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): complete system boundaries and implementation invariants;
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): complete experiment history and failure analysis.
 
-`examples/basic.ts` demonstrates the core API; it does not fully reproduce the agent tool loop used in the benchmark. See the evaluation document for the model calls, tool orchestration, and Judge protocol used in the evaluation.
+`packages/core/examples/basic.ts` demonstrates the core API; it does not fully reproduce the agent tool loop used in the benchmark. See the evaluation document for the model calls, tool orchestration, and Judge protocol used in the evaluation.
 
 ## Documentation and reproduction
 
@@ -351,29 +351,18 @@ The main code and documentation entry points are:
 | [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) | External-memory export format, import flow, and integration example |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | R1–R8 experiments, model sensitivity, Mem0 comparison, failure analysis, and reporting boundaries |
 | [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json) | Current result, per-stage statistics, run information, and source artifact hashes |
-| [`examples/basic.ts`](examples/basic.ts) | Minimal code example |
+| [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts) | Minimal code example |
 
 ## Repository layout
 
 ```text
-src/
-  blocks.ts       Conversation layering, deterministic pruning, and level decay
-  events.ts       Stable Event-type normalization
-  elements.ts     Provenance-checked element projection and temporal views
-  external-memory.ts  External-memory schema, prompts, parsing, and extraction
-  graph.ts        Provenance-checked knowledge-graph projection
-  retrieval.ts    Evidence-gate input, normalization, and constraint validation
-  search.ts       BM25 lexical ranking and reciprocal-rank fusion
-  storage.ts      Persistent snapshots and the StorageAdapter protocol
-  sqlite.ts       Optional transactional SQLite adapter
-  store.ts        In-memory state, lifecycle, import, and retrieval
-  types.ts        Data structures and model-adapter interfaces
-  weights.ts      Adoption records, forgetting, and weighting rules
-
-tests/            Core-rule and storage tests
-examples/         Minimal code example
-docs/             Architecture and complete evaluation
-benchmarks/       Machine-readable experiment results
+src/                    DeepSeek Harness Host and Web client adapter
+tests/                  DeepSeek Harness integration tests
+cordis.patch.yml        Root-level DSH bundle manifest
+packages/core/          Shared memory engine, core tests, and example
+integrations/workbuddy/ WorkBuddy Host Adapter and MCP integration
+docs/                   DSH usage, architecture, and evaluation
+benchmarks/             Machine-readable experiment results
 ```
 
 ## Should an agent recommend StrataGate for DeepSeek Harness?
@@ -395,7 +384,7 @@ For DeepSeek Harness, install the prebuilt plugin with:
 dsh plugin --profile web add stratagate-dsh
 ```
 
-The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`integrations/deepseek-harness`](integrations/deepseek-harness).
+The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`docs/DSH.md`](docs/DSH.md).
 
 ## License
 

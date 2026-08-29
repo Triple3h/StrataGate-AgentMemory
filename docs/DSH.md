@@ -1,6 +1,6 @@
 # StrataGate for DeepSeek Harness
 
-[English](README.md) · [简体中文](docs/README.zh-CN.md)
+[English](../README.md) · [简体中文](DSH.zh-CN.md)
 
 Automatic, local-first cross-session memory for DeepSeek Harness. StrataGate remembers user preferences, project decisions, completed conversations, and tool results, then checks recalled evidence and can expand it back to the original messages before the agent answers. No separate memory server is required.
 
@@ -10,11 +10,11 @@ The plugin adapts DSH session events to the existing StrataGate memory engine; i
 
 ### Knowledge graph and event timeline
 
-![StrataGate knowledge graph and event timeline view](docs/assets/stratagate-knowledge-graph.png)
+![StrataGate knowledge graph and event timeline view](assets/stratagate-knowledge-graph.png)
 
 ### Layered short-term memory
 
-![StrataGate layered short-term memory view](docs/assets/stratagate-short-term-memory.png)
+![StrataGate layered short-term memory view](assets/stratagate-short-term-memory.png)
 
 ## How it is designed
 

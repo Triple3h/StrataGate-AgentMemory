@@ -5,7 +5,7 @@ import { build } from 'esbuild'
 const root = new URL('../', import.meta.url)
 mkdirSync(new URL('dist/', root), { recursive: true })
 const clientSource = readFileSync(new URL('src/client.js', root), 'utf8')
-const mascot = readFileSync(new URL('../../docs/assets/stratagate-avatar.png', root)).toString('base64')
+const mascot = readFileSync(new URL('docs/assets/stratagate-avatar.png', root)).toString('base64')
 const bootstrap = `
 import cytoscape from 'cytoscape'
 import fcose from 'cytoscape-fcose'
