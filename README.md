@@ -21,23 +21,24 @@ StrataGate helps long-running AI agents remember across sessions without turning
 
 > **In plain words:** StrataGate remembers what happened, keeps where it came from, and checks whether the recalled information is enough before an agent relies on it.
 
-## What you get
+## Why StrataGate?
 
-| What you need | What StrataGate does |
-| --- | --- |
-| Memory across sessions | Automatically stores completed conversations, decisions, preferences, and tool results |
-| A small active context | Shows compact memory first and expands older history only when more detail is needed |
-| Answers you can verify | Traces Events and graph facts back to the original messages and tool output |
-| Fewer confident guesses | Uses an evidence gate to decide whether to answer, search again, or inspect the source |
-| Local control | Stores DeepSeek Harness memory in a local SQLite database; no separate memory server is required |
+- **Automatic, local-first memory across sessions.** Completed main-agent conversations and tool results are captured in a local SQLite database without a separate memory server. → [Quick start](#quick-start-deepseek-harness)
+- **Layered context that stays small.** Recent history remains detailed; older history becomes a compact index and expands only when the agent needs more evidence. → [Layered memory](#layered-memory)
+- **Events that keep source and time.** A lasting memory records where it came from and separates when something was mentioned from when it happened. → [Event cards](#event-cards)
+- **A knowledge graph for what is true now.** Traceable Events can be projected into the current state of people, projects, organizations, tools, and places. → [Current-state graph](#current-state-graph)
+- **Evidence checked before answering.** A relevant result is not automatically treated as sufficient; the agent may need to search again, expand a result, or inspect the original messages. → [Evidence gate](#evidence-gate)
+- **No self-reinforcing search loop.** Merely retrieving a memory does not strengthen it; only evidence actually used in the final answer can update long-term weight. → [Use-only reinforcement](#use-only-reinforcement)
+- **Memory import without losing the original text.** Structured memory exported by another AI can become traceable Events while the imported source remains preserved. → [External memory import](#external-memory-import)
 
-## Choose how to use StrataGate
+## Choose your path
 
 | Path | Best for | Start here |
 | --- | --- | --- |
 | **DeepSeek Harness plugin** | Users who want automatic, local-first memory with a visual Memory UI | [Install `stratagate-dsh`](#quick-start-deepseek-harness) |
 | **Core TypeScript library** | Developers building a custom agent or memory integration | [Library entry points](#code-entry-points) |
-| **WorkBuddy adapter** | Existing WorkBuddy integrations that use the legacy Element path | [`integrations/workbuddy`](integrations/workbuddy) |
+
+<a id="quick-start-deepseek-harness"></a>
 
 ## Quick start: DeepSeek Harness
 
@@ -57,7 +58,7 @@ DSH_HOME/stratagate/memory.db
 
 Removing the plugin does not delete the database. For screenshots, configuration, memory tools, and the exact automatic-capture rules, see the [DeepSeek Harness plugin guide](integrations/deepseek-harness/README.md).
 
-## Why another memory system?
+## The problem behind the design
 
 A long-running agent needs more than a way to “store more.” When it answers, it must retrieve evidence that is **correct, complete, and verifiable**.
 
@@ -101,6 +102,8 @@ This is a single-conversation comparison on `conv-26`, not a full LoCoMo score. 
 - [`docs/EVALUATION.md`](docs/EVALUATION.md)
 - [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json)
 
+<a id="how-stratagate-works"></a>
+
 ## How it works
 
 ![StrataGate workflow: layered memory, event cards, and the evidence gate](docs/assets/stratagate-how-it-works.en.png)
@@ -116,6 +119,8 @@ The normal path is deliberately simple:
 For example, if a user says “Use pnpm for this project,” StrataGate keeps the original turn, creates a traceable Event, and can later expose “the project uses pnpm” as compact context. If an answer depends on the exact wording or surrounding discussion, the agent can expand that Event back to the source instead of trusting the shortened version alone. [See a complete retrieval example](#a-real-retrieval-path).
 
 ## Core design
+
+<a id="layered-memory"></a>
 
 ### 1. Layered memory: compressed views without losing the source
 
@@ -142,6 +147,8 @@ This lets StrataGate satisfy two goals at once:
 
 - old memories remain lightweight;
 - every important conclusion can still be verified against the original messages.
+
+<a id="event-cards"></a>
 
 ### 2. Event cards: store content, source, and time together
 
@@ -180,13 +187,17 @@ Event extraction is delayed: after block `N` is sealed, precise extraction waits
 
 This reduces the chance that context is cut at a block boundary while preventing facts from neighboring conversations from being written into the wrong event.
 
-### 3. Current-state views and auditable retrieval
+<a id="current-state-graph"></a>
 
-Event cards preserve what happened. StrataGate can derive a current view of people, projects, organizations, tools, and places in two forms: legacy Element cards, or Graph Nodes and directed Graph Edges. The DeepSeek Harness integration uses the graph-native path; the WorkBuddy integration currently keeps the Element path.
+### 3. Current-state graph and auditable retrieval
 
-Both projection paths run as independent, persisted jobs. A failed projection can be retried without extracting its Events again. A proposed fact or relationship is accepted only when its cited Events belong to the projection batch, so a derived claim cannot lose its source. State changes close or supersede the earlier derived fact without rewriting the Event that produced it.
+Event cards preserve what happened. StrataGate can derive the current state of people, projects, organizations, tools, and places as Graph Nodes and directed Graph Edges. The DeepSeek Harness integration uses this graph-native path.
 
-`searchEvents()` and `searchElements()` combine deterministic BM25 lexical ranking with structured rankings for participants, types, names, and time; reciprocal-rank fusion combines those lists. `searchGraphNodes()` uses field-weighted BM25 across names, aliases, tags, state, facts, and relations. Searches return compact facts rather than entire large records, and a zero lexical match does not produce arbitrary candidates. The evaluated Event/Element path does not use vector or semantic retrieval.
+Graph projection runs as an independent, persisted job. A failed projection can be retried without extracting its Events again. A proposed fact or relationship is accepted only when its cited Events belong to the projection batch, so a derived claim cannot lose its source. State changes close or supersede the earlier derived fact without rewriting the Event that produced it.
+
+`searchEvents()` combines deterministic BM25 lexical ranking with structured rankings for participants, types, names, and time; reciprocal-rank fusion combines those lists. `searchGraphNodes()` uses field-weighted BM25 across names, aliases, tags, state, facts, and relations. Searches return compact facts rather than entire large records, and a zero lexical match does not produce arbitrary candidates. These paths use deterministic lexical and structured signals rather than vector or semantic retrieval.
+
+<a id="evidence-gate"></a>
 
 ### 4. Evidence gate: relevant does not mean sufficient
 
@@ -217,13 +228,13 @@ search_events
 expand_event
 search_graph
 expand_graph_node
-search_elements
-expand_element
 search_raw_memory
 expand_block
 ```
 
 The evidence gate does not run the entire agent loop for the application. StrataGate supplies state, constraints, and validation; the integrating application still controls model calls, tool iteration, and the maximum retrieval budget.
+
+<a id="use-only-reinforcement"></a>
 
 ### 5. Separate retrieval from reinforcement
 
@@ -232,10 +243,10 @@ An event being retrieved does not mean that it helped the answer.
 Search therefore updates only observable retrieval records; it does not directly increase memory weight. After the answer is complete, the application explicitly calls:
 
 ```ts
-await memory.recordMemoryUse({ eventIds, elementIds });
+await memory.recordMemoryUse({ eventIds });
 ```
 
-Only Events, or the source Events behind adopted graph evidence, update their long-term weight. Legacy Element evidence remains supported by integrations that still use it.
+Only Events, including the source Events behind adopted graph evidence, update their long-term weight.
 
 This avoids a common feedback loop:
 
@@ -250,6 +261,8 @@ It becomes even more likely to rank highly
 ```
 
 A new event can supersede an old one, while the old event and its source remain available. Forgetting can remove an event from search without breaking the provenance chain.
+
+<a id="external-memory-import"></a>
 
 ### 6. Import memory from another AI
 
@@ -344,8 +357,8 @@ The repository has implemented and validated:
 
 - layered conversation blocks and their decay rules;
 - event cards with provenance, time, and conflict relationships;
-- independently retryable Element and knowledge-graph projection with Event-level provenance;
-- BM25/RRF retrieval across Events, legacy Element facts, and Graph Nodes;
+- independently retryable knowledge-graph projection with Event-level provenance;
+- BM25/RRF retrieval across Events and Graph Nodes;
 - structured external-memory import with permanent source preservation;
 - isolated evidence assessment for concurrent retrieval batches;
 - a bounded evidence gate whose constraints can be checked by code;
@@ -374,7 +387,6 @@ The main code and documentation entry points are:
 - [`examples/basic.ts`](examples/basic.ts): minimal code example;
 - [`src/store.ts`](src/store.ts): core state, Block/Event/graph lifecycle, import, and retrieval;
 - [`src/events.ts`](src/events.ts): stable Event-type normalization;
-- [`src/elements.ts`](src/elements.ts): provenance-checked element projection and time views;
 - [`src/graph.ts`](src/graph.ts): provenance-checked graph projection and graph state;
 - [`src/external-memory.ts`](src/external-memory.ts): external-memory schema, prompts, parser, and extractor;
 - [`src/search.ts`](src/search.ts): deterministic BM25 token ranking and RRF fusion;
@@ -389,7 +401,7 @@ The main code and documentation entry points are:
 
 | Resource | Contents |
 | --- | --- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, layering rules, Event/Element protocols, retrieval, evidence-gate constraints, weighting, and storage invariants |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, layering rules, Event/graph protocols, retrieval, evidence-gate constraints, weighting, and storage invariants |
 | [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) | External-memory export format, import flow, and integration example |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | R1–R8 experiments, model sensitivity, Mem0 comparison, failure analysis, and reporting boundaries |
 | [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json) | Current result, per-stage statistics, run information, and source artifact hashes |
@@ -401,7 +413,6 @@ The main code and documentation entry points are:
 src/
   blocks.ts       Conversation layering, deterministic pruning, and level decay
   events.ts       Stable Event-type normalization
-  elements.ts     Provenance-checked element projection and temporal views
   external-memory.ts  External-memory schema, prompts, parsing, and extraction
   graph.ts        Provenance-checked knowledge-graph projection
   retrieval.ts    Evidence-gate input, normalization, and constraint validation
