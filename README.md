@@ -15,11 +15,11 @@ StrataGate helps long-running AI agents remember across sessions without turning
 
 [中文说明](README.zh-CN.md) · [DeepSeek Harness guide](integrations/deepseek-harness/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
 
-**Current public result:** on LoCoMo `conv-26`, StrataGate averaged **80.46%** across 10 independent Judge runs, versus **63.22%** for Mem0 base. [See the scope and protocol](#experimental-results).
+<strong>Current public result:</strong> on LoCoMo `conv-26`, StrataGate averaged <strong>80.46%</strong> across 10 independent Judge runs, versus <strong>63.22%</strong> for Mem0 base. [See the scope and protocol](#experimental-results).
 
 </div>
 
-> **In plain words:** StrataGate remembers what happened, keeps where it came from, and checks whether the recalled information is enough before an agent relies on it.
+> <strong>In plain words:</strong> StrataGate remembers what happened, keeps where it came from, and checks whether the recalled information is enough before an agent relies on it.
 
 ## Why StrataGate?
 

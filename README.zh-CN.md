@@ -15,11 +15,11 @@ StrataGate 让长期运行的 AI Agent 跨会话记住信息，同时避免把�
 
 [English](README.md) · [DeepSeek Harness 插件说明](integrations/deepseek-harness/docs/README.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
 
-**当前公开结果：**在 LoCoMo `conv-26` 上，StrataGate 经过 10 次独立评审的平均准确率为 **80.46%**，Mem0 base 为 **63.22%**。[查看测试范围与方法](#实验结果)。
+<strong>当前公开结果：</strong>在 LoCoMo `conv-26` 上，StrataGate 经过 10 次独立评审的平均准确率为 <strong>80.46%</strong>，Mem0 base 为 <strong>63.22%</strong>。[查看测试范围与方法](#实验结果)。
 
 </div>
 
-> **简单来说：**StrataGate 不仅记住发生了什么，也保留这些记忆来自哪里；Agent 使用记忆前，还要先判断现有证据够不够。
+> <strong>简单来说：</strong>StrataGate 不仅记住发生了什么，也保留这些记忆来自哪里；Agent 使用记忆前，还要先判断现有证据够不够。
 
 ## 为什么选择 StrataGate？
 
