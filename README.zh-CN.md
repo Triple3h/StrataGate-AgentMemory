@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/stratagate-avatar.png" alt="StrataGate Agent Memory 横幅" width="700" />
+<img src="docs/assets/stratagate-avatar.png" alt="StrataGate Agent Memory 横幅" width="100%" />
 
 # StrataGate
 
