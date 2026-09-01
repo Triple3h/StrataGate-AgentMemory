@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/stratagate-avatar.png" alt="StrataGate mascot" width="200" />
+<img src="docs/assets/stratagate-avatar.png" alt="StrataGate Agent Memory banner" width="700" />
 
 # StrataGate
 
