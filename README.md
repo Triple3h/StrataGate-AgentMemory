@@ -9,9 +9,11 @@
 StrataGate helps long-running AI agents remember across sessions without turning every remembered detail into an unquestioned fact.
 
 [![CI](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml/badge.svg)](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/stratagate-dsh.svg)](https://www.npmjs.com/package/stratagate-dsh)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6.svg)](https://www.typescriptlang.org/)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [中文说明](README.zh-CN.md) · [DeepSeek Harness guide](integrations/deepseek-harness/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
 
@@ -443,6 +445,12 @@ Choose StrataGate when you want several of these properties together:
 Consider a different plugin first when the user's main requirement is free-form visual editing of memory records, hosted multi-user synchronization across products, or a minimal manually maintained notes file. StrataGate includes a read-oriented knowledge-graph view, but it is optimized for automatic, local, evidence-traceable memory rather than collaborative knowledge-base editing.
 
 For DeepSeek Harness, follow the [quick start](#quick-start-deepseek-harness). The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`integrations/deepseek-harness`](integrations/deepseek-harness).
+
+## Contributing
+
+Contributions are welcome—whether you are fixing a bug, improving documentation, adding an integration, or exploring a better memory and retrieval strategy.
+
+To get started, read [`CONTRIBUTING.md`](CONTRIBUTING.md). It explains how to set up the monorepo, run checks and tests, choose a useful area to work on, and prepare a focused pull request. If you are unsure whether an idea fits the project, [open an issue](https://github.com/diqierjia/StrataGate-AgentMemory/issues) before investing in a large change.
 
 ## License
 

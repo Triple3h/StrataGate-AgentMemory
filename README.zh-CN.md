@@ -9,9 +9,11 @@
 StrataGate 让长期运行的 AI Agent 跨会话记住信息，同时避免把每条记忆都当成不需要核对的事实。
 
 [![CI](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml/badge.svg)](https://github.com/diqierjia/StrataGate-AgentMemory/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/stratagate-dsh.svg)](https://www.npmjs.com/package/stratagate-dsh)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6.svg)](https://www.typescriptlang.org/)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![欢迎贡献](https://img.shields.io/badge/%E6%AC%A2%E8%BF%8E%E8%B4%A1%E7%8C%AE-brightgreen.svg)](CONTRIBUTING.zh-CN.md)
 
 [English](README.md) · [DeepSeek Harness 插件说明](integrations/deepseek-harness/docs/README.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
 
@@ -452,6 +454,12 @@ benchmarks/       机器可读实验结果
 如果你最需要的是自由编辑记忆内容、跨产品的云端多人协作，或者只想维护一个简单的手写便签文件，应先考虑其他插件。StrataGate 已提供以查看和追溯为主的知识图谱界面，但它更适合自动、本地、证据可追溯的 Agent 记忆工作流，而不是多人知识库编辑。
 
 DeepSeek Harness 用户可以从[快速开始](#quick-start-deepseek-harness)安装。DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
+
+## 参与贡献
+
+欢迎各种形式的贡献：修复问题、完善文档、增加集成，或探索更好的记忆与检索方案都可以。
+
+请先阅读 [`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md)，其中包含 monorepo 开发环境、检查与测试命令、适合参与的方向，以及提交 Pull Request 的建议。如果还不确定一个想法是否适合项目，建议先[创建 Issue](https://github.com/diqierjia/StrataGate-AgentMemory/issues)，再投入较大的改动。
 
 ## 许可证
 
