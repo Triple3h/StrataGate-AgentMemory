@@ -217,7 +217,7 @@ A new event can supersede an old one, while the old event and its source remain 
 
 The exported prompt and parser use the `stratagate.external-memory.v2` format. Unknown dates remain unknown: the importer preserves the original temporal wording instead of guessing from the current date or message order. See [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) for the current integration guide.
 
-The DeepSeek Harness UI currently provides a simpler direct-import flow: every valid candidate is added as a new Event. It does not yet run the core merge, supersession, conflict, or duplicate decision step.
+The DeepSeek Harness UI previews every import, skips exact duplicates deterministically, and asks the configured model to choose add, merge, supersede, conflict, or ignore against Top-K local matches. High-confidence decisions are applied automatically; only low-confidence decisions require confirmation. Each committed batch can be undone from the result screen.
 
 ## A real retrieval path
 

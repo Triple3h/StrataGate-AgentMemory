@@ -38,6 +38,11 @@ const summarizer: BlockSummarizer = async (messages) => ({
   shouldExtract: true,
 });
 
+const nonExtractingSummarizer: BlockSummarizer = async (messages) => ({
+  ...(await summarizer(messages)),
+  shouldExtract: false,
+});
+
 const extractor: EventExtractor = async ({ target }) => ({
   shouldExtract: true,
   reason: 'durable preference',
@@ -52,6 +57,27 @@ const extractor: EventExtractor = async ({ target }) => ({
 });
 
 describe('SQLite persistence', () => {
+  it('restores an unfinished external-memory import job with saved progress', async () => {
+    const filename = await databasePath();
+    const memory = await StrataGate.open({ database: filename, namespace: 'imports', now: fixedNow });
+    const job = await memory.createExternalMemoryImportJob(JSON.stringify({
+      schemaVersion: 'stratagate.external-memory.v2',
+      sourceType: 'external_ai_memory_export',
+      candidates: [
+        { title: '候选一', summary: '第一条。' },
+        { title: '候选二', summary: '第二条。' },
+      ],
+    }));
+    await memory.processNextExternalMemoryImport(job.id, async () => ({ action: 'ADD', confidence: 0.9 }));
+    await memory.close();
+
+    const reopened = await StrataGate.open({ database: filename, namespace: 'imports', now: fixedNow });
+    expect(reopened.getExternalMemoryImportJob(job.id)).toMatchObject({
+      status: 'processing', processedCount: 1, totalCount: 2,
+    });
+    await reopened.close();
+  });
+
   it('uses SQLite for the normal open entrypoint and keeps memory mode explicit', async () => {
     const filename = await databasePath();
     const persistent = await StrataGate.open({
@@ -76,17 +102,17 @@ describe('SQLite persistence', () => {
     expect(ephemeral.storageRevision).toBe(0);
   });
 
-  it('creates schema version eight and rejects a newer database schema', async () => {
+  it('creates schema version ten and rejects a newer database schema', async () => {
     const initializedFilename = await databasePath();
     const initialized = new SqliteStorage({ filename: initializedFilename });
     await initialized.close();
     const initializedDatabase = new Database(initializedFilename, { readonly: true });
-    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(8);
+    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(10);
     initializedDatabase.close();
 
     const newerFilename = await databasePath();
     const newerDatabase = new Database(newerFilename);
-    newerDatabase.pragma('user_version = 9');
+    newerDatabase.pragma('user_version = 11');
     newerDatabase.close();
     expect(() => new SqliteStorage({ filename: newerFilename })).toThrow('newer than supported');
   });
@@ -97,6 +123,7 @@ describe('SQLite persistence', () => {
       database: filename,
       namespace: 'legacy:v6',
       blockTurnSize: 1,
+      summarizer: nonExtractingSummarizer,
       now: fixedNow,
       idFactory: ids(),
     });
@@ -113,7 +140,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v6');
-    expect(loaded?.snapshot.schemaVersion).toBe(8);
+    expect(loaded?.snapshot.schemaVersion).toBe(10);
     expect(loaded?.snapshot.blocks[0]?.lastLiftedBy).toBeNull();
     await storage.close();
 
@@ -123,12 +150,44 @@ describe('SQLite persistence', () => {
     migrated.close();
   });
 
+  it('migrates schema v8 Blocks as ready and adds durable derivation jobs', async () => {
+    const filename = await databasePath();
+    const memory = await StrataGate.open({
+      database: filename,
+      namespace: 'legacy:v8',
+      blockTurnSize: 1,
+      summarizer: nonExtractingSummarizer,
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    await memory.appendTurn({ user: 'legacy ready block', assistant: 'stored' });
+    await memory.close();
+
+    const legacy = new Database(filename);
+    legacy.exec(`
+      DROP TABLE block_summary_jobs;
+      ALTER TABLE blocks DROP COLUMN processing_status;
+      ALTER TABLE extraction_jobs DROP COLUMN next_retry_at;
+      UPDATE memory_spaces SET schema_version = 8;
+      PRAGMA user_version = 8;
+    `);
+    legacy.close();
+
+    const storage = new SqliteStorage({ filename });
+    const loaded = await storage.load('legacy:v8');
+    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 10, summaryJobs: [], externalMemoryImportJobs: [] });
+    expect(loaded?.snapshot.blocks[0]?.processingStatus).toBe('ready');
+    expect(loaded?.snapshot.extractionJobs[0]?.nextRetryAt).toBeNull();
+    await storage.close();
+  });
+
   it('persists whether a Block was expanded by the user', async () => {
     const filename = await databasePath();
     const memory = await StrataGate.open({
       database: filename,
       namespace: 'expand-source',
       blockTurnSize: 1,
+      summarizer: nonExtractingSummarizer,
       now: fixedNow,
       idFactory: ids(),
     });
@@ -197,22 +256,24 @@ describe('SQLite persistence', () => {
       now: fixedNow,
       idFactory: ids(),
     });
-    await expect(first.appendTurn({ user: 'must survive', assistant: 'stored first' }))
-      .rejects.toThrow('summary unavailable');
+    await first.appendTurn({ user: 'must survive', assistant: 'stored first' });
     expect(first.turn).toBe(1);
-    expect(first.listOpenTail()).toHaveLength(2);
-    expect(first.listBlocks()).toHaveLength(0);
+    expect(first.listOpenTail()).toHaveLength(0);
+    expect(first.listBlocks()).toHaveLength(1);
+    expect(first.listBlocks()[0]).not.toHaveProperty('l0Title');
+    expect(first.listSummaryJobs()[0]).toMatchObject({ status: 'failed', attempts: 1, lastError: 'summary unavailable' });
     await first.close();
 
     const restored = await StrataGate.open({
       database: filename,
       namespace: 'session:summary-retry',
-      summarizer,
+      summarizer: nonExtractingSummarizer,
       now: fixedNow,
       idFactory: ids(),
     });
-    const resumed = await restored.resumePendingWork();
-    expect(resumed.sealedBlocks).toHaveLength(1);
+    const resumed = await restored.resumePendingWork({ retryFailed: true });
+    expect(resumed.sealedBlocks).toHaveLength(0);
+    expect(resumed.readyBlocks).toHaveLength(1);
     expect(restored.listBlocks()[0]?.l5Raw[0]?.content).toBe('must survive');
     expect(restored.turn).toBe(1);
     await restored.close();
@@ -236,12 +297,15 @@ describe('SQLite persistence', () => {
       idFactory,
     });
     await first.appendTurn({ user: 'remember this', assistant: 'okay' });
-    await expect(first.appendTurn({ user: 'later context', assistant: 'noted' }))
-      .rejects.toThrow('extractor unavailable');
-    expect(attempts).toBe(1);
+    await first.appendTurn({ user: 'later context', assistant: 'noted' });
+    expect(attempts).toBe(2);
     expect(first.listBlocks()).toHaveLength(2);
     expect(first.listEvents()).toHaveLength(0);
     expect(first.listExtractionJobs()).toMatchObject([{
+      status: 'failed',
+      attempts: 1,
+      lastError: 'extractor unavailable',
+    }, {
       status: 'failed',
       attempts: 1,
       lastError: 'extractor unavailable',
@@ -256,10 +320,14 @@ describe('SQLite persistence', () => {
       now: fixedNow,
       idFactory,
     });
-    const resumed = await restored.resumePendingWork();
-    expect(resumed.extractedEvents).toHaveLength(1);
-    expect(restored.listEvents()).toHaveLength(1);
+    const resumed = await restored.resumePendingWork({ retryFailed: true });
+    expect(resumed.extractedEvents).toHaveLength(2);
+    expect(restored.listEvents()).toHaveLength(2);
     expect(restored.listExtractionJobs()).toMatchObject([{
+      status: 'succeeded',
+      attempts: 2,
+      lastError: null,
+    }, {
       status: 'succeeded',
       attempts: 2,
       lastError: null,
@@ -418,7 +486,7 @@ describe('SQLite persistence', () => {
     const loaded = await storage.load('legacy:user');
     expect(loaded?.revision).toBe(7);
     expect(loaded?.snapshot).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 10,
       blockDecayLambda: 0.3,
       elements: [],
       elementProjectionJobs: [],
@@ -430,7 +498,7 @@ describe('SQLite persistence', () => {
     await storage.close();
 
     const migrated = new Database(filename, { readonly: true });
-    expect(migrated.pragma('user_version', { simple: true })).toBe(8);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(10);
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
       .map(({ name }) => name)).toContain('element_ids_json');
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
@@ -483,7 +551,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v4');
-    expect(loaded?.snapshot.schemaVersion).toBe(8);
+    expect(loaded?.snapshot.schemaVersion).toBe(10);
     expect(loaded?.snapshot.blockDecayLambda).toBe(0.3);
     await storage.close();
 
@@ -530,7 +598,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v5');
-    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 8, blockDecayLambda: 0.3 });
+    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 10, blockDecayLambda: 0.3 });
     expect(loaded?.snapshot.blocks.map(({ id, pointerAnchorBlockPosition }) =>
       [id, pointerAnchorBlockPosition])).toEqual([
       ['a1', 1],

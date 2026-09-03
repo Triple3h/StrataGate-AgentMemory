@@ -6,13 +6,19 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   memoryWeightAt,
   rrfRank,
+  StorageConflictError,
   StrataGate,
   type ElementSearchResult,
   type EventCard,
   type EventSearchResult,
+  type ExternalMemoryAction,
+  type ExternalMemoryDecision,
+  type ExternalMemoryImportJob,
+  type ExternalMemoryImportWorkItem,
   type BlockContextEntry,
   type GraphNode,
   type ElementSearchOptions,
+  type MemoryCitation,
   type MemoryElementType,
   type MemoryBlock,
   type RawMessage,
@@ -20,6 +26,7 @@ import {
   type RetrievalAssessment,
   type RetrievalAssessmentInput,
   type SearchOptions,
+  type SuccessfulModelResponse,
   type StrataGateSnapshot,
 } from '@diqier/stratagate'
 import { SqliteStorage } from '@diqier/stratagate/sqlite'
@@ -31,10 +38,12 @@ import { DshMetadataStore } from './metadata.js'
 interface EvidenceTarget {
   eventIds: string[]
   elementIds: string[]
+  citation: Omit<MemoryCitation, 'batchId'>
 }
 
 interface RetrievalBatch {
   id: string
+  sequence: number
   refs: Map<string, EvidenceTarget>
   status: 'unresolved' | 'recorded'
   assessment?: RetrievalAssessment
@@ -54,6 +63,12 @@ interface BlockQueryStatus {
   namespaceThreadIds: string[]
   openTailCount: number
   emptyReason: BlockEmptyReason | null
+}
+
+export interface AdminSnapshotEntry {
+  namespace: string
+  revision: number
+  snapshot: StrataGateSnapshot
 }
 
 interface RecordRefIssue {
@@ -89,6 +104,10 @@ export class StrataGateRuntime {
   private readonly latestBatchIds = new Map<string, string>()
   private readonly workspaceNames = new Map<string, string>()
   private readonly migrationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly derivationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly derivationRuns = new Map<string, Promise<void>>()
+  private readonly adminSnapshotCache = new Map<string, AdminSnapshotEntry>()
+  private readonly externalImportRuns = new Map<string, Promise<void>>()
   private ingestTail: Promise<void> = Promise.resolve()
   private settingsTail: Promise<void> = Promise.resolve()
   private batchSequence = 0
@@ -115,15 +134,8 @@ export class StrataGateRuntime {
     this.ingestTail = this.ingestTail.catch(() => {}).then(async () => {
       const memory = await this.space(session)
       try {
-        const result = await this.models.run(session, () => memory.appendTurn(turn))
-        if (result.sealedBlock) {
-          const contexts = memory.getBlockContext(String(session.id))
-          const sealedContext = contexts.find(({ id }) => id === result.sealedBlock!.id)
-          if (!sealedContext) throw new Error(`Missing context for sealed StrataGate block ${result.sealedBlock.id}`)
-          this.replaceSealedSurface(session, result.sealedBlock, sealedContext, turn.dshTurn)
-          this.syncDecayedBlockSurface(session, contexts)
-          await this.flushNativeSession(session)
-        }
+        const result = await memory.appendTurn(turn, { deferDerivation: true })
+        if (result.sealedBlock) this.scheduleBlockDerivation(session, memory)
       } finally {
         await this.persistSuccessfulResponses(memory)
       }
@@ -138,7 +150,11 @@ export class StrataGateRuntime {
     const results = await (await this.space(session)).searchEvents(query, options)
     return this.batch(session, results.map(({ event }) => ({
       ref: `event:${event.id}`,
-      target: { eventIds: [event.id], elementIds: [] },
+      target: {
+        eventIds: [event.id],
+        elementIds: [],
+        citation: citation('event', event.id, event.title, `event:${event.id}`, 'eventId'),
+      },
     })), results.map(({ event, score }) => compactEvent(event, score)))
   }
 
@@ -147,7 +163,11 @@ export class StrataGateRuntime {
     const results = await (await this.space(session)).searchElements(query, options)
     return this.batch(session, results.map((result) => ({
       ref: `element:${result.elementId}:fact:${result.id}`,
-      target: { eventIds: [], elementIds: [result.elementId] },
+      target: {
+        eventIds: [],
+        elementIds: [result.elementId],
+        citation: citation('graph', result.elementId, result.name, `element:${result.elementId}:fact:${result.id}`, 'elementId'),
+      },
     })), results.map((result) => ({
       id: result.id,
       elementId: result.elementId,
@@ -169,9 +189,14 @@ export class StrataGateRuntime {
     const results = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER)
       .filter((result) => scope === 'namespace' || result.message.threadId === threadId || result.message.threadId === undefined)
       .slice(0, limit)
+    const blockTitles = new Map(memory.listBlocks().map((block) => [block.id, blockCitationTitle(block)]))
     return this.batch(session, results.map((result, index) => ({
       ref: `raw:${result.blockId}:${result.message.id}:${index}`,
-      target: { eventIds: [], elementIds: [] },
+      target: {
+        eventIds: [],
+        elementIds: [],
+        citation: citation('block', result.blockId, blockTitles.get(result.blockId) ?? 'Block', `raw:${result.blockId}:${result.message.id}:${index}`, 'blockId'),
+      },
     })), results.map(compactRawHit), { scope, namespace: this.namespaceFor(session), threadId })
   }
 
@@ -186,6 +211,7 @@ export class StrataGateRuntime {
     const results = scope === 'namespace'
       ? memory.getBlockContext()
       : memory.getBlockContext().filter((block) => block.threadId === threadId || block.threadId === undefined)
+    const blockTitles = new Map(memory.listBlocks().map((block) => [block.id, blockCitationTitle(block)]))
     const emptyReason: BlockEmptyReason | null = results.length > 0
       ? null
       : namespaceBlockCount === 0
@@ -203,16 +229,26 @@ export class StrataGateRuntime {
     }
     return this.batch(session, results.map((result) => ({
       ref: `block:${result.id}:level:${result.level}`,
-      target: { eventIds: [], elementIds: [] },
+      target: {
+        eventIds: [],
+        elementIds: [],
+        citation: citation('block', result.id, blockTitles.get(result.id) ?? 'Block', `block:${result.id}:level:${result.level}`, 'blockId', { level: result.level }),
+      },
     })), results, status)
   }
 
   async expandBlock(session: Session, id: string, target?: string | number): Promise<unknown> {
     await this.flush()
-    const result = await (await this.space(session)).expandBlock(id, target, 'agent')
+    const memory = await this.space(session)
+    const result = await memory.expandBlock(id, target, 'agent')
+    const title = blockCitationTitle(memory.listBlocks().find((block) => block.id === result.id))
     return this.batch(session, [{
       ref: `block:${result.id}:level:${result.level}`,
-      target: { eventIds: [], elementIds: [] },
+      target: {
+        eventIds: [],
+        elementIds: [],
+        citation: citation('block', result.id, title, `block:${result.id}:level:${result.level}`, 'blockId', { level: result.level, expanded: true }),
+      },
     }], result)
   }
 
@@ -221,7 +257,11 @@ export class StrataGateRuntime {
     const result = (await this.space(session)).expandElement(id, at)
     return this.batch(session, [{
       ref: `element:${result.id}`,
-      target: { eventIds: [], elementIds: [result.id] },
+      target: {
+        eventIds: [],
+        elementIds: [result.id],
+        citation: citation('graph', result.id, result.name, `element:${result.id}`, 'elementId', { expanded: true }),
+      },
     }], result)
   }
 
@@ -231,7 +271,11 @@ export class StrataGateRuntime {
     if (!event) throw new Error(`Unknown event: ${id}`)
     return this.batch(session, [{
       ref: `event:${event.id}`,
-      target: { eventIds: [event.id], elementIds: [] },
+      target: {
+        eventIds: [event.id],
+        elementIds: [],
+        citation: citation('event', event.id, event.title, `event:${event.id}`, 'eventId', { expanded: true }),
+      },
     }], event)
   }
 
@@ -326,13 +370,20 @@ export class StrataGateRuntime {
 
     const eventIds = new Set<string>()
     const elementIds = new Set<string>()
+    const citations: MemoryCitation[] = []
+    const retrievedMemories = [...batch.refs.values()].map((target) => ({
+      ...target.citation,
+      batchId: batch.id,
+    }))
     for (const ref of selectedRefs) {
       const target = batch.refs.get(ref)
       if (!target) continue
       for (const id of target.eventIds) eventIds.add(id)
       for (const id of target.elementIds) elementIds.add(id)
+      citations.push({ ...target.citation, batchId: batch.id })
     }
     const turn = activeTurn(session)
+    const namespace = this.namespaceFor(session)
     await (await this.space(session)).recordMemoryUse({
       eventIds: [...eventIds],
       elementIds: [...elementIds],
@@ -343,6 +394,7 @@ export class StrataGateRuntime {
         ...(turn === undefined ? {} : { turn }),
         batchId: batch.id,
         evidenceRefs: selectedRefs,
+        citations,
         ...(assessment === undefined ? {} : {
           verdict: assessment.verdict,
           fit: assessment.fit,
@@ -356,11 +408,16 @@ export class StrataGateRuntime {
       batchId: batch.id,
       batchStatus: batch.status,
       recorded: true,
+      namespace,
+      retrievalSequence: batch.sequence,
+      retrievedCount: batch.refs.size,
+      retrievedMemories,
       incremented: eventIds.size + elementIds.size,
       evidenceRefs: selectedRefs,
       duplicateEvidenceRefs,
       eventIds: [...eventIds],
       elementIds: [...elementIds],
+      citations,
       unresolvedBatchIds: this.unresolvedBatchIds(session),
     }
   }
@@ -483,6 +540,8 @@ export class StrataGateRuntime {
     this.closed = true
     for (const timer of this.migrationTimers.values()) clearTimeout(timer)
     this.migrationTimers.clear()
+    for (const timer of this.derivationTimers.values()) clearTimeout(timer)
+    this.derivationTimers.clear()
     let flushError: unknown
     try {
       await this.flush()
@@ -490,6 +549,8 @@ export class StrataGateRuntime {
       flushError = error
     }
     const settled = await Promise.allSettled(this.spaces.values())
+    await Promise.allSettled(this.derivationRuns.values())
+    await Promise.allSettled(this.externalImportRuns.values())
     await Promise.all(settled.flatMap((result) => result.status === 'fulfilled' ? [result.value.close()] : []))
     if (flushError !== undefined) throw flushError
   }
@@ -506,6 +567,45 @@ export class StrataGateRuntime {
     const storage = new SqliteStorage({ filename: this.config.database, readonly: true })
     try {
       return storage.listNamespaces()
+    } finally {
+      await storage.close()
+    }
+  }
+
+  async adminSnapshotEntries(): Promise<AdminSnapshotEntry[]> {
+    if (this.config.database === ':memory:' || !existsSync(this.config.database)) return []
+    const storage = new SqliteStorage({ filename: this.config.database, readonly: true })
+    try {
+      const entries: AdminSnapshotEntry[] = []
+      for (const { namespace, revision } of storage.listNamespaceRevisions()) {
+        const opening = this.spaces.get(namespace)
+        if (opening) {
+          const memory = await opening
+          const currentRevision = memory.storageRevision
+          const cached = this.adminSnapshotCache.get(namespace)
+          const entry = cached?.revision === currentRevision
+            ? cached
+            : { namespace, revision: currentRevision, snapshot: memory.exportSnapshot() }
+          this.adminSnapshotCache.set(namespace, entry)
+          entries.push(entry)
+          continue
+        }
+        const cached = this.adminSnapshotCache.get(namespace)
+        if (cached?.revision === revision) {
+          entries.push(cached)
+          continue
+        }
+        const loaded = await storage.load(namespace)
+        if (!loaded) continue
+        const entry = { namespace, revision: loaded.revision, snapshot: loaded.snapshot }
+        this.adminSnapshotCache.set(namespace, entry)
+        entries.push(entry)
+      }
+      const activeNamespaces = new Set(entries.map(({ namespace }) => namespace))
+      for (const namespace of this.adminSnapshotCache.keys()) {
+        if (!activeNamespaces.has(namespace)) this.adminSnapshotCache.delete(namespace)
+      }
+      return entries
     } finally {
       await storage.close()
     }
@@ -543,52 +643,290 @@ export class StrataGateRuntime {
     const key = namespace.trim()
     if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
     if (this.config.database === ':memory:' || !existsSync(this.config.database)) return null
+    const opening = this.spaces.get(key)
+    if (opening) {
+      const memory = await opening
+      const revision = memory.storageRevision
+      const cached = this.adminSnapshotCache.get(key)
+      if (cached?.revision === revision) return cached.snapshot
+      const entry = { namespace: key, revision, snapshot: memory.exportSnapshot() }
+      this.adminSnapshotCache.set(key, entry)
+      return entry.snapshot
+    }
     const storage = new SqliteStorage({ filename: this.config.database, readonly: true })
     try {
-      return (await storage.load(key))?.snapshot ?? null
+      const head = storage.listNamespaceRevisions().find(({ namespace }) => namespace === key)
+      if (!head) return null
+      const cached = this.adminSnapshotCache.get(key)
+      if (cached?.revision === head.revision) return cached.snapshot
+      const loaded = await storage.load(key)
+      if (!loaded) return null
+      const entry = { namespace: key, revision: loaded.revision, snapshot: loaded.snapshot }
+      this.adminSnapshotCache.set(key, entry)
+      return entry.snapshot
     } finally {
       await storage.close()
     }
   }
 
-  /** Import a v2 external-AI export from the admin UI. */
-  async adminImportExternalMemory(namespace: string, text: string): Promise<unknown> {
+  private externalImportView(job: ExternalMemoryImportJob): Record<string, unknown> {
+    return {
+      jobId: job.id,
+      status: job.status,
+      processedCount: job.processedCount,
+      totalCount: job.totalCount,
+      recoveredFromInvalidJson: job.recoveredFromInvalidJson,
+      parseError: job.parseError,
+      lastError: job.lastError,
+      sourceBlockId: job.sourceBlockId,
+      importedCount: job.importedCount,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      decisions: job.decisions.map(({ matches: _matches, mergedCandidate: _mergedCandidate, ...decision }) => decision),
+      requiresConfirmationCount: job.decisions.filter(({ requiresConfirmation }) => requiresConfirmation).length,
+    }
+  }
+
+  private async refreshExternalImportMemory(namespace: string, memory: StrataGate): Promise<void> {
+    if (this.config.database === ':memory:' || !existsSync(this.config.database)) return
+    const storage = new SqliteStorage({ filename: this.config.database, readonly: true })
+    try {
+      const head = storage.listNamespaceRevisions().find((entry) => entry.namespace === namespace)
+      if (head && head.revision !== memory.storageRevision) await memory.reloadFromStorage()
+    } finally {
+      await storage.close()
+    }
+  }
+
+  private async refreshActiveExternalImportMemory(namespace: string): Promise<void> {
+    const opening = this.spaces.get(namespace)
+    if (!opening) return
+    await (await opening).reloadFromStorage()
+  }
+
+  private async retryExternalImportWrite<T>(
+    namespace: string,
+    operation: (memory: StrataGate) => Promise<T>,
+  ): Promise<T> {
+    let lastConflict: StorageConflictError | undefined
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { memory, owned } = await this.openAdminMemory(namespace)
+      try {
+        await this.refreshExternalImportMemory(namespace, memory)
+        const result = await operation(memory)
+        if (owned) await this.refreshActiveExternalImportMemory(namespace)
+        return result
+      } catch (error) {
+        if (!(error instanceof StorageConflictError)) throw error
+        lastConflict = error
+        if (!owned) await memory.reloadFromStorage()
+      } finally {
+        if (owned) await memory.close()
+      }
+    }
+    throw lastConflict ?? new Error(`Unable to update external memory import ${namespace}`)
+  }
+
+  private takeSuccessfulResponses(): SuccessfulModelResponse[] {
+    return typeof this.models.takeSuccessfulResponses === 'function'
+      ? this.models.takeSuccessfulResponses()
+      : []
+  }
+
+  private async persistExternalImportResponses(
+    namespace: string,
+    responses: readonly SuccessfulModelResponse[],
+  ): Promise<void> {
+    if (responses.length === 0) return
+    await this.retryExternalImportWrite(namespace, (memory) => memory.recordSuccessfulModelResponses(responses))
+  }
+
+  private scheduleExternalMemoryImport(namespace: string, jobId: string): void {
+    if (this.closed || this.externalImportRuns.has(jobId)) return
+    const run = (async () => {
+      while (!this.closed) {
+        let job: ExternalMemoryImportJob | null = null
+        let work: ExternalMemoryImportWorkItem | null = null
+        const prepared = await this.openAdminMemory(namespace)
+        try {
+          await this.refreshExternalImportMemory(namespace, prepared.memory)
+          job = prepared.memory.getExternalMemoryImportJob(jobId)
+          if (!job) return
+          if (job.status === 'processing') {
+            work = await prepared.memory.prepareNextExternalMemoryImport(jobId)
+          } else if (job.status !== 'extracting') return
+        } finally {
+          if (prepared.owned) await prepared.memory.close()
+        }
+
+        try {
+          if (job.status === 'extracting') {
+            const recovered = await this.models.runDetached(`admin-import-recovery:${jobId}`, () =>
+              this.models.externalMemoryExtractor({ text: job!.text, importedAt: job!.importedAt }))
+            const responses = this.takeSuccessfulResponses()
+            await this.retryExternalImportWrite(namespace, (memory) =>
+              memory.completeExternalMemoryFallback(jobId, recovered))
+            await this.persistExternalImportResponses(namespace, responses)
+            continue
+          }
+          if (!work) return
+          let decision: ExternalMemoryDecision
+          let responses: SuccessfulModelResponse[] = []
+          if (work.deterministicDecision) {
+            decision = work.deterministicDecision
+          } else {
+            decision = await this.models.runDetached(`admin-import:${jobId}`, () =>
+              this.models.externalMemoryDecider({
+                candidate: structuredClone(work!.candidate),
+                matches: structuredClone(work!.matches),
+              }))
+            responses = this.takeSuccessfulResponses()
+          }
+          await this.retryExternalImportWrite(namespace, (memory) =>
+            memory.completeNextExternalMemoryImport(
+              work!.jobId,
+              work!.index,
+              decision,
+              work!.matches,
+              work!.forceConfirmation,
+            ))
+          await this.persistExternalImportResponses(namespace, responses)
+        } catch (error) {
+          if (error instanceof StorageConflictError) {
+            this.onIngestError(error)
+            return
+          }
+          try {
+            await this.retryExternalImportWrite(namespace, (memory) =>
+              memory.failExternalMemoryImportJob(jobId, error))
+          } catch (persistError) {
+            this.onIngestError(persistError)
+          }
+          return
+        }
+      }
+    })().catch((error: unknown) => this.onIngestError(error)).finally(() => {
+      this.externalImportRuns.delete(jobId)
+    })
+    this.externalImportRuns.set(jobId, run)
+  }
+
+  /** Create a durable analysis job and return before model-backed work begins. */
+  async adminPreviewExternalMemory(namespace: string, text: string): Promise<unknown> {
     const key = namespace.trim()
     if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
+    if (!text.trim()) throw new TypeError('External memory text must not be empty')
     await this.flush()
-    const active = this.spaces.get(key)
-    let memory: StrataGate
-    let owned = false
-    if (active) {
-      memory = await active
-    } else {
-      if (this.config.database === ':memory:' || !existsSync(this.config.database)) {
-        throw new Error(`Unknown StrataGate namespace: ${key}`)
-      }
-      memory = await StrataGate.open({
-        database: this.config.database,
-        namespace: key,
-        blockTurnSize: this.blockTurnSize,
-        blockDecayLambda: this.blockDecayLambda,
-        graphProjector: this.models.graphProjector,
-        disableElementProjection: true,
-      })
-      owned = true
-    }
+    const { memory, owned } = await this.openAdminMemory(key)
     try {
-      // The UI import is deliberately conservative. New candidates are added
-      // without guessing a merge target; the normal review/LLM workflow can
-      // adjudicate them afterwards using the stored source block.
-      const result = await memory.importExternalMemory({
-        text,
-        decider: async () => ({ action: 'ADD' }),
+      await this.refreshExternalImportMemory(key, memory)
+      const job = await memory.createExternalMemoryImportJob(text)
+      this.scheduleExternalMemoryImport(key, job.id)
+      return this.externalImportView(job)
+    } finally {
+      if (owned) await memory.close()
+    }
+  }
+
+  async adminExternalMemoryStatus(namespace: string, jobId?: string): Promise<unknown> {
+    const key = namespace.trim()
+    if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
+    const { memory, owned } = await this.openAdminMemory(key)
+    try {
+      await this.refreshExternalImportMemory(key, memory)
+      const jobs = memory.listExternalMemoryImportJobs()
+      const job = jobId
+        ? jobs.find(({ id }) => id === jobId)
+        : [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+      if (!job) return { job: null }
+      if (job.status === 'extracting' || job.status === 'processing') this.scheduleExternalMemoryImport(key, job.id)
+      return this.externalImportView(job)
+    } finally {
+      if (owned) await memory.close()
+    }
+  }
+
+  async adminRetryExternalMemory(namespace: string, jobId: string): Promise<unknown> {
+    const key = namespace.trim()
+    let lastConflict: unknown
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { memory, owned } = await this.openAdminMemory(key)
+      try {
+        await this.refreshExternalImportMemory(key, memory)
+        const job = await memory.retryExternalMemoryImportJob(jobId)
+        this.scheduleExternalMemoryImport(key, job.id)
+        return this.externalImportView(job)
+      } catch (error) {
+        if (!(error instanceof StorageConflictError)) throw error
+        lastConflict = error
+        if (!owned) await memory.reloadFromStorage()
+      } finally {
+        if (owned) await memory.close()
+      }
+    }
+    throw lastConflict
+  }
+
+  async adminCommitExternalMemory(
+    namespace: string,
+    jobId: string,
+    choices: Array<{ index: number; action: ExternalMemoryAction }>,
+  ): Promise<unknown> {
+    const key = namespace.trim()
+    const { memory, owned } = await this.openAdminMemory(key)
+    try {
+      await this.refreshExternalImportMemory(key, memory)
+      const job = memory.getExternalMemoryImportJob(jobId)
+      if (!job) throw new Error('找不到导入任务')
+      if (job.status !== 'ready' && job.status !== 'awaiting_confirmation') {
+        throw new Error('导入分析尚未完成')
+      }
+      const selected = new Map(choices
+        .filter(({ index, action }) => Number.isSafeInteger(index) && ['ADD', 'MERGE', 'SUPERSEDE', 'CONFLICT', 'IGNORE'].includes(action))
+        .map(({ index, action }) => [index, action] as const))
+      const decisions = job.decisions.map((decision, index) => {
+        if (!decision.requiresConfirmation) return decision
+        const action = selected.get(index) ?? 'IGNORE'
+        const needsTarget = action === 'MERGE' || action === 'SUPERSEDE' || action === 'CONFLICT'
+        if (needsTarget && decision.existingEventIds.length === 0) {
+          return { ...decision, action: 'IGNORE' as const, existingEventIds: [], reason: '用户选择的操作没有可关联旧记忆，已安全忽略' }
+        }
+        return {
+          ...decision,
+          action,
+          existingEventIds: action === 'ADD' || action === 'IGNORE' ? [] : decision.existingEventIds,
+          reason: `用户确认：${action}`,
+        }
       })
+      const result = await memory.commitExternalMemoryImport({
+        text: job.text,
+        importedAt: job.importedAt,
+        baseRevision: memory.storageRevision,
+        candidates: job.candidates,
+        decisions,
+      })
+      const completed = await memory.completeExternalMemoryImportJob(job.id, result)
       return {
+        ...this.externalImportView(completed),
         sourceBlockId: result.sourceBlockId,
         decisions: result.decisions,
         importedCount: result.addedEvents.length,
         changedEventIds: result.changedEventIds,
       }
+    } finally {
+      if (owned) await memory.close()
+    }
+  }
+
+  async adminUndoExternalMemory(namespace: string, sourceBlockId: string): Promise<unknown> {
+    const key = namespace.trim()
+    const { memory, owned } = await this.openAdminMemory(key)
+    try {
+      await this.refreshExternalImportMemory(key, memory)
+      const result = await memory.undoExternalMemoryImport(sourceBlockId)
+      const job = memory.listExternalMemoryImportJobs().find((candidate) => candidate.sourceBlockId === sourceBlockId)
+      if (job) await memory.markExternalMemoryImportUndone(job.id)
+      return result
     } finally {
       if (owned) await memory.close()
     }
@@ -739,23 +1077,14 @@ export class StrataGateRuntime {
       }).then(async (memory) => {
         try {
           try {
-            const resumed = await this.models.run(session, () => memory.resumePendingWork({ retrySkipped: true }))
+            await memory.resumePendingWork({ deferDerivation: true, threadId: String(session.id) })
             const contexts = memory.getBlockContext(String(session.id))
-            for (const block of resumed.sealedBlocks) {
-              if (block.threadId !== String(session.id)) continue
-              const endTurn = dshTurnAtBlockEnd(session, block)
-              const context = contexts.find(({ id }) => id === block.id)
-              if (!context) throw new Error(`Missing context for recovered StrataGate block ${block.id}`)
-              this.replaceSealedSurface(session, block, context, endTurn)
-            }
             this.syncDecayedBlockSurface(session, contexts)
-            if (resumed.sealedBlocks.some((block) => block.threadId === String(session.id))) {
-              await this.flushNativeSession(session)
-            }
           } finally {
             await this.persistSuccessfulResponses(memory)
           }
           this.scheduleGraphMigration(session, memory)
+          this.scheduleBlockDerivation(session, memory)
           return memory
         } catch (error) {
           await memory.close().catch(() => {})
@@ -775,7 +1104,11 @@ export class StrataGateRuntime {
     const results = await (await this.space(session)).searchGraphNodes(query, limit)
     return this.batch(session, results.map(({ node }) => ({
       ref: `graph-node:${node.id}`,
-      target: { eventIds: node.sourceEventIds, elementIds: [] },
+      target: {
+        eventIds: node.sourceEventIds,
+        elementIds: [],
+        citation: citation('graph', node.id, node.name, `graph-node:${node.id}`, 'nodeId'),
+      },
     })), results.map(({ node, score, matchedFields, matchReason }) => compactGraphNode(node, score, matchedFields, matchReason)))
   }
 
@@ -787,8 +1120,58 @@ export class StrataGateRuntime {
     const edges = memory.listGraphEdges().filter(({ fromNodeId, toNodeId }) => fromNodeId === id || toNodeId === id)
     return this.batch(session, [{
       ref: `graph-node:${node.id}:expanded`,
-      target: { eventIds: [...new Set([...node.sourceEventIds, ...edges.flatMap(({ sourceEventIds }) => sourceEventIds)])], elementIds: [] },
+      target: {
+        eventIds: [...new Set([...node.sourceEventIds, ...edges.flatMap(({ sourceEventIds }) => sourceEventIds)])],
+        elementIds: [],
+        citation: citation('graph', node.id, node.name, `graph-node:${node.id}:expanded`, 'nodeId', { expanded: true }),
+      },
     }], { node, edges })
+  }
+
+  private scheduleBlockDerivation(session: Session, memory: StrataGate): void {
+    const threadId = String(session.id)
+    const key = `${this.namespaceFor(session)}\u0000${threadId}`
+    if (this.closed || this.derivationTimers.has(key) || this.derivationRuns.has(key)) return
+    const pendingBlockIds = new Set(memory.listBlocks()
+      .filter((block) => block.threadId === threadId && block.processingStatus === 'pending')
+      .map((block) => block.id))
+    if (pendingBlockIds.size === 0) return
+    const retryTimes = [
+      ...memory.listSummaryJobs(),
+      ...memory.listExtractionJobs(),
+    ].filter((job) => pendingBlockIds.has(job.blockId)
+      && (job.status === 'pending' || (job.status === 'failed' && job.nextRetryAt !== null)))
+      .map((job) => job.nextRetryAt ? Date.parse(job.nextRetryAt) : Date.now())
+      .filter(Number.isFinite)
+    if (retryTimes.length === 0) return
+    const delay = Math.max(0, Math.min(...retryTimes) - Date.now())
+    const timer = setTimeout(() => {
+      this.derivationTimers.delete(key)
+      if (this.closed) return
+      const run = this.models.run(session, () => memory.resumePendingWork({ threadId }))
+        .then(async (resumed) => {
+          await this.persistSuccessfulResponses(memory)
+          const contexts = memory.getBlockContext(threadId)
+          for (const block of resumed.readyBlocks) {
+            if (block.threadId !== threadId) continue
+            const context = contexts.find(({ id }) => id === block.id)
+            if (!context) throw new Error(`Missing context for ready StrataGate block ${block.id}`)
+            this.replaceSealedSurface(session, block, context, dshTurnAtBlockEnd(session, block))
+          }
+          const changed = this.syncDecayedBlockSurface(session, contexts)
+          if (resumed.readyBlocks.length > 0 || changed) await this.flushNativeSession(session)
+        })
+        .catch((error: unknown) => {
+          this.onIngestError(error)
+        })
+        .finally(() => {
+          this.derivationRuns.delete(key)
+          this.scheduleBlockDerivation(session, memory)
+        })
+      this.derivationRuns.set(key, run)
+    }, delay)
+    timer.unref?.()
+    this.derivationTimers.set(key, timer)
   }
 
   private scheduleGraphMigration(session: Session, memory: StrataGate): void {
@@ -813,6 +1196,25 @@ export class StrataGateRuntime {
     }, 1_500)
     timer.unref?.()
     this.migrationTimers.set(namespace, timer)
+  }
+
+  private async openAdminMemory(namespace: string): Promise<{ memory: StrataGate; owned: boolean }> {
+    const active = this.spaces.get(namespace)
+    if (active) return { memory: await active, owned: false }
+    if (this.config.database === ':memory:' || !existsSync(this.config.database)) {
+      throw new Error(`Unknown StrataGate namespace: ${namespace}`)
+    }
+    return {
+      memory: await StrataGate.open({
+        database: this.config.database,
+        namespace,
+        blockTurnSize: this.blockTurnSize,
+        blockDecayLambda: this.blockDecayLambda,
+        graphProjector: this.models.graphProjector,
+        disableElementProjection: true,
+      }),
+      owned: true,
+    }
   }
 
   private rememberWorkspace(namespace: string, cwd: string | undefined): void {
@@ -843,7 +1245,8 @@ export class StrataGateRuntime {
     results: unknown,
     metadata: Record<string, unknown> = {},
   ): unknown {
-    const id = `batch_${++this.batchSequence}`
+    const sequence = ++this.batchSequence
+    const id = `batch_${sequence}`
     const refs = new Map(evidence.map(({ ref, target }) => [ref, target]))
     const key = String(session.id)
     let sessionBatches = this.batches.get(key)
@@ -851,7 +1254,7 @@ export class StrataGateRuntime {
       sessionBatches = new Map()
       this.batches.set(key, sessionBatches)
     }
-    sessionBatches.set(id, { id, refs, status: 'unresolved' })
+    sessionBatches.set(id, { id, sequence, refs, status: 'unresolved' })
     this.latestBatchIds.set(key, id)
     return { batchId: id, evidenceRefs: [...refs.keys()], results, ...metadata }
   }
@@ -1026,6 +1429,30 @@ function compactTemporal(event: EventCard): Record<string, unknown> {
 
 function compactText(value: string, limit = 800): string {
   return value.replace(/\s+/gu, ' ').trim().slice(0, limit)
+}
+
+function citation(
+  kind: MemoryCitation['kind'],
+  id: string,
+  title: string,
+  evidenceRef: string,
+  detailKind: MemoryCitation['detailKind'],
+  extra: Pick<MemoryCitation, 'level' | 'expanded'> = {},
+): Omit<MemoryCitation, 'batchId'> {
+  const cleanTitle = title.trim() || (kind === 'event' ? 'Event' : kind === 'graph' ? 'Knowledge Graph' : 'Block')
+  return {
+    kind,
+    id,
+    title: cleanTitle,
+    evidenceRef,
+    detailKind,
+    ...(extra.level === undefined ? {} : { level: extra.level }),
+    ...(extra.expanded === undefined ? {} : { expanded: extra.expanded }),
+  }
+}
+
+function blockCitationTitle(block: MemoryBlock | undefined): string {
+  return block?.l0Title?.trim() || (block ? `Block ${block.sequence}` : 'Block')
 }
 
 function compactEvent(event: EventCard, score: number): Record<string, unknown> {

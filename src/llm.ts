@@ -10,6 +10,10 @@ import type {
   ElementProjector,
   EventCardInput,
   EventExtractor,
+  ExternalMemoryAction,
+  ExternalMemoryCandidate,
+  ExternalMemoryDecider,
+  ExternalMemoryExtractor,
   ExtractionContext,
   GraphProjector,
   GraphProjectionContext,
@@ -21,7 +25,7 @@ import type {
   SuccessfulModelResponse,
   SuccessfulModelResponseKind,
 } from '@diqier/stratagate'
-import { nowUtc8 } from '@diqier/stratagate'
+import { EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN, nowUtc8, parseExternalMemoryExport } from '@diqier/stratagate'
 import type { ResolvedConfig } from './config.js'
 import { ModelJsonResponseError, parseJsonResponse } from './json-response.js'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
@@ -67,12 +71,14 @@ function extractorPayload(context: ExtractionContext): Record<string, unknown> {
 
 const JSON_RESPONSE_ATTEMPTS = 2
 const JSON_RETRY_INSTRUCTION = 'Your previous response did not make one valid call to the requested tool. Do not spend output on analysis or reasoning. Immediately call that tool exactly once with complete arguments. Do not return an answer as text or markdown.'
-const RETRY_MAX_TOKENS = 10_000
+const DEFAULT_STRUCTURED_TIMEOUT_MS = 45_000
 const STRUCTURED_FIELDS = {
   summarizer: ['l0Title', 'l0Tags', 'l1Summary', 'l2Keypoints', 'shouldExtract'],
   extractor: ['shouldExtract', 'reason', 'events'],
   projector: ['reason', 'changes'],
   graphProjector: ['reason', 'nodes', 'edges'],
+  externalMemoryExtractor: ['reason', 'candidates'],
+  externalMemoryDecider: ['action', 'reason', 'confidence'],
 } as const
 const STRING_ARRAY: ValueSchemaSpec = { type: 'array', items: { type: 'string' } }
 const OPEN_OBJECT: ValueSchemaSpec = { type: 'object', additionalProperties: true }
@@ -179,6 +185,19 @@ const GRAPH_PROJECTOR_PARAMETERS: ParameterSchemaSpec = {
   edges: { type: 'array', items: GRAPH_EDGE, required: true },
 }
 
+const EXTERNAL_MEMORY_DECIDER_PARAMETERS: ParameterSchemaSpec = {
+  action: { type: 'string', enum: ['ADD', 'MERGE', 'SUPERSEDE', 'CONFLICT', 'IGNORE'], required: true },
+  existingEventIds: STRING_ARRAY,
+  mergedCandidate: OPEN_OBJECT,
+  reason: { type: 'string', required: true },
+  confidence: { type: 'number', required: true },
+}
+
+const EXTERNAL_MEMORY_EXTRACTOR_PARAMETERS: ParameterSchemaSpec = {
+  reason: { type: 'string', required: true },
+  candidates: { type: 'array', items: OPEN_OBJECT, required: true },
+}
+
 const STRUCTURED_TOOLS = {
   summarizer: {
     name: 'stratagate_summarize_block',
@@ -199,6 +218,16 @@ const STRUCTURED_TOOLS = {
     name: 'stratagate_project_knowledge_graph',
     description: 'Project stable graph nodes and directed edges from supplied event evidence.',
     parameters: GRAPH_PROJECTOR_PARAMETERS,
+  },
+  externalMemoryDecider: {
+    name: 'stratagate_decide_external_memory',
+    description: 'Decide how one external memory candidate relates to retrieved local events.',
+    parameters: EXTERNAL_MEMORY_DECIDER_PARAMETERS,
+  },
+  externalMemoryExtractor: {
+    name: 'stratagate_recover_external_memory',
+    description: 'Recover structured external-memory candidates from malformed JSON or plain text.',
+    parameters: EXTERNAL_MEMORY_EXTRACTOR_PARAMETERS,
   },
 } as const
 
@@ -229,13 +258,22 @@ function renderBlocksForDiagnostics(blocks: readonly ContentBlock[], finish: str
 }
 
 export class DshModelBridge {
-  private readonly sessions = new AsyncLocalStorage<Session>()
+  private readonly sessions = new AsyncLocalStorage<{ session?: Session; sessionId: Session['id'] }>()
   private readonly successfulResponses: SuccessfulModelResponse[] = []
+  private readonly offCapabilities = new Map<string, 'supported' | 'unsupported'>()
 
-  constructor(private readonly ctx: Context, private readonly config: ResolvedConfig) {}
+  constructor(private readonly ctx: Context, private readonly config: ResolvedConfig) {
+    this.ctx.on?.('llm/adapters-updated', () => {
+      this.offCapabilities.clear()
+    })
+  }
 
   run<T>(session: Session, operation: () => Promise<T>): Promise<T> {
-    return this.sessions.run(session, operation)
+    return this.sessions.run({ session, sessionId: session.id }, operation)
+  }
+
+  runDetached<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.sessions.run({ sessionId: sessionId as Session['id'] }, operation)
   }
 
   takeSuccessfulResponses(): SuccessfulModelResponse[] {
@@ -249,7 +287,7 @@ export class DshModelBridge {
       { messages },
     ))
     return {
-      l0Title: text(raw.l0Title, 'Conversation block').slice(0, 120),
+      l0Title: text(raw.l0Title).slice(0, 120),
       l0Tags: strings(raw.l0Tags).slice(0, 12),
       l1Summary: text(raw.l1Summary).slice(0, 2_000),
       l2Keypoints: strings(raw.l2Keypoints).slice(0, 20),
@@ -370,17 +408,52 @@ export class DshModelBridge {
     return { reason: text(raw.reason, 'Projected Event evidence into the Knowledge Graph.'), nodes, edges }
   }
 
+  readonly externalMemoryDecider: ExternalMemoryDecider = async (context) => {
+    const raw = object(await this.callStructured(
+      'externalMemoryDecider',
+      `${EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN}\n\n调用 ${STRUCTURED_TOOLS.externalMemoryDecider.name} 恰好一次，不要返回普通文本。confidence 必须是 0 到 1，表示该 action 判断的把握程度。`,
+      context,
+    ))
+    const action = text(raw.action).toUpperCase() as ExternalMemoryAction
+    const allowedActions = new Set<ExternalMemoryAction>(['ADD', 'MERGE', 'SUPERSEDE', 'CONFLICT', 'IGNORE'])
+    const proposed = object(raw.mergedCandidate)
+    const mergedCandidate = text(proposed.title) && text(proposed.summary)
+      ? proposed as unknown as ExternalMemoryCandidate
+      : undefined
+    return {
+      action: allowedActions.has(action) ? action : 'IGNORE',
+      existingEventIds: strings(raw.existingEventIds),
+      ...(mergedCandidate ? { mergedCandidate } : {}),
+      reason: text(raw.reason, '模型未提供裁决理由。').slice(0, 500),
+      confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+    }
+  }
+
+  readonly externalMemoryExtractor: ExternalMemoryExtractor = async ({ text: source, importedAt }) => {
+    const raw = object(await this.callStructured(
+      'externalMemoryExtractor',
+      `Recover durable memory candidates from the supplied malformed external-memory export. Use only facts present in sourceText; never invent missing facts. Preserve uncertainty and omit unsupported dates. Call ${STRUCTURED_TOOLS.externalMemoryExtractor.name} exactly once with reason and candidates. Each candidate needs a concise title and self-contained summary. Do not return ordinary text.`,
+      { sourceText: source, importedAt },
+    ))
+    const parsed = parseExternalMemoryExport(JSON.stringify({
+      schemaVersion: 'stratagate.external-memory.v2',
+      sourceType: 'external_ai_memory_export',
+      candidates: Array.isArray(raw.candidates) ? raw.candidates : [],
+    }))
+    return { candidates: parsed.candidates, reason: text(raw.reason, parsed.reason) }
+  }
+
   private async callStructured(kind: SuccessfulModelResponseKind, system: string, payload: unknown): Promise<unknown> {
-    const session = this.sessions.getStore()
-    if (!session) throw new Error('StrataGate model callback ran without a DSH session')
-    // Structured memory jobs need a bounded machine-readable response. The
-    // host adapters currently do not expose a provider-neutral tool_choice,
-    // so disable reasoning here instead of allowing a thinking pass to fill
-    // the budget before the JSON/tool payload is emitted.
-    const route = this.resolveRoute(session, true)
+    const execution = this.sessions.getStore()
+    if (!execution) throw new Error('StrataGate model callback ran without an execution context')
+    // Structured memory jobs need a bounded machine-readable response. Prefer
+    // exact-model reasoning=off when supported (or still unknown), with one
+    // field-removal fallback when the adapter/provider explicitly rejects it.
+    const baseRoute = this.resolveRoute(execution.session)
+    const routeKey = `${baseRoute.provider}\u0000${baseRoute.model}`
+    let useOff = await this.shouldUseOff(baseRoute)
     let lastError: ModelJsonResponseError | undefined
     let lastResponse = ''
-    let retryMaxTokens = this.config.maxOutputTokens
     for (let attempt = 1; attempt <= JSON_RESPONSE_ATTEMPTS; attempt += 1) {
       const message = createUserMessage({
         content: [{ type: 'text', text: JSON.stringify(payload) }],
@@ -388,7 +461,8 @@ export class DshModelBridge {
       })
       const assembler = new BlockAssembler()
       const request: Parameters<typeof this.ctx.llm.stream>[0] & StructuredModelRequest = {
-        ...route,
+        ...baseRoute,
+        ...(useOff ? { reasoningEffort: 'off' as ReasoningEffortId } : {}),
         messages: [message],
         system: attempt === 1 ? system : `${system}\n\n${JSON_RETRY_INSTRUCTION}`,
         tools: [{
@@ -400,15 +474,35 @@ export class DshModelBridge {
           type: 'function',
           function: { name: STRUCTURED_TOOLS[kind].name },
         },
-        maxTokens: retryMaxTokens,
-        sessionId: session.id,
+        maxTokens: this.config.maxOutputTokens,
+        sessionId: execution.sessionId,
         purpose: 'compaction',
       }
-      for await (const chunk of this.ctx.llm.stream(request)) assembler.push(chunk)
+      try {
+        await this.consumeStructuredStream(request, assembler)
+      } catch (error) {
+        if (useOff && isOffRejection(error)) {
+          this.offCapabilities.set(routeKey, 'unsupported')
+          useOff = false
+          this.ctx.logger.warn(`stratagate-memory ${baseRoute.provider}/${baseRoute.model} rejected reasoningEffort=off; retrying once without it`)
+          attempt -= 1
+          continue
+        }
+        throw error
+      }
       const finish = assembler.finish
       if (finish.kind === 'error' || finish.kind === 'aborted') {
-        throw new Error(`StrataGate model call failed: ${finish.failure.message}`)
+        const failure = new Error(`StrataGate model call failed [${finish.failure.code}]: ${finish.failure.message}`)
+        if (useOff && isOffRejection(finish.failure)) {
+          this.offCapabilities.set(routeKey, 'unsupported')
+          useOff = false
+          this.ctx.logger.warn(`stratagate-memory ${baseRoute.provider}/${baseRoute.model} rejected reasoningEffort=off; retrying once without it`)
+          attempt -= 1
+          continue
+        }
+        throw failure
       }
+      if (useOff) this.offCapabilities.set(routeKey, 'supported')
       const blocks = assembler.blocks()
       const calls = blocks.filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call')
       const responseForError = `${renderBlocksForDiagnostics(blocks, finish.kind)}\n[finish=${finish.kind}; toolCalls=${calls.length}]`
@@ -446,6 +540,15 @@ export class DshModelBridge {
             { response: responseForError },
           )
         }
+        if (kind === 'summarizer') {
+          const summary = object(parsed)
+          if (!text(summary.l0Title) || !text(summary.l1Summary)) {
+            throw new ModelJsonResponseError(
+              `StrataGate ${expectedTool} arguments were invalid: l0Title and l1Summary must not be empty`,
+              { response: responseForError },
+            )
+          }
+        }
         this.successfulResponses.push({
           id: `model_response_${crypto.randomUUID()}`,
           kind,
@@ -462,7 +565,6 @@ export class DshModelBridge {
             { cause: error, response: responseForError },
           )
           : error
-        if (finish.kind === 'max-tokens') retryMaxTokens = Math.max(this.config.maxOutputTokens, RETRY_MAX_TOKENS)
         if (attempt < JSON_RESPONSE_ATTEMPTS) {
           this.ctx.logger.warn(`stratagate-memory model returned an invalid structured tool call; retrying (${attempt}/${JSON_RESPONSE_ATTEMPTS})`)
         }
@@ -474,22 +576,85 @@ export class DshModelBridge {
     )
   }
 
-  private resolveRoute(session: Session, structured = false): { provider: string; model: string; reasoningEffort?: ReasoningEffortId } {
-    const request = session.requestHeader()?.config
-    const requestedReasoningEffort = request?.reasoningEffort
-    const withReasoningEffort = (route: { provider: string; model: string }): { provider: string; model: string; reasoningEffort?: ReasoningEffortId } => ({
-      ...route,
-      ...(structured ? { reasoningEffort: 'off' as ReasoningEffortId } : requestedReasoningEffort !== undefined ? { reasoningEffort: requestedReasoningEffort } : {}),
-    })
-    if (this.config.provider && this.config.model) {
-      return withReasoningEffort({ provider: this.config.provider, model: this.config.model })
-    }
-    if (request) return withReasoningEffort({ provider: request.provider, model: request.model })
-    const fallback = this.ctx.agentDefaultModel.currentSelection()
-    return {
-      provider: fallback.provider,
-      model: fallback.model,
-      ...(structured ? { reasoningEffort: 'off' as ReasoningEffortId } : fallback.reasoningEffort !== undefined ? { reasoningEffort: fallback.reasoningEffort as ReasoningEffortId } : {}),
+  private async shouldUseOff(route: { provider: string; model: string }): Promise<boolean> {
+    const key = `${route.provider}\u0000${route.model}`
+    const cached = this.offCapabilities.get(key)
+    if (cached) return cached === 'supported'
+    if (typeof this.ctx.llm.resolveModelInfo !== 'function') return true
+    const controller = new AbortController()
+    const lookupTimeoutMs = Math.min(5_000, this.config.structuredTaskTimeoutMs ?? DEFAULT_STRUCTURED_TIMEOUT_MS)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const info = await Promise.race([
+        this.ctx.llm.resolveModelInfo(route.provider, route.model, controller.signal),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort()
+            reject(new Error(`Model capability lookup timed out after ${lookupTimeoutMs}ms`))
+          }, lookupTimeoutMs)
+          timer.unref?.()
+        }),
+      ])
+      if (!info.reasoning) return true
+      const supported = info.reasoning.efforts.some(({ id }) => String(id) === 'off')
+      this.offCapabilities.set(key, supported ? 'supported' : 'unsupported')
+      return supported
+    } catch {
+      return true
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
+
+  private async consumeStructuredStream(
+    request: Parameters<typeof this.ctx.llm.stream>[0],
+    assembler: BlockAssembler,
+  ): Promise<void> {
+    const timeoutMs = this.config.structuredTaskTimeoutMs ?? DEFAULT_STRUCTURED_TIMEOUT_MS
+    const controller = new AbortController()
+    const timedRequest = { ...request, signal: controller.signal }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort(new Error(`StrataGate structured model task timed out after ${timeoutMs}ms`))
+        reject(new Error(`StrataGate structured model task timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      timer.unref?.()
+    })
+    try {
+      await Promise.race([
+        (async () => {
+          for await (const chunk of this.ctx.llm.stream(timedRequest)) assembler.push(chunk)
+        })(),
+        timeout,
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private resolveRoute(session?: Session): { provider: string; model: string } {
+    const request = session?.requestHeader()?.config
+    if (this.config.provider && this.config.model) {
+      return { provider: this.config.provider, model: this.config.model }
+    }
+    if (request) return { provider: request.provider, model: request.model }
+    const fallback = this.ctx.agentDefaultModel.currentSelection()
+    return { provider: fallback.provider, model: fallback.model }
+  }
+}
+
+function isOffRejection(error: unknown): boolean {
+  let detail: string
+  try {
+    detail = typeof error === 'string'
+      ? error
+      : error && typeof error === 'object'
+        ? JSON.stringify(error, Object.getOwnPropertyNames(error))
+        : String(error)
+  } catch {
+    detail = error instanceof Error ? error.message : String(error)
+  }
+  return /(?:reasoning[_ -]?effort|reasoning).{0,100}\boff\b|\boff\b.{0,100}(?:reasoning[_ -]?effort|reasoning)/iu.test(detail)
+    && /(?:unsupported|not supported|invalid|not allowed|unknown|unrecognized|reject|must be|expected)/iu.test(detail)
 }

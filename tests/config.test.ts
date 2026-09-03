@@ -11,7 +11,8 @@ describe('DeepSeek Harness plugin config', () => {
       blockTurnSize: 6,
       blockDecayLambda: 0.3,
       ingestSubagents: false,
-      maxOutputTokens: 10000,
+      maxOutputTokens: 2048,
+      structuredTaskTimeoutMs: 45000,
     })
   })
 

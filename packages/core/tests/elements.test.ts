@@ -24,10 +24,14 @@ const summarizer: BlockSummarizer = async (messages) => ({
   shouldExtract: true,
 });
 
-const extractor: EventExtractor = async ({ target }) => ({
-  shouldExtract: true,
-  reason: 'project state changed',
-  events: [{
+const extractor: EventExtractor = async ({ target }) => {
+  if (!/database is/iu.test(target.l5Raw[0]?.content ?? '')) {
+    return { shouldExtract: false, reason: 'No durable database change.', events: [] };
+  }
+  return {
+    shouldExtract: true,
+    reason: 'project state changed',
+    events: [{
     title: 'Database decision',
     summary: target.l5Raw[0]?.content ?? 'unknown',
     sourceMessageIds: [target.l5Raw[0]?.id ?? 'missing'],
@@ -37,8 +41,9 @@ const extractor: EventExtractor = async ({ target }) => ({
       participants: ['StrataGate'],
       eventType: 'decision',
     },
-  }],
-});
+    }],
+  };
+};
 
 const projector: ElementProjector = async ({ events }) => ({
   reason: 'materialize the project database state',

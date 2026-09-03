@@ -8,7 +8,7 @@ import {
 } from './blocks.js';
 import { applyElementChanges, elementViewAt } from './elements.js';
 import { normalizeStandardEventType } from './events.js';
-import { externalMemoryJsonExtractor } from './external-memory.js';
+import { externalMemoryJsonExtractor, parseExternalMemoryExport } from './external-memory.js';
 import { applyGraphProjection } from './graph.js';
 import { normalizeRetrievalAssessment, type RetrievalAssessment, type RetrievalAssessmentInput } from './retrieval.js';
 import { SqliteStorage } from './sqlite.js';
@@ -27,6 +27,7 @@ import {
   normalizeSnapshot,
   type ElementProjectionJob,
   type ExtractionJob,
+  type BlockSummaryJob,
   type GraphProjectionJob,
   type IngestionReceipt,
   type SuccessfulModelResponse,
@@ -52,11 +53,18 @@ import type {
   EventSearchResult,
   ExternalMemoryAction,
   ExternalMemoryCandidate,
+  ExternalMemoryCommitOptions,
   ExternalMemoryDecision,
   ExternalMemoryExtractionResult,
   ExternalMemoryImportDecision,
+  ExternalMemoryImportJob,
   ExternalMemoryImportOptions,
+  ExternalMemoryImportPreview,
   ExternalMemoryImportResult,
+  ExternalMemoryImportWorkItem,
+  ExternalMemoryMatch,
+  ExternalMemoryPreviewDecision,
+  ExternalMemoryUndoResult,
   GraphEdge,
   GraphNode,
   GraphNodeSearchResult,
@@ -115,6 +123,8 @@ export interface AppendTurnOptions {
    * resumePendingWork(). This keeps host lifecycle hooks short and crash-safe.
    */
   deferProcessing?: boolean;
+  /** Seal deterministic L3-L5 now, but leave model-backed work to resumePendingWork(). */
+  deferDerivation?: boolean;
 }
 
 export interface BlockContextEntry {
@@ -139,13 +149,20 @@ export interface MemoryUseRefs {
 
 export interface ResumePendingResult {
   sealedBlocks: MemoryBlock[];
+  readyBlocks: MemoryBlock[];
   extractedEvents: EventCard[];
   projectedElements: ElementCard[];
 }
 
 export interface ResumePendingOptions {
-  /** Retry previously skipped extraction jobs once per block. */
+  /** @deprecated Valid empty extraction is terminal; retained as a no-op for API compatibility. */
   retrySkipped?: boolean;
+  /** Bypass a failed job's backoff, while still respecting the hard attempt cap. */
+  retryFailed?: boolean;
+  /** Limit model-backed work to one host conversation route. */
+  threadId?: string;
+  /** Seal every complete tail, but do not start model-backed jobs. */
+  deferDerivation?: boolean;
 }
 
 function defaultIdFactory(prefix: 'msg' | 'blk' | 'evt'): string {
@@ -160,27 +177,12 @@ function defaultGraphIdFactory(prefix: 'node' | 'edge' | 'gfact' | 'gproj'): str
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
-function defaultSummary(messages: readonly RawMessage[]): {
-  l0Title: string;
-  l0Tags: string[];
-  l1Summary: string;
-  l2Keypoints: string[];
-  shouldExtract: boolean;
-} {
-  const natural = messages.filter((message) => message.role === 'user' || message.role === 'assistant');
-  const firstUser = natural.find((message) => message.role === 'user');
-  return {
-    l0Title: (firstUser?.content ?? 'Conversation block').replace(/\s+/g, ' ').trim().slice(0, 80),
-    l0Tags: [],
-    l1Summary: natural.slice(0, 4).map((message) => message.content.replace(/\s+/g, ' ').trim()).join(' ').slice(0, 500),
-    l2Keypoints: natural.slice(0, 8).map((message) => message.content.replace(/\s+/g, ' ').trim().slice(0, 160)),
-    shouldExtract: false,
-  };
-}
-
 function renderBlock(block: MemoryBlock, level: BlockLevel): string {
+  if (block.processingStatus !== 'ready' || !block.l0Title || !block.l0Tags || !block.l1Summary || !block.l2Keypoints) {
+    throw new Error(`Block ${block.id} is not ready for rendering`);
+  }
   if (level === 0) return `${block.l0Title}\nTags: ${block.l0Tags.join(', ') || 'none'}`;
-  if (level === 1) return block.l1Summary || block.l0Title;
+  if (level === 1) return block.l1Summary;
   if (level === 2) return block.l2Keypoints.map((point) => `- ${point}`).join('\n') || block.l1Summary;
   if (level === 3) return block.l3Condensed;
   if (level === 4) return block.l4Readable;
@@ -200,6 +202,13 @@ function errorMessage(error: unknown): string {
 }
 
 const STRATAGATE_CONSTRUCTOR_TOKEN = Symbol('StrataGate constructor');
+const EXTERNAL_MEMORY_AUTO_APPLY_CONFIDENCE = 0.85;
+
+function externalMemoryFingerprint(value: Pick<ExternalMemoryCandidate, 'title' | 'summary'>): string {
+  return `${normalizeSearchText(value.title)}\u0000${normalizeSearchText(value.summary)}`;
+}
+const DERIVATION_MAX_ATTEMPTS = 3;
+const DERIVATION_BACKOFF_MS = 1_000;
 
 export class StrataGate {
   private blockTurnSizeValue: number;
@@ -220,11 +229,13 @@ export class StrataGate {
   private readonly graphNodes: GraphNode[] = [];
   private readonly graphEdges: GraphEdge[] = [];
   private readonly extractionJobs = new Map<string, ExtractionJob>();
+  private readonly summaryJobs = new Map<string, BlockSummaryJob>();
   private readonly elementProjectionJobs = new Map<string, ElementProjectionJob>();
   private readonly graphProjectionJobs = new Map<string, GraphProjectionJob>();
   private readonly usageReceipts = new Map<string, UsageReceipt>();
   private readonly successfulModelResponses: SuccessfulModelResponse[] = [];
   private readonly ingestionReceipts = new Map<string, IngestionReceipt>();
+  private readonly externalMemoryImportJobs = new Map<string, ExternalMemoryImportJob>();
   private currentTurn = 0;
   private storage: StorageAdapter | undefined;
   private namespace: string | undefined;
@@ -332,6 +343,21 @@ export class StrataGate {
     if (loaded && loadedSnapshot) {
       memory.restoreSnapshot(loadedSnapshot);
       memory.revision = loadedRevision;
+      const interruptedSummaries = [...memory.summaryJobs.values()].filter((job) => job.status === 'running');
+      if (interruptedSummaries.length > 0) {
+        await memory.commitMutation(() => {
+          const now = toUtc8Iso(memory.now());
+          for (const job of interruptedSummaries) {
+            memory.summaryJobs.set(job.blockId, {
+              ...job,
+              status: 'failed',
+              lastError: 'Block summarization was interrupted before completion.',
+              nextRetryAt: now,
+              updatedAt: now,
+            });
+          }
+        });
+      }
       const interrupted = [...memory.extractionJobs.values()].filter((job) => job.status === 'running');
       if (interrupted.length > 0) {
         await memory.commitMutation(() => {
@@ -341,6 +367,7 @@ export class StrataGate {
               ...job,
               status: 'failed',
               lastError: 'Extraction was interrupted before completion.',
+              nextRetryAt: now,
               updatedAt: now,
             });
           }
@@ -389,6 +416,26 @@ export class StrataGate {
 
   get storageRevision(): number {
     return this.revision;
+  }
+
+  /** Replace an out-of-date in-memory view with the latest durable namespace snapshot. */
+  async reloadFromStorage(): Promise<boolean> {
+    if (!this.storage || !this.namespace) return false;
+    const previous = this.mutationQueue;
+    let release!: () => void;
+    this.mutationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      const loaded = await this.storage.load(this.namespace);
+      if (!loaded || loaded.revision === this.revision) return false;
+      this.restoreSnapshot(loaded.snapshot);
+      this.revision = loaded.revision;
+      return true;
+    } finally {
+      release();
+    }
   }
 
   get blockTurnSize(): number {
@@ -448,6 +495,10 @@ export class StrataGate {
     return [...this.extractionJobs.values()];
   }
 
+  listSummaryJobs(): readonly BlockSummaryJob[] {
+    return [...this.summaryJobs.values()];
+  }
+
   listElementProjectionJobs(): readonly ElementProjectionJob[] {
     return [...this.elementProjectionJobs.values()];
   }
@@ -462,6 +513,10 @@ export class StrataGate {
 
   listSuccessfulModelResponses(): readonly SuccessfulModelResponse[] {
     return this.successfulModelResponses;
+  }
+
+  listExternalMemoryImportJobs(): readonly ExternalMemoryImportJob[] {
+    return [...this.externalMemoryImportJobs.values()].map((job) => structuredClone(job));
   }
 
   async recordSuccessfulModelResponses(responses: readonly SuccessfulModelResponse[]): Promise<void> {
@@ -485,6 +540,7 @@ export class StrataGate {
       blockDecayLambda: this.blockDecayLambda,
       openTail: this.openTail,
       blocks: this.blocks,
+      summaryJobs: [...this.summaryJobs.values()],
       events: this.events,
       graphNodes: this.graphNodes,
       graphEdges: this.graphEdges,
@@ -494,6 +550,7 @@ export class StrataGate {
       elementProjectionJobs: [...this.elementProjectionJobs.values()],
       usageReceipts: [...this.usageReceipts.values()],
       ingestionReceipts: [...this.ingestionReceipts.values()],
+      externalMemoryImportJobs: [...this.externalMemoryImportJobs.values()],
       successfulModelResponses: this.successfulModelResponses,
     });
   }
@@ -535,56 +592,50 @@ export class StrataGate {
       if (receiptId) this.ingestionReceipts.set(receiptId, { id: receiptId, createdAt });
       return true;
     });
-    if (!appended) return { sealedBlock: null, extractedEvents: [], projectedElements: [] };
+    if (!appended) return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] };
     if (options.deferProcessing === true) {
-      return { sealedBlock: null, extractedEvents: [], projectedElements: [] };
+      return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] };
     }
 
     if (this.threadOpenTail(threadId).filter((message) => message.role === 'user').length < this.blockTurnSize) {
       const projectedElements = await this.projectEligibleElements() ?? [];
       await this.projectEligibleGraph();
-      return { sealedBlock: null, extractedEvents: [], projectedElements };
+      return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements };
     }
 
     const sealedBlock = await this.sealOpenTail(threadId);
-    const extractedEvents = await this.extractEligibleBlock() ?? [];
+    if (options.deferDerivation === true) {
+      return { sealedBlock, readyBlocks: [], extractedEvents: [], projectedElements: [] };
+    }
+    const beforeReady = sealedBlock.processingStatus === 'ready';
+    const extractedEvents = await this.processBlock(sealedBlock, { retryFailed: false });
+    const readyBlocks = !beforeReady && sealedBlock.processingStatus === 'ready' ? [sealedBlock] : [];
     const projectedElements = await this.projectEligibleElements() ?? [];
     await this.projectEligibleGraph();
-    return { sealedBlock, extractedEvents, projectedElements };
+    return { sealedBlock, readyBlocks, extractedEvents, projectedElements };
   }
 
   async resumePendingWork(options: ResumePendingOptions = {}): Promise<ResumePendingResult> {
     const sealedBlocks: MemoryBlock[] = [];
+    const readyBlocks: MemoryBlock[] = [];
     const extractedEvents: EventCard[] = [];
     const projectedElements: ElementCard[] = [];
     while (true) {
       const sealable = this.nextSealableThread();
       if (sealable === null) break;
       sealedBlocks.push(await this.sealOpenTail(sealable.threadId));
-      extractedEvents.push(...(await this.extractEligibleBlock() ?? []));
-      projectedElements.push(...(await this.projectEligibleElements() ?? []));
-      await this.projectEligibleGraph();
     }
-    while (true) {
-      const extracted = await this.extractEligibleBlock();
-      if (extracted === null) break;
+    if (options.deferDerivation === true) {
+      return { sealedBlocks, readyBlocks, extractedEvents, projectedElements };
+    }
+    for (const block of this.blocks) {
+      if (options.threadId !== undefined && block.threadId !== options.threadId) continue;
+      if (block.processingStatus === 'ready') continue;
+      const extracted = await this.processBlock(block, { retryFailed: options.retryFailed === true });
       extractedEvents.push(...extracted);
+      if (this.blocks.find((candidate) => candidate.id === block.id)?.processingStatus === 'ready') readyBlocks.push(block);
       projectedElements.push(...(await this.projectEligibleElements() ?? []));
       await this.projectEligibleGraph();
-    }
-    if (options.retrySkipped === true) {
-      const skippedBlockIds = this.blocks
-        .filter((block) => this.nextBlockInThread(block) !== null
-          && block.shouldExtract
-          && this.extractionJobs.get(block.id)?.status === 'skipped')
-        .map((block) => block.id);
-      for (const blockId of skippedBlockIds) {
-        const extracted = await this.extractEligibleBlock({ blockId, includeSkipped: true });
-        if (extracted === null) continue;
-        extractedEvents.push(...extracted);
-        projectedElements.push(...(await this.projectEligibleElements() ?? []));
-        await this.projectEligibleGraph();
-      }
     }
     while (true) {
       const projected = await this.projectEligibleElements();
@@ -594,7 +645,7 @@ export class StrataGate {
     // Historical graph rebuild is deliberately bounded: one persisted batch per
     // worker pass keeps startup responsive and avoids burst token consumption.
     await this.projectEligibleGraph();
-    return { sealedBlocks, extractedEvents, projectedElements };
+    return { sealedBlocks, readyBlocks, extractedEvents, projectedElements };
   }
 
   async addEvent(input: EventCardInput): Promise<EventCard> {
@@ -616,7 +667,68 @@ export class StrataGate {
    * overwritten: MERGE and SUPERSEDE create a new canonical Event that points
    * back to the older Events.
    */
-  async importExternalMemory(options: ExternalMemoryImportOptions): Promise<ExternalMemoryImportResult> {
+  private normalizeExternalMemoryDecision(
+    candidate: ExternalMemoryCandidate,
+    matches: readonly ExternalMemoryMatch[],
+    decision: ExternalMemoryDecision,
+    forceConfirmation = false,
+  ): ExternalMemoryPreviewDecision {
+    const allowed = new Set(matches.map(({ event }) => event.id));
+    const exact = this.events.find((event) =>
+      event.status !== 'forgotten'
+      && event.status !== 'archived'
+      && externalMemoryFingerprint(event) === externalMemoryFingerprint(candidate));
+    if (exact) allowed.add(exact.id);
+    const existingEventIds = [...new Set((decision.existingEventIds ?? []).filter((id) => allowed.has(id)))];
+    const requestedAction = this.normalizeExternalAction(decision.action);
+    const missingTarget = requestedAction !== 'ADD' && requestedAction !== 'IGNORE' && existingEventIds.length === 0;
+    const action = missingTarget ? 'IGNORE' : requestedAction;
+    const confidence = missingTarget ? 0.5 : Number.isFinite(decision.confidence)
+      ? Math.max(0, Math.min(1, decision.confidence!))
+      : 0.5;
+    return {
+      candidate: structuredClone(candidate),
+      action,
+      existingEventIds,
+      matches: structuredClone([...matches]),
+      confidence,
+      requiresConfirmation: forceConfirmation || confidence < EXTERNAL_MEMORY_AUTO_APPLY_CONFIDENCE,
+      ...(decision.mergedCandidate ? { mergedCandidate: structuredClone(decision.mergedCandidate) } : {}),
+      ...(missingTarget
+        ? { reason: '模型未关联到允许范围内的现有记忆，已安全降级为忽略' }
+        : typeof decision.reason === 'string' && decision.reason.trim()
+        ? { reason: decision.reason.trim().slice(0, 500) }
+        : {}),
+    };
+  }
+
+  private async decideExternalMemoryCandidate(
+    candidate: ExternalMemoryCandidate,
+    priorFingerprints: ReadonlySet<string>,
+    decider: NonNullable<ExternalMemoryImportOptions['decider']>,
+    topK: number,
+    forceConfirmation = false,
+  ): Promise<ExternalMemoryPreviewDecision> {
+    const fingerprint = externalMemoryFingerprint(candidate);
+    const exact = this.events.find((event) =>
+      event.status !== 'forgotten'
+      && event.status !== 'archived'
+      && externalMemoryFingerprint(event) === fingerprint);
+    const duplicateInImport = priorFingerprints.has(fingerprint);
+    const query = `${candidate.title} ${candidate.summary} ${(candidate.tags ?? []).join(' ')}`.trim();
+    const matches = await this.searchEvents(query, { limit: topK, trackRetrieval: false });
+    const decision: ExternalMemoryDecision = exact || duplicateInImport
+      ? {
+          action: 'IGNORE',
+          existingEventIds: exact ? [exact.id] : [],
+          reason: exact ? '与现有记忆完全重复' : '与本批次中的候选完全重复',
+          confidence: 1,
+        }
+      : await decider({ candidate: structuredClone(candidate), matches: structuredClone(matches) });
+    return this.normalizeExternalMemoryDecision(candidate, matches, decision, forceConfirmation);
+  }
+
+  async previewExternalMemoryImport(options: ExternalMemoryImportOptions): Promise<ExternalMemoryImportPreview> {
     const text = options.text.trim();
     if (!text) throw new TypeError('External memory text must not be empty');
     if (typeof options.decider !== 'function') {
@@ -627,35 +739,238 @@ export class StrataGate {
     const extracted: ExternalMemoryExtractionResult = await extractor({ text, importedAt });
     const candidates = Array.isArray(extracted?.candidates) ? extracted.candidates.slice(0, 200) : [];
     const topK = Math.max(1, Math.min(20, Math.floor(options.topK ?? 5)));
-
-    const source = await this.commitMutation(() => this.createExternalSourceBlock(text, importedAt));
-    const prepared: Array<{
-      candidate: ExternalMemoryCandidate;
-      decision: ExternalMemoryDecision;
-      existingEventIds: string[];
-    }> = [];
+    const seenFingerprints = new Set<string>();
+    const decisions: ExternalMemoryPreviewDecision[] = [];
     for (const candidate of candidates) {
       if (!candidate || typeof candidate.title !== 'string' || typeof candidate.summary !== 'string') continue;
-      const query = `${candidate.title} ${candidate.summary} ${(candidate.tags ?? []).join(' ')}`.trim();
-      const matches = await this.searchEvents(query, { limit: topK });
-      const decision = await options.decider({ candidate, matches });
-      const allowed = new Set(matches.map(({ event }) => event.id));
-      const existingEventIds = [...new Set((decision.existingEventIds ?? []).filter((id) => allowed.has(id)))];
-      prepared.push({ candidate, decision, existingEventIds });
+      const fingerprint = externalMemoryFingerprint(candidate);
+      const preview = await this.decideExternalMemoryCandidate(candidate, seenFingerprints, options.decider, topK);
+      seenFingerprints.add(fingerprint);
+      decisions.push(preview);
     }
+    return { importedAt, baseRevision: this.revision, decisions };
+  }
 
+  getExternalMemoryImportJob(jobId: string): ExternalMemoryImportJob | null {
+    const job = this.externalMemoryImportJobs.get(jobId.trim());
+    return job ? structuredClone(job) : null;
+  }
+
+  async createExternalMemoryImportJob(text: string): Promise<ExternalMemoryImportJob> {
+    const normalized = text.trim();
+    if (!normalized) throw new TypeError('External memory text must not be empty');
+    const now = toUtc8Iso(this.now());
+    let candidates: ExternalMemoryCandidate[] = [];
+    let parseError: string | null = null;
+    try {
+      candidates = parseExternalMemoryExport(normalized).candidates;
+    } catch (error) {
+      parseError = errorMessage(error).slice(0, 2_000);
+    }
+    const job: ExternalMemoryImportJob = {
+      id: `import_${crypto.randomUUID()}`,
+      text: normalized,
+      importedAt: now,
+      status: parseError ? 'extracting' : candidates.length > 0 ? 'processing' : 'ready',
+      candidates: structuredClone(candidates),
+      decisions: [],
+      processedCount: 0,
+      totalCount: candidates.length,
+      recoveredFromInvalidJson: false,
+      parseError,
+      lastError: null,
+      sourceBlockId: null,
+      importedCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.commitMutation(() => this.externalMemoryImportJobs.set(job.id, structuredClone(job)));
+    return structuredClone(job);
+  }
+
+  async completeExternalMemoryFallback(
+    jobId: string,
+    result: ExternalMemoryExtractionResult,
+  ): Promise<ExternalMemoryImportJob> {
+    const candidates = (Array.isArray(result.candidates) ? result.candidates : [])
+      .filter((candidate) => candidate && typeof candidate.title === 'string' && typeof candidate.summary === 'string')
+      .slice(0, 200);
     return this.commitMutation(() => {
+      const job = this.requireExternalMemoryImportJob(jobId);
+      if (job.status !== 'extracting') return structuredClone(job);
+      job.candidates = structuredClone(candidates);
+      job.decisions = [];
+      job.processedCount = 0;
+      job.totalCount = candidates.length;
+      job.recoveredFromInvalidJson = true;
+      job.status = candidates.length > 0 ? 'processing' : 'failed';
+      job.lastError = candidates.length > 0 ? null : '模型未能从不合格内容中恢复出任何候选记忆';
+      job.updatedAt = toUtc8Iso(this.now());
+      return structuredClone(job);
+    });
+  }
+
+  async processNextExternalMemoryImport(
+    jobId: string,
+    decider: ExternalMemoryImportOptions['decider'],
+    topK = 5,
+  ): Promise<ExternalMemoryImportJob> {
+    if (typeof decider !== 'function') throw new TypeError('External memory decider is required');
+    const work = await this.prepareNextExternalMemoryImport(jobId, topK);
+    if (!work) {
+      const current = this.requireExternalMemoryImportJob(jobId);
+      return structuredClone(current);
+    }
+    const decision = work.deterministicDecision ?? await decider({
+      candidate: structuredClone(work.candidate),
+      matches: structuredClone(work.matches),
+    });
+    return this.completeNextExternalMemoryImport(
+      work.jobId,
+      work.index,
+      decision,
+      work.matches,
+      work.forceConfirmation,
+    );
+  }
+
+  async prepareNextExternalMemoryImport(
+    jobId: string,
+    topK = 5,
+  ): Promise<ExternalMemoryImportWorkItem | null> {
+    const current = this.requireExternalMemoryImportJob(jobId);
+    if (current.status !== 'processing') return null;
+    const index = current.processedCount;
+    const candidate = current.candidates[index];
+    if (!candidate) return null;
+    const priorFingerprints = new Set(current.candidates.slice(0, index).map(externalMemoryFingerprint));
+    const fingerprint = externalMemoryFingerprint(candidate);
+    const exact = this.events.find((event) =>
+      event.status !== 'forgotten'
+      && event.status !== 'archived'
+      && externalMemoryFingerprint(event) === fingerprint);
+    const duplicateInImport = priorFingerprints.has(fingerprint);
+    const query = `${candidate.title} ${candidate.summary} ${(candidate.tags ?? []).join(' ')}`.trim();
+    const matches = await this.searchEvents(query, {
+      limit: Math.max(1, Math.min(20, Math.floor(topK))),
+      trackRetrieval: false,
+    });
+    const deterministicDecision: ExternalMemoryDecision | undefined = exact || duplicateInImport
+      ? {
+          action: 'IGNORE',
+          existingEventIds: exact ? [exact.id] : [],
+          reason: exact ? '与现有记忆完全重复' : '与本批次中的候选完全重复',
+          confidence: 1,
+        }
+      : undefined;
+    return {
+      jobId: current.id,
+      index,
+      candidate: structuredClone(candidate),
+      matches: structuredClone(matches),
+      forceConfirmation: current.recoveredFromInvalidJson,
+      ...(deterministicDecision ? { deterministicDecision } : {}),
+    };
+  }
+
+  async completeNextExternalMemoryImport(
+    jobId: string,
+    index: number,
+    decision: ExternalMemoryDecision,
+    matches: readonly ExternalMemoryMatch[],
+    forceConfirmation = false,
+  ): Promise<ExternalMemoryImportJob> {
+    return this.commitMutation(() => {
+      const job = this.requireExternalMemoryImportJob(jobId);
+      if (job.processedCount > index) return structuredClone(job);
+      if (job.status !== 'processing' || job.processedCount !== index) {
+        throw new Error(`External memory import ${jobId} is no longer at candidate ${index}`);
+      }
+      const candidate = job.candidates[index];
+      if (!candidate) throw new Error(`External memory import ${jobId} has no candidate ${index}`);
+      const normalized = this.normalizeExternalMemoryDecision(candidate, matches, decision, forceConfirmation);
+      job.decisions.push(structuredClone(normalized));
+      job.processedCount += 1;
+      if (job.processedCount >= job.totalCount) {
+        job.status = job.decisions.some(({ requiresConfirmation }) => requiresConfirmation)
+          ? 'awaiting_confirmation'
+          : 'ready';
+      }
+      job.lastError = null;
+      job.updatedAt = toUtc8Iso(this.now());
+      return structuredClone(job);
+    });
+  }
+
+  async failExternalMemoryImportJob(jobId: string, error: unknown): Promise<ExternalMemoryImportJob> {
+    return this.commitMutation(() => {
+      const job = this.requireExternalMemoryImportJob(jobId);
+      job.status = 'failed';
+      job.lastError = errorMessage(error).slice(0, 2_000);
+      job.updatedAt = toUtc8Iso(this.now());
+      return structuredClone(job);
+    });
+  }
+
+  async retryExternalMemoryImportJob(jobId: string): Promise<ExternalMemoryImportJob> {
+    return this.commitMutation(() => {
+      const job = this.requireExternalMemoryImportJob(jobId);
+      if (job.status !== 'failed') return structuredClone(job);
+      job.status = job.candidates.length === 0 && job.parseError ? 'extracting' : 'processing';
+      job.lastError = null;
+      job.updatedAt = toUtc8Iso(this.now());
+      return structuredClone(job);
+    });
+  }
+
+  async completeExternalMemoryImportJob(
+    jobId: string,
+    result: Pick<ExternalMemoryImportResult, 'sourceBlockId' | 'addedEvents'>,
+  ): Promise<ExternalMemoryImportJob> {
+    return this.commitMutation(() => {
+      const job = this.requireExternalMemoryImportJob(jobId);
+      job.status = 'committed';
+      job.sourceBlockId = result.sourceBlockId;
+      job.importedCount = result.addedEvents.length;
+      job.updatedAt = toUtc8Iso(this.now());
+      return structuredClone(job);
+    });
+  }
+
+  async markExternalMemoryImportUndone(jobId: string): Promise<ExternalMemoryImportJob> {
+    return this.commitMutation(() => {
+      const job = this.requireExternalMemoryImportJob(jobId);
+      job.status = 'undone';
+      job.updatedAt = toUtc8Iso(this.now());
+      return structuredClone(job);
+    });
+  }
+
+  async commitExternalMemoryImport(options: ExternalMemoryCommitOptions): Promise<ExternalMemoryImportResult> {
+    const text = options.text.trim();
+    if (!text) throw new TypeError('External memory text must not be empty');
+    if (options.candidates.length !== options.decisions.length) {
+      throw new TypeError('External memory candidates and decisions must have the same length');
+    }
+    return this.commitMutation(() => {
+      if (this.revision !== options.baseRevision) {
+        throw new Error(`External memory preview is stale: expected revision ${options.baseRevision}, found ${this.revision}`);
+      }
+      const importedAt = toUtc8Iso(options.importedAt);
+      const source = this.createExternalSourceBlock(text, importedAt);
       const addedEvents: EventCard[] = [];
       const changedEventIds = new Set<string>();
       const decisions: ExternalMemoryImportDecision[] = [];
-      for (const item of prepared) {
-        const action = this.normalizeExternalAction(item.decision.action);
-        const targets = item.existingEventIds;
-        const reason = typeof item.decision.reason === 'string' ? item.decision.reason.trim().slice(0, 500) : undefined;
+      for (const [index, item] of options.decisions.entries()) {
+        const action = this.normalizeExternalAction(item.action);
+        const allowed = new Set(item.matches.map(({ event }) => event.id));
+        const targets = [...new Set(item.existingEventIds.filter((id) => allowed.has(id)))];
+        const reason = typeof item.reason === 'string' ? item.reason.trim().slice(0, 500) : undefined;
         let createdEvent: EventCard | undefined;
-        const proposed = item.decision.mergedCandidate;
+        const proposed = item.mergedCandidate;
+        const original = options.candidates[index]!;
         const candidate = proposed && typeof proposed.title === 'string' && typeof proposed.summary === 'string'
-          ? proposed : item.candidate;
+          ? proposed : original;
         if ((action === 'ADD' || action === 'MERGE' || action === 'SUPERSEDE' || action === 'CONFLICT')
           && (action === 'ADD' || targets.length > 0)) {
           const temporal = {
@@ -682,9 +997,10 @@ export class StrataGate {
           }
         }
         const audit: ExternalMemoryImportDecision = {
-          candidate: structuredClone(item.candidate), action, existingEventIds: targets,
+          candidate: structuredClone(original), action, existingEventIds: targets,
           ...(createdEvent ? { createdEventId: createdEvent.id } : {}),
           ...(reason ? { reason } : {}),
+          ...(typeof item.confidence === 'number' ? { confidence: item.confidence } : {}),
         };
         decisions.push(audit);
       }
@@ -698,6 +1014,103 @@ export class StrataGate {
         decisions,
         addedEvents,
         changedEventIds: [...changedEventIds],
+      };
+    });
+  }
+
+  async importExternalMemory(options: ExternalMemoryImportOptions): Promise<ExternalMemoryImportResult> {
+    const preview = await this.previewExternalMemoryImport(options);
+    return this.commitExternalMemoryImport({
+      text: options.text,
+      importedAt: preview.importedAt,
+      baseRevision: preview.baseRevision,
+      candidates: preview.decisions.map(({ candidate }) => candidate),
+      decisions: preview.decisions,
+    });
+  }
+
+  async undoExternalMemoryImport(sourceBlockId: string): Promise<ExternalMemoryUndoResult> {
+    const id = sourceBlockId.trim();
+    if (!id) throw new TypeError('External memory source block ID must not be empty');
+    return this.commitMutation(() => {
+      const sourceIndex = this.blocks.findIndex((block) => block.id === id && block.l0Tags?.includes('external-memory-import'));
+      if (sourceIndex < 0) throw new Error(`Unknown external memory import: ${id}`);
+      const source = this.blocks[sourceIndex]!;
+      const sourceMessageIds = new Set(source.l5Raw.map(({ id }) => id));
+      const importedEventIds = new Set(this.events.filter((event) => event.sourceBlockId === id).map(({ id }) => id));
+      const restoredEventIds = new Set<string>();
+      const now = toUtc8Iso(this.now());
+
+      this.events.splice(0, this.events.length, ...this.events.filter((event) => !importedEventIds.has(event.id)));
+      for (const event of this.events) {
+        for (const field of ['conflictsWithEventIds', 'supersedesEventIds', 'beforeEventIds', 'afterEventIds', 'relatedEventIds'] as const) {
+          const previous = event.temporal[field] ?? [];
+          const filtered = previous.filter((target) => !importedEventIds.has(target));
+          if (filtered.length !== previous.length) {
+            event.temporal[field] = filtered;
+            restoredEventIds.add(event.id);
+          }
+        }
+        if (event.temporal.sameEventId && importedEventIds.has(event.temporal.sameEventId)) {
+          delete event.temporal.sameEventId;
+          restoredEventIds.add(event.id);
+        }
+        if (event.supersededBy && importedEventIds.has(event.supersededBy)) {
+          const replacement = this.events.find((candidate) =>
+            candidate.id !== event.id && (candidate.temporal.supersedesEventIds ?? []).includes(event.id));
+          event.status = replacement ? 'superseded' : 'active';
+          event.supersededBy = replacement?.id ?? null;
+          if (!replacement && event.weight.forcedCap === 0.1) event.weight.forcedCap = null;
+          restoredEventIds.add(event.id);
+        }
+        if (restoredEventIds.has(event.id)) event.updatedAt = now;
+      }
+
+      for (const [jobId, job] of this.elementProjectionJobs) {
+        if (job.sourceEventIds.some((eventId) => importedEventIds.has(eventId))) this.elementProjectionJobs.delete(jobId);
+      }
+      for (const [jobId, job] of this.graphProjectionJobs) {
+        if (job.sourceEventIds.some((eventId) => importedEventIds.has(eventId))) this.graphProjectionJobs.delete(jobId);
+      }
+      for (const element of this.elements) {
+        element.sourceEventIds = element.sourceEventIds.filter((eventId) => !importedEventIds.has(eventId));
+        element.sourceMessageIds = element.sourceMessageIds.filter((messageId) => !sourceMessageIds.has(messageId));
+        element.facts = element.facts.flatMap((fact) => {
+          fact.sourceEventIds = fact.sourceEventIds.filter((eventId) => !importedEventIds.has(eventId));
+          return fact.sourceEventIds.length > 0 ? [fact] : [];
+        });
+        const current = [...element.facts].reverse().find((fact) => fact.status === 'active' && fact.mode === 'state');
+        element.currentState = current
+          ? (Array.isArray(current.value) ? current.value.join('、') : current.value)
+          : '';
+      }
+      this.elements.splice(0, this.elements.length, ...this.elements.filter((element) =>
+        element.sourceEventIds.length > 0 || element.facts.length > 0));
+      for (const node of this.graphNodes) {
+        node.sourceEventIds = node.sourceEventIds.filter((eventId) => !importedEventIds.has(eventId));
+        node.facts = node.facts.flatMap((fact) => {
+          fact.sourceEventIds = fact.sourceEventIds.filter((eventId) => !importedEventIds.has(eventId));
+          return fact.sourceEventIds.length > 0 ? [fact] : [];
+        });
+      }
+      const removedNodeIds = new Set(this.graphNodes
+        .filter((node) => node.sourceEventIds.length === 0 && node.facts.length === 0)
+        .map(({ id }) => id));
+      this.graphNodes.splice(0, this.graphNodes.length, ...this.graphNodes.filter((node) => !removedNodeIds.has(node.id)));
+      for (const edge of this.graphEdges) {
+        edge.sourceEventIds = edge.sourceEventIds.filter((eventId) => !importedEventIds.has(eventId));
+      }
+      this.graphEdges.splice(0, this.graphEdges.length, ...this.graphEdges.filter((edge) =>
+        edge.sourceEventIds.length > 0 && !removedNodeIds.has(edge.fromNodeId) && !removedNodeIds.has(edge.toNodeId)));
+      for (const [receiptId, receipt] of this.usageReceipts) {
+        receipt.eventIds = receipt.eventIds.filter((eventId) => !importedEventIds.has(eventId));
+        if (receipt.eventIds.length === 0 && receipt.elementIds.length === 0) this.usageReceipts.delete(receiptId);
+      }
+      this.blocks.splice(sourceIndex, 1);
+      return {
+        sourceBlockId: id,
+        removedEventIds: [...importedEventIds],
+        restoredEventIds: [...restoredEventIds],
       };
     });
   }
@@ -765,7 +1178,7 @@ export class StrataGate {
       rankings.push(structured(candidates));
     }
     const ranked = rrfRank(rankings).slice(0, limit).map(({ item: event, score }) => ({ event, score }));
-    if (ranked.length > 0) {
+    if (ranked.length > 0 && options.trackRetrieval !== false) {
       const now = toUtc8Iso(this.now());
       await this.commitMutation(() => {
         for (const { event } of ranked) event.weight.lastRetrievedAt = now;
@@ -996,10 +1409,10 @@ export class StrataGate {
    */
   getBlockContext(threadId?: string): BlockContextEntry[] {
     const blocks = threadId === undefined
-      ? this.blocks
-      : this.blocks.filter((block) => block.threadId === threadId);
+      ? this.blocks.filter((block) => block.processingStatus === 'ready')
+      : this.blocks.filter((block) => block.threadId === threadId && block.processingStatus === 'ready');
     return blocks.map((block) => {
-      const threadBlocks = this.threadBlocks(block.threadId);
+      const threadBlocks = this.threadBlocks(block.threadId).filter((candidate) => candidate.processingStatus === 'ready');
       const latestBlockPosition = threadBlocks.length;
       const blockPosition = threadBlocks.indexOf(block) + 1;
       const age = Math.max(0, latestBlockPosition - blockPosition);
@@ -1026,8 +1439,10 @@ export class StrataGate {
     return this.commitMutation(() => {
       const block = this.blocks.find((candidate) => candidate.id === id);
       if (!block) throw new Error(`Unknown block: ${id}`);
-      const latestBlockPosition = this.threadBlocks(block.threadId).length;
-      const blockPosition = this.threadBlocks(block.threadId).indexOf(block) + 1;
+      if (block.processingStatus !== 'ready') throw new Error(`Block ${id} is not ready for decay or expansion`);
+      const readyBlocks = this.threadBlocks(block.threadId).filter((candidate) => candidate.processingStatus === 'ready');
+      const latestBlockPosition = readyBlocks.length;
+      const blockPosition = readyBlocks.indexOf(block) + 1;
       const current = getDecayedBlockLevel(
         block.pointerAnchorLevel,
         block.pointerAnchorBlockPosition,
@@ -1137,6 +1552,12 @@ export class StrataGate {
       || action === 'CONFLICT' || action === 'IGNORE' ? action : 'IGNORE';
   }
 
+  private requireExternalMemoryImportJob(id: string): ExternalMemoryImportJob {
+    const job = this.externalMemoryImportJobs.get(id.trim());
+    if (!job) throw new Error(`Unknown external memory import job: ${id}`);
+    return job;
+  }
+
   private createExternalSourceBlock(text: string, importedAt: string): MemoryBlock {
     const blockId = this.idFactory('blk');
     const threadId = `external-import:${blockId}`;
@@ -1151,7 +1572,7 @@ export class StrataGate {
     const block: MemoryBlock = {
       id: blockId,
       threadId,
-      sequence: this.blocks.length + 1,
+      sequence: Math.max(0, ...this.blocks.map(({ sequence }) => sequence)) + 1,
       startTurn: 1,
       endTurn: 1,
       createdAt: importedAt,
@@ -1160,6 +1581,7 @@ export class StrataGate {
       l1Summary: text.replace(/\s+/gu, ' ').trim().slice(0, 500),
       l2Keypoints: text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).slice(0, 8),
       shouldExtract: false,
+      processingStatus: 'ready',
       ...deterministicBlockLayers([message]),
       pointerCurrentLevel: 5,
       pointerAnchorLevel: 5,
@@ -1394,7 +1816,6 @@ export class StrataGate {
     if (raw.filter((message) => message.role === 'user').length < this.blockTurnSize) {
       throw new Error('Open tail does not contain enough turns to seal a block');
     }
-    const generated = this.summarizer ? await this.summarizer(raw) : defaultSummary(raw);
     const deterministic = deterministicBlockLayers(raw);
     const sequence = this.blocks.length + 1;
     const threadBlocks = this.threadBlocks(threadId);
@@ -1414,11 +1835,7 @@ export class StrataGate {
         startTurn,
         endTurn,
         createdAt: raw.at(-1)?.createdAt ?? toUtc8Iso(this.now()),
-        l0Title: generated.l0Title,
-        l0Tags: generated.l0Tags,
-        l1Summary: generated.l1Summary,
-        l2Keypoints: generated.l2Keypoints,
-        shouldExtract: generated.shouldExtract,
+        processingStatus: 'pending',
         ...deterministic,
         pointerCurrentLevel: 5,
         pointerAnchorLevel: 5,
@@ -1430,28 +1847,142 @@ export class StrataGate {
       const remaining = this.openTail.filter((message) => !sealedIds.has(message.id));
       this.openTail.splice(0, this.openTail.length, ...remaining);
       this.blocks.push(block);
+      const updatedAt = toUtc8Iso(this.now());
+      this.summaryJobs.set(block.id, {
+        blockId: block.id,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        nextRetryAt: null,
+        updatedAt,
+      });
       return block;
     });
   }
 
-  private async extractEligibleBlock(options: { blockId?: string; includeSkipped?: boolean } = {}): Promise<EventCard[] | null> {
-    if (!this.extractor || this.blocks.length < 2) return null;
+  private async processBlock(block: MemoryBlock, options: { retryFailed: boolean }): Promise<EventCard[]> {
+    if (block.processingStatus === 'ready') return [];
+    const summary = this.summaryJobs.get(block.id);
+    if (!summary || summary.status !== 'succeeded') {
+      if (!this.summarizer || !this.jobCanRun(summary, options.retryFailed)) return [];
+      const claimed = await this.commitMutation(() => {
+        const current = this.summaryJobs.get(block.id);
+        if (!current || !this.jobCanRun(current, options.retryFailed)) return false;
+        this.summaryJobs.set(block.id, {
+          ...current,
+          status: 'running',
+          attempts: current.attempts + 1,
+          lastError: null,
+          nextRetryAt: null,
+          updatedAt: toUtc8Iso(this.now()),
+        });
+        return true;
+      });
+      if (!claimed) return [];
+      try {
+        const generated = await this.summarizer(block.l5Raw);
+        if (!generated.l0Title.trim() || !generated.l1Summary.trim()
+          || !Array.isArray(generated.l0Tags) || !Array.isArray(generated.l2Keypoints)
+          || typeof generated.shouldExtract !== 'boolean') {
+          throw new Error('Block summarizer returned invalid L0-L2 layers');
+        }
+        await this.commitMutation(() => {
+          block.l0Title = generated.l0Title;
+          block.l0Tags = [...generated.l0Tags];
+          block.l1Summary = generated.l1Summary;
+          block.l2Keypoints = [...generated.l2Keypoints];
+          block.shouldExtract = generated.shouldExtract;
+          const current = this.summaryJobs.get(block.id);
+          if (!current) throw new Error(`Missing summary job for block: ${block.id}`);
+          this.summaryJobs.set(block.id, {
+            ...current,
+            status: 'succeeded',
+            lastError: null,
+            nextRetryAt: null,
+            updatedAt: toUtc8Iso(this.now()),
+          });
+        });
+      } catch (error) {
+        await this.failSummary(block.id, error);
+        return [];
+      }
+    }
+    if (block.shouldExtract === false) {
+      await this.commitMutation(() => {
+        const now = toUtc8Iso(this.now());
+        this.extractionJobs.set(block.id, {
+          blockId: block.id,
+          status: 'skipped',
+          attempts: this.extractionJobs.get(block.id)?.attempts ?? 0,
+          lastError: null,
+          nextRetryAt: null,
+          updatedAt: now,
+        });
+        this.markBlockReady(block);
+      });
+      return [];
+    }
+    try {
+      const extracted = await this.extractEligibleBlock({ blockId: block.id, retryFailed: options.retryFailed });
+      return extracted ?? [];
+    } catch {
+      // The job contains the full observable failure. A derived-task failure
+      // must never roll back sealing or reject turn ingestion.
+      return [];
+    }
+  }
+
+  private jobCanRun(job: { status: string; attempts: number; nextRetryAt: string | null } | undefined, force: boolean): boolean {
+    if (!job || job.attempts >= DERIVATION_MAX_ATTEMPTS || job.status === 'running' || job.status === 'succeeded') return false;
+    return force || job.nextRetryAt === null || Date.parse(job.nextRetryAt) <= this.now().getTime();
+  }
+
+  private async failSummary(blockId: string, error: unknown): Promise<void> {
+    await this.commitMutation(() => {
+      const job = this.summaryJobs.get(blockId);
+      if (!job) return;
+      this.summaryJobs.set(blockId, {
+        ...job,
+        status: 'failed',
+        lastError: errorMessage(error),
+        nextRetryAt: this.retryAt(job.attempts),
+        updatedAt: toUtc8Iso(this.now()),
+      });
+    });
+  }
+
+  private retryAt(attempts: number): string | null {
+    if (attempts >= DERIVATION_MAX_ATTEMPTS) return null;
+    return toUtc8Iso(new Date(this.now().getTime() + DERIVATION_BACKOFF_MS * (2 ** Math.max(0, attempts - 1))));
+  }
+
+  private markBlockReady(block: MemoryBlock): void {
+    if (!block.l0Title || !block.l0Tags || !block.l1Summary || !block.l2Keypoints || typeof block.shouldExtract !== 'boolean') {
+      throw new Error(`Block ${block.id} cannot become ready without validated L0-L2 layers`);
+    }
+    const ready = this.threadBlocks(block.threadId).filter((candidate) => candidate.processingStatus === 'ready');
+    block.processingStatus = 'ready';
+    block.pointerCurrentLevel = 5;
+    block.pointerAnchorLevel = 5;
+    block.pointerAnchorBlockPosition = ready.length + 1;
+  }
+
+  private async extractEligibleBlock(options: { blockId?: string; retryFailed?: boolean } = {}): Promise<EventCard[] | null> {
+    if (!this.extractor) return null;
     const target = this.blocks.find((block) => {
-      if (this.nextBlockInThread(block) === null || !block.shouldExtract) return false;
+      if (block.processingStatus === 'ready' || block.shouldExtract !== true) return false;
       if (options.blockId !== undefined && block.id !== options.blockId) return false;
-      const status = this.extractionJobs.get(block.id)?.status;
-      return status === undefined || status === 'failed' || (options.includeSkipped === true && status === 'skipped');
+      const job = this.extractionJobs.get(block.id);
+      return job === undefined || this.jobCanRun(job, options.retryFailed === true);
     });
     if (!target) return null;
     const threadBlocks = this.threadBlocks(target.threadId);
     const targetIndex = threadBlocks.indexOf(target);
-    const next = threadBlocks[targetIndex + 1];
-    if (!next) return null;
+    const next = threadBlocks.slice(targetIndex + 1).find((block) => block.l2Keypoints !== undefined) ?? null;
     const existing = this.extractionJobs.get(target.id);
     await this.commitMutation(() => {
       const currentStatus = this.extractionJobs.get(target.id)?.status;
-      const canRetrySkipped = options.includeSkipped === true && currentStatus === 'skipped';
-      if (currentStatus !== undefined && currentStatus !== 'failed' && !canRetrySkipped) {
+      if (currentStatus !== undefined && currentStatus !== 'failed') {
         throw new Error(`Extraction block ${target.id} is already ${currentStatus}`);
       }
       this.extractionJobs.set(target.id, {
@@ -1459,6 +1990,7 @@ export class StrataGate {
         status: 'running',
         attempts: (existing?.attempts ?? 0) + 1,
         lastError: null,
+        nextRetryAt: null,
         updatedAt: toUtc8Iso(this.now()),
       });
     });
@@ -1466,7 +1998,7 @@ export class StrataGate {
     let result: Awaited<ReturnType<EventExtractor>>;
     try {
       result = await this.extractor({
-        previous: threadBlocks[targetIndex - 1] ?? null,
+        previous: threadBlocks.slice(0, targetIndex).reverse().find((block) => block.l2Keypoints !== undefined) ?? null,
         target,
         next,
         timeline: this.events.map((event) => ({ id: event.id, title: event.title, temporal: event.temporal })),
@@ -1479,6 +2011,7 @@ export class StrataGate {
           ...job,
           status: 'failed',
           lastError: errorMessage(error),
+          nextRetryAt: this.retryAt(job.attempts),
           updatedAt: toUtc8Iso(this.now()),
         });
       });
@@ -1494,6 +2027,7 @@ export class StrataGate {
           ...job,
           status: 'failed',
           lastError: reason,
+          nextRetryAt: this.retryAt(job.attempts),
           updatedAt: toUtc8Iso(this.now()),
         });
       });
@@ -1515,8 +2049,10 @@ export class StrataGate {
         ...job,
         status: result.shouldExtract ? 'succeeded' : 'skipped',
         lastError: null,
+        nextRetryAt: null,
         updatedAt: toUtc8Iso(this.now()),
       });
+      this.markBlockReady(target);
       return extracted;
     });
   }
@@ -1591,6 +2127,8 @@ export class StrataGate {
     this.currentTurn = copy.currentTurn;
     this.openTail.splice(0, this.openTail.length, ...copy.openTail);
     this.blocks.splice(0, this.blocks.length, ...copy.blocks);
+    this.summaryJobs.clear();
+    for (const job of copy.summaryJobs) this.summaryJobs.set(job.blockId, job);
     this.events.splice(0, this.events.length, ...copy.events);
     this.graphNodes.splice(0, this.graphNodes.length, ...copy.graphNodes);
     this.graphEdges.splice(0, this.graphEdges.length, ...copy.graphEdges);
@@ -1605,6 +2143,8 @@ export class StrataGate {
     for (const receipt of copy.usageReceipts) this.usageReceipts.set(receipt.id, receipt);
     this.ingestionReceipts.clear();
     for (const receipt of copy.ingestionReceipts) this.ingestionReceipts.set(receipt.id, receipt);
+    this.externalMemoryImportJobs.clear();
+    for (const job of copy.externalMemoryImportJobs) this.externalMemoryImportJobs.set(job.id, job);
     this.successfulModelResponses.splice(0, this.successfulModelResponses.length, ...(copy.successfulModelResponses ?? []));
     this.validateReferences();
   }
@@ -1637,6 +2177,9 @@ export class StrataGate {
     }
     for (const job of this.extractionJobs.values()) {
       if (!blockIds.has(job.blockId)) throw new Error(`Unknown extraction job block in snapshot: ${job.blockId}`);
+    }
+    for (const job of this.summaryJobs.values()) {
+      if (!blockIds.has(job.blockId)) throw new Error(`Unknown summary job block in snapshot: ${job.blockId}`);
     }
     const elementIds = new Set<string>();
     for (const element of this.elements) {

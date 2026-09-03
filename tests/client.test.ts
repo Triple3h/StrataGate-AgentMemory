@@ -15,7 +15,7 @@ describe('StrataGate Web client contract', () => {
       if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
       return { createElement: (...args: unknown[]) => args, Fragment: 'fragment', useState: () => [], useEffect: () => {}, useCallback: (fn: unknown) => fn }
     })
-    expect(plugin.inject).toEqual(['slots'])
+    expect(plugin.inject).toEqual(['slots', 'conversationEvents'])
 
     let registration: any
     const slots = {
@@ -26,6 +26,297 @@ describe('StrataGate Web client contract', () => {
     expect(registration.metadata).toMatchObject({ name: 'settings.section', id: 'stratagate-memory' })
     expect(registration.metadata.label()).toBe('StrataGate-AgentMemory')
     expect(typeof registration.render).toBe('function')
+  })
+
+  it('publishes adopted memory citations into the closing answer turn tail', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    let definition: any
+    runInNewContext(source, {
+      URLSearchParams,
+      window: { __ModuleLoader__: { load: (value: unknown) => { definition = value } } },
+    })
+    const plugin = definition.factory((name: string) => {
+      if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
+      return {
+        createElement: (...args: unknown[]) => args,
+        Fragment: 'fragment',
+        useState: () => [],
+        useEffect: () => {},
+        useCallback: (fn: unknown) => fn,
+      }
+    })
+    let conversationDefinition: any
+    const registrations: any[] = []
+    const slots = {
+      inject: (_name: string, callback: () => void) => callback(),
+      register: (metadata: unknown, render: unknown) => { registrations.push({ metadata, render }) },
+    }
+    plugin.apply({
+      get: (name: string) => name === 'slots'
+        ? slots
+        : name === 'conversationEvents'
+          ? { register: (value: unknown) => { conversationDefinition = value } }
+          : undefined,
+    })
+
+    expect(conversationDefinition.kind).toBe('stratagate-memory-citations')
+    const startEvent = { type: 'turn/start', seq: 0, data: { turn: 7 } }
+    const recordUseCall = {
+      type: 'tool/call',
+      seq: 3,
+      data: { turn: 7, step: 2, callId: 'record-use-1', name: 'memory_record_use', arguments: '{}' },
+    }
+    const recordUseResult = {
+      type: 'tool/result',
+      seq: 4,
+      data: {
+        turn: 7,
+        step: 2,
+        message: {
+          source: { kind: 'tool', callId: 'record-use-1' },
+          content: [{
+            type: 'tool_result',
+            isError: false,
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                recorded: true,
+                namespace: 'dsh:project:test',
+                batchId: 'batch_1',
+                retrievedCount: 5,
+                retrievedMemories: [
+                  { kind: 'event', id: 'event-1', title: 'Use pnpm', evidenceRef: 'event:event-1', batchId: 'batch_1', detailKind: 'eventId' },
+                  { kind: 'event', id: 'event-2', title: 'pnpm compatibility', evidenceRef: 'event:event-2', batchId: 'batch_1', detailKind: 'eventId' },
+                  { kind: 'graph', id: 'node-1', title: 'pnpm', evidenceRef: 'graph-node:node-1:expanded', batchId: 'batch_1', detailKind: 'nodeId', expanded: true },
+                  { kind: 'block', id: 'block-1', title: 'Package manager', evidenceRef: 'block:block-1:level:4', batchId: 'batch_1', detailKind: 'blockId', level: 4, expanded: true },
+                  { kind: 'block', id: 'block-2', title: 'Tooling notes', evidenceRef: 'block:block-2:level:2', batchId: 'batch_1', detailKind: 'blockId', level: 2 },
+                ],
+                citations: [
+                  { kind: 'event', id: 'event-1', title: 'Use pnpm', evidenceRef: 'event:event-1', batchId: 'batch_1', detailKind: 'eventId' },
+                  { kind: 'graph', id: 'node-1', title: 'pnpm', evidenceRef: 'graph-node:node-1:expanded', batchId: 'batch_1', detailKind: 'nodeId', expanded: true },
+                  { kind: 'block', id: 'block-1', title: 'Package manager', evidenceRef: 'block:block-1:level:4', batchId: 'batch_1', detailKind: 'blockId', level: 4, expanded: true },
+                ],
+              }),
+            }],
+          }],
+        },
+      },
+    }
+    const started = conversationDefinition.start({}, { event: startEvent })
+    const tracked = conversationDefinition.update({ state: started }, { event: recordUseCall })
+    const updated = conversationDefinition.update({ state: tracked }, { event: recordUseResult })
+    const location = conversationDefinition.buildLocationData({ state: updated }, 'turn')
+    expect(location.key).toBe(conversationDefinition.kind)
+    const tail = registrations.find(({ metadata }) => metadata.name === 'conversation.chat.turnTail')
+    const locationData = new Map([[location.key, location.value]])
+    const matched = tail.metadata.select({ turn: { data: { get: (key: string) => locationData.get(key) } }, seq: 8 })
+    expect(matched.citations.map((citation: any) => citation.kind)).toEqual(['event', 'graph', 'block'])
+    expect(matched.citations[2]).toMatchObject({ id: 'block-1', level: 4, expanded: true, namespace: 'dsh:project:test' })
+    expect(matched.retrievedCount).toBe(5)
+    expect(matched.retrievalGroups).toHaveLength(1)
+    expect(matched.retrievalGroups[0].memories).toHaveLength(5)
+    expect(tail.metadata.select({ turn: { data: { get: (key: string) => locationData.get(key) } }, seq: 2 })).toBeNull()
+    const legacyUpdated = conversationDefinition.update({ state: started }, {
+      event: {
+        type: 'stratagate/memory-citations',
+        seq: 5,
+        data: {
+          turn: 7,
+          namespace: 'dsh:project:legacy',
+          citations: [{ kind: 'event', id: 'legacy-event', evidenceRef: 'event:legacy-event', detailKind: 'eventId' }],
+        },
+      },
+    })
+    expect(legacyUpdated.entries).toEqual([expect.objectContaining({ namespace: 'dsh:project:legacy' })])
+    expect(source).toContain("event.data.name === 'memory_record_use'")
+    expect(source).toContain("api('sources', { namespace: citation.namespace, [citation.detailKind]: citation.id })")
+    expect(source).toContain('展开到 L')
+    expect(source).toContain("'本回答参考了 ' + citations.length + ' 条记忆'")
+    expect(source).toContain("'已进行 ' + retrievalGroups.length + ' 次检索，共返回 ' + retrievedCount + ' 条记忆，未采用'")
+    expect(source).toContain('sg-answer-retrieval-toggle')
+    expect(source).toContain("'aria-expanded': showRetrieved")
+    expect(source).toContain("'检索过程'")
+    expect(source).toContain('retrievalGroupLabel(groupIndex)')
+    expect(source).toContain("memoryIndex + 1 + '.'")
+    expect(source).toContain("open(memory, false)")
+    expect(source).toContain("'检索候选 · 未采用'")
+    expect(source).toContain("function CitationGraph({ citation, detail, primary, adopted = true })")
+    expect(source).toContain("title: '关联信息'")
+    expect(source).toContain("adopted ? '来源对话 ·未作为加入本次上下文' : '来源对话 · 未用于本次回答'")
+    expect(source).toContain("title: '详细情况'")
+    expect(source).toContain("title: 'L0–L5 记忆层级'")
+    expect(source).toContain("'本次采用'")
+    expect(source).toContain("citationPreview(content)")
+    expect(source).toContain("title: selected ? undefined : content")
+    expect(source).not.toContain("facts.slice(0, 12)")
+    expect(source).not.toContain("sourceMessages.slice(0, 12)")
+  })
+
+  it('shows a quiet answer-tail note when retrieved memories were not adopted', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    let definition: any
+    runInNewContext(source, {
+      URLSearchParams,
+      window: { __ModuleLoader__: { load: (value: unknown) => { definition = value } } },
+    })
+    const plugin = definition.factory((name: string) => {
+      if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
+      return {
+        createElement: (...args: unknown[]) => args,
+        Fragment: 'fragment',
+        useState: (initial: unknown) => [initial, () => {}],
+        useEffect: () => {},
+        useCallback: (fn: unknown) => fn,
+      }
+    })
+    let conversationDefinition: any
+    const registrations: any[] = []
+    const slots = {
+      inject: (_name: string, callback: () => void) => callback(),
+      register: (metadata: unknown, render: unknown) => { registrations.push({ metadata, render }) },
+    }
+    plugin.apply({
+      get: (name: string) => name === 'slots'
+        ? slots
+        : name === 'conversationEvents'
+          ? { register: (value: unknown) => { conversationDefinition = value } }
+          : undefined,
+    })
+
+    const started = conversationDefinition.start({}, { event: { type: 'turn/start', seq: 0, data: { turn: 8 } } })
+    const searchEarlier = conversationDefinition.update({ state: started }, {
+      event: { type: 'tool/call', seq: 1, data: { turn: 8, callId: 'search-earlier', name: 'memory_search_events' } },
+    })
+    const searchedEarlier = conversationDefinition.update({ state: searchEarlier }, {
+      event: {
+        type: 'tool/result',
+        seq: 2,
+        data: {
+          turn: 8,
+          message: {
+            source: { kind: 'tool', callId: 'search-earlier' },
+            content: [{ type: 'tool_result', isError: false, content: [{ type: 'text', text: JSON.stringify({ batchId: 'batch_1' }) }] }],
+          },
+        },
+      },
+    })
+    const searchLater = conversationDefinition.update({ state: searchedEarlier }, {
+      event: { type: 'tool/call', seq: 3, data: { turn: 8, callId: 'search-later', name: 'memory_search_raw' } },
+    })
+    const searchedLater = conversationDefinition.update({ state: searchLater }, {
+      event: {
+        type: 'tool/result',
+        seq: 4,
+        data: {
+          turn: 8,
+          message: {
+            source: { kind: 'tool', callId: 'search-later' },
+            content: [{ type: 'tool_result', isError: false, content: [{ type: 'text', text: JSON.stringify({ batchId: 'batch_2' }) }] }],
+          },
+        },
+      },
+    })
+    const trackedLater = conversationDefinition.update({ state: searchedLater }, {
+      event: { type: 'tool/call', seq: 5, data: { turn: 8, callId: 'record-use-later', name: 'memory_record_use' } },
+    })
+    const completedLater = conversationDefinition.update({ state: trackedLater }, {
+      event: {
+        type: 'tool/result',
+        seq: 6,
+        data: {
+          turn: 8,
+          message: {
+            source: { kind: 'tool', callId: 'record-use-later' },
+            content: [{
+              type: 'tool_result',
+              isError: false,
+              content: [{ type: 'text', text: JSON.stringify({
+                recorded: true,
+                namespace: 'dsh:project:test',
+                batchId: 'batch_2',
+                retrievalSequence: 1,
+                retrievedCount: 2,
+                retrievedMemories: [
+                  { kind: 'event', id: 'event-1', title: '编辑器选择', evidenceRef: 'event:event-1', batchId: 'batch_2', detailKind: 'eventId' },
+                  { kind: 'block', id: 'block-1', title: '开发环境讨论', evidenceRef: 'block:block-1:level:3', batchId: 'batch_2', detailKind: 'blockId', level: 3 },
+                ],
+                citations: [],
+              }) }],
+            }],
+          },
+        },
+      },
+    })
+    const trackedEarlier = conversationDefinition.update({ state: completedLater }, {
+      event: { type: 'tool/call', seq: 7, data: { turn: 8, callId: 'record-use-earlier', name: 'memory_record_use' } },
+    })
+    const completed = conversationDefinition.update({ state: trackedEarlier }, {
+      event: {
+        type: 'tool/result',
+        seq: 8,
+        data: {
+          turn: 8,
+          message: {
+            source: { kind: 'tool', callId: 'record-use-earlier' },
+            content: [{
+              type: 'tool_result',
+              isError: false,
+              content: [{ type: 'text', text: JSON.stringify({
+                recorded: true,
+                namespace: 'dsh:project:test',
+                batchId: 'batch_1',
+                retrievalSequence: 99,
+                retrievedCount: 1,
+                retrievedMemories: [
+                  { kind: 'event', id: 'event-0', title: '更早的检索结果', evidenceRef: 'event:event-0', batchId: 'batch_1', detailKind: 'eventId' },
+                ],
+                citations: [],
+              }) }],
+            }],
+          },
+        },
+      },
+    })
+    const location = conversationDefinition.buildLocationData({ state: completed }, 'turn')
+    const tail = registrations.find(({ metadata }) => metadata.name === 'conversation.chat.turnTail')
+    const matched = tail.metadata.select({ turn: { data: { get: () => location.value } }, seq: 10 })
+    expect(matched).toMatchObject({ citations: [], retrievedCount: 3 })
+    expect(matched.retrievalGroups).toHaveLength(2)
+    expect(matched.retrievalGroups.map((group: any) => group.batchId)).toEqual(['batch_1', 'batch_2'])
+    expect(matched.retrievalGroups[0].memories.map((memory: any) => memory.title)).toEqual(['更早的检索结果'])
+    expect(matched.retrievalGroups[1].memories.map((memory: any) => memory.title)).toEqual(['编辑器选择', '开发环境讨论'])
+    const rendered = tail.render({ matched })
+    expect(JSON.stringify(rendered)).toContain('已进行 2 次检索，共返回 3 条记忆，未采用')
+    expect(JSON.stringify(rendered)).not.toContain('stratagate-answer-citations')
+
+    let stateCall = 0
+    const expandedPlugin = definition.factory((name: string) => {
+      if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
+      return {
+        createElement: (...args: unknown[]) => args,
+        Fragment: 'fragment',
+        useState: (initial: unknown) => [stateCall++ === 0 ? true : initial, () => {}],
+        useEffect: () => {},
+        useCallback: (fn: unknown) => fn,
+      }
+    })
+    const expandedRegistrations: any[] = []
+    expandedPlugin.apply({
+      get: (name: string) => name === 'slots'
+        ? { inject: (_name: string, callback: () => void) => callback(), register: (metadata: unknown, render: unknown) => { expandedRegistrations.push({ metadata, render }) } }
+        : name === 'conversationEvents'
+          ? { register: () => {} }
+          : undefined,
+    })
+    const expandedTail = expandedRegistrations.find(({ metadata }) => metadata.name === 'conversation.chat.turnTail')
+    const expanded = expandedTail.render({ matched })
+    expect(JSON.stringify(expanded)).toContain('检索过程')
+    expect(JSON.stringify(expanded)).toContain('第一次检索')
+    expect(JSON.stringify(expanded)).toContain('第二次检索')
+    expect(JSON.stringify(expanded)).toContain('更早的检索结果')
+    expect(JSON.stringify(expanded)).toContain('编辑器选择')
+    expect(JSON.stringify(expanded)).toContain('开发环境讨论')
+    expect(JSON.stringify(expanded)).toContain('未采用')
   })
 
   it('shows the unified project brand, mascot, usage count, and GitHub Star link', () => {
@@ -89,8 +380,15 @@ describe('StrataGate Web client contract', () => {
     expect(source).toContain("function ImportPage({ namespace, onBack, refresh })")
     expect(source).toContain("api('import', { namespace }")
     expect(source).toContain('复制以下提示词到其他 AI 对话中')
-    expect(source).toContain('将结果粘贴到下方，添加到 StrataGate 记忆')
-    expect(source).toContain('添加到记忆')
+    expect(source).toContain('粘贴结果，先分析再导入')
+    expect(source).toContain('分析并预览')
+    expect(source).toContain('低置信度结果请人工选择处理方式')
+    expect(source).toContain('已完成 ')
+    expect(source).toContain('正在判断第 ')
+    expect(source).toContain('关闭，后台继续')
+    expect(source).toContain("operation: 'status', namespace, jobId: job.jobId")
+    expect(source).toContain('连接暂时中断，正在自动重试')
+    expect(source).toContain('撤销本次导入')
   })
 
   it('inherits the resolved light, dark, or system appearance from DSH theme tokens', () => {
@@ -131,6 +429,22 @@ describe('StrataGate Web client contract', () => {
     expect(source).toContain("graph.on('zoom', updateZoom)")
     expect(source).toContain("renderedPosition: { x: container.clientWidth / 2, y: container.clientHeight / 2 }")
     expect(source).toContain('wheelSensitivity: .22')
+  })
+
+  it('makes graph and memory list truncation explicit and pageable', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    expect(source).toContain('nodeLimit = 100')
+    expect(source).toContain('.slice(0, nodeLimit)')
+    expect(source).not.toContain('.slice(0, 40)')
+    expect(source).toContain("'再显示 100 个'")
+    expect(source).toContain("function Pagination({ page, loading, error, onOffset })")
+    expect(source).toContain("'上一页'")
+    expect(source).toContain("'下一页'")
+    expect(source).toContain("kind: 'blocks'")
+    expect(source).toContain("kind: 'events'")
+    expect(source).toContain("kind: 'audit'")
+    expect(source).toContain("kind: 'events', initialItems: events, initialPage: eventPage, fallbackLimit: 40")
+    expect(source).toContain("kind: 'blocks', initialItems: blocks, initialPage: blockPage, fallbackLimit: 40")
   })
 
   it('sizes graph nodes by stable long-term importance without conflating selection', () => {
@@ -231,8 +545,11 @@ describe('StrataGate Web client contract', () => {
     expect(source).toContain('正在触发记忆整理')
     expect(source).toContain("role: 'status'")
     expect(source).toContain('processingJobs')
-    expect(source).toContain('Promise.allSettled')
-    expect(source).toContain('window.setInterval')
+    expect(source).toContain("'/api/stratagate/dashboard'")
+    expect(source).toContain("'If-None-Match'")
+    expect(source).toContain("document.addEventListener('visibilitychange'")
+    expect(source).toContain('pollFast ? 2500 : 30000')
+    expect(source).not.toContain('window.setInterval')
     expect(source).toContain("status === 'waiting'")
   })
 })

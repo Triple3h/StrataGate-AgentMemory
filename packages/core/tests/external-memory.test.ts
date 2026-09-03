@@ -21,6 +21,78 @@ describe('external memory export parser', () => {
 });
 
 describe('external AI memory import', () => {
+  it('persists per-candidate analysis progress and forces recovered candidates through review', async () => {
+    const memory = StrataGate.inMemory({ blockTurnSize: 1 });
+    const job = await memory.createExternalMemoryImportJob(JSON.stringify({
+      schemaVersion: 'stratagate.external-memory.v2',
+      sourceType: 'external_ai_memory_export',
+      candidates: [
+        { title: '记忆一', summary: '第一条长期记忆。' },
+        { title: '记忆二', summary: '第二条长期记忆。' },
+      ],
+    }));
+    expect(job).toMatchObject({ status: 'processing', processedCount: 0, totalCount: 2 });
+    const first = await memory.processNextExternalMemoryImport(job.id, async () => ({ action: 'ADD', confidence: 0.95 }));
+    expect(first).toMatchObject({ status: 'processing', processedCount: 1, totalCount: 2 });
+    const completed = await memory.processNextExternalMemoryImport(job.id, async () => ({ action: 'ADD', confidence: 0.95 }));
+    expect(completed).toMatchObject({ status: 'ready', processedCount: 2 });
+
+    const malformed = await memory.createExternalMemoryImportJob('{not valid json');
+    expect(malformed).toMatchObject({ status: 'extracting', recoveredFromInvalidJson: false });
+    await memory.completeExternalMemoryFallback(malformed.id, {
+      candidates: [{ title: '恢复候选', summary: '由不合格输入恢复。' }],
+    });
+    const recovered = await memory.processNextExternalMemoryImport(
+      malformed.id,
+      async () => ({ action: 'ADD', confidence: 0.99 }),
+    );
+    expect(recovered).toMatchObject({
+      status: 'awaiting_confirmation',
+      recoveredFromInvalidJson: true,
+      processedCount: 1,
+    });
+    expect(recovered.decisions[0]?.requiresConfirmation).toBe(true);
+  });
+
+  it('previews without writes, skips exact duplicates deterministically, and can undo a committed batch', async () => {
+    let sequence = 0;
+    let deciderCalls = 0;
+    const memory = StrataGate.inMemory({ blockTurnSize: 1, idFactory: (prefix) => `${prefix}_${++sequence}` });
+    await memory.appendTurn({ user: '数据库使用 SQLite。', assistant: '已记录。' });
+    const source = memory.listBlocks()[0]!;
+    const old = await memory.addEvent({
+      title: '数据库选择', summary: '数据库使用 SQLite。', sourceBlockId: source.id,
+      sourceMessageIds: [source.l5Raw[0]!.id], temporal: { eventType: 'decision' },
+    });
+    const before = memory.exportSnapshot();
+    const preview = await memory.previewExternalMemoryImport({
+      text: 'preview',
+      extractor: async () => ({ candidates: [
+        { title: '数据库选择', summary: '数据库使用 SQLite。' },
+        { title: '数据库迁移', summary: '数据库已迁移到 PostgreSQL。' },
+      ] }),
+      decider: async ({ matches }) => {
+        deciderCalls += 1;
+        return { action: 'SUPERSEDE', existingEventIds: [matches[0]!.event.id], confidence: 0.92, reason: '明确的新状态' };
+      },
+    });
+
+    expect(memory.exportSnapshot()).toEqual(before);
+    expect(deciderCalls).toBe(1);
+    expect(preview.decisions.map(({ action }) => action)).toEqual(['IGNORE', 'SUPERSEDE']);
+    expect(preview.decisions.map(({ requiresConfirmation }) => requiresConfirmation)).toEqual([false, false]);
+
+    const committed = await memory.commitExternalMemoryImport({
+      text: 'preview', importedAt: preview.importedAt, baseRevision: preview.baseRevision,
+      candidates: preview.decisions.map(({ candidate }) => candidate), decisions: preview.decisions,
+    });
+    expect(memory.listEvents().find(({ id }) => id === old.id)?.status).toBe('superseded');
+    const undone = await memory.undoExternalMemoryImport(committed.sourceBlockId);
+    expect(undone.removedEventIds).toHaveLength(1);
+    expect(memory.listEvents().find(({ id }) => id === old.id)).toMatchObject({ status: 'active', supersededBy: null });
+    expect(memory.listBlocks().some(({ id }) => id === committed.sourceBlockId)).toBe(false);
+  });
+
   it('extracts candidates, retrieves Top-K, and preserves superseded event history', async () => {
     let sequence = 0;
     const memory = StrataGate.inMemory({

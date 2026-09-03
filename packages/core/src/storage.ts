@@ -1,8 +1,8 @@
 import { BLOCK_DECAY_LAMBDA } from './blocks.js';
 import { normalizeStandardEventType } from './events.js';
-import type { ElementCard, EventCard, GraphEdge, GraphNode, MemoryBlock, RawMessage } from './types.js';
+import type { ElementCard, EventCard, ExternalMemoryImportJob, GraphEdge, GraphNode, MemoryBlock, RawMessage } from './types.js';
 
-export const STRATAGATE_STORAGE_SCHEMA_VERSION = 8;
+export const STRATAGATE_STORAGE_SCHEMA_VERSION = 10;
 export const KNOWLEDGE_GRAPH_PROJECTOR_VERSION = 1;
 
 export type ExtractionJobStatus = 'running' | 'succeeded' | 'skipped' | 'failed';
@@ -12,10 +12,22 @@ export interface ExtractionJob {
   status: ExtractionJobStatus;
   attempts: number;
   lastError: string | null;
+  nextRetryAt: string | null;
   updatedAt: string;
 }
 
-export type SuccessfulModelResponseKind = 'summarizer' | 'extractor' | 'projector' | 'graphProjector';
+export type BlockSummaryJobStatus = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface BlockSummaryJob {
+  blockId: string;
+  status: BlockSummaryJobStatus;
+  attempts: number;
+  lastError: string | null;
+  nextRetryAt: string | null;
+  updatedAt: string;
+}
+
+export type SuccessfulModelResponseKind = 'summarizer' | 'extractor' | 'projector' | 'graphProjector' | 'externalMemoryExtractor' | 'externalMemoryDecider';
 
 export interface SuccessfulModelResponse {
   id: string;
@@ -68,10 +80,22 @@ export interface UsageAudit {
   turn?: number;
   batchId?: string;
   evidenceRefs?: string[];
+  citations?: MemoryCitation[];
   verdict?: 'sufficient' | 'partial' | 'wrong';
   fit?: string;
   missing?: string;
   nextStrategy?: string;
+}
+
+export interface MemoryCitation {
+  kind: 'event' | 'graph' | 'block';
+  id: string;
+  title: string;
+  evidenceRef: string;
+  batchId: string;
+  detailKind: 'eventId' | 'nodeId' | 'elementId' | 'blockId';
+  level?: number;
+  expanded?: boolean;
 }
 
 export interface IngestionReceipt {
@@ -86,6 +110,7 @@ export interface StrataGateSnapshot {
   blockDecayLambda: number;
   openTail: RawMessage[];
   blocks: MemoryBlock[];
+  summaryJobs: BlockSummaryJob[];
   events: EventCard[];
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
@@ -95,6 +120,7 @@ export interface StrataGateSnapshot {
   elementProjectionJobs: ElementProjectionJob[];
   usageReceipts: UsageReceipt[];
   ingestionReceipts: IngestionReceipt[];
+  externalMemoryImportJobs: ExternalMemoryImportJob[];
   successfulModelResponses?: SuccessfulModelResponse[];
 }
 
@@ -160,6 +186,24 @@ interface LegacySnapshotV7 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'g
   schemaVersion: 7;
 }
 
+interface LegacySnapshotV8 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'summaryJobs' | 'blocks' | 'extractionJobs'> {
+  schemaVersion: 8;
+  blocks: Array<Omit<MemoryBlock, 'processingStatus'>>;
+  extractionJobs: Array<Omit<ExtractionJob, 'nextRetryAt'>>;
+}
+
+interface LegacySnapshotV9 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'externalMemoryImportJobs'> {
+  schemaVersion: 9;
+}
+
+function readyLegacyBlocks<T extends Omit<MemoryBlock, 'processingStatus'>>(blocks: readonly T[]): MemoryBlock[] {
+  return blocks.map((block) => ({ ...structuredClone(block), processingStatus: 'ready' }));
+}
+
+function legacyExtractionJobs<T extends Omit<ExtractionJob, 'nextRetryAt'>>(jobs: readonly T[]): ExtractionJob[] {
+  return jobs.map((job) => ({ ...structuredClone(job), nextRetryAt: null }));
+}
+
 function emptyGraph(): { graphNodes: GraphNode[]; graphEdges: GraphEdge[]; graphProjectionJobs: GraphProjectionJob[] } {
   return { graphNodes: [], graphEdges: [], graphProjectionJobs: [] };
 }
@@ -169,7 +213,7 @@ function migrateLegacyBlocks(blocks: readonly LegacyMemoryBlock[]): MemoryBlock[
     const { pointerAnchorTurn, ...current } = block;
     const position = blocks.filter((candidate) =>
       candidate.threadId === block.threadId && candidate.endTurn <= pointerAnchorTurn).length;
-    return { ...current, pointerAnchorBlockPosition: Math.max(1, position), lastLiftedBy: null };
+    return { ...current, processingStatus: 'ready', pointerAnchorBlockPosition: Math.max(1, position), lastLiftedBy: null };
   });
 }
 
@@ -184,6 +228,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
       elements: [],
       elementProjectionJobs: [],
       usageReceipts: Array.isArray(legacy.usageReceipts)
@@ -199,6 +245,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
       ingestionReceipts: [],
       ...emptyGraph(),
     };
@@ -209,6 +257,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
       ...emptyGraph(),
     };
   } else if (schemaVersion === 4) {
@@ -218,6 +268,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
       ...emptyGraph(),
     };
   } else if (schemaVersion === 5) {
@@ -227,6 +279,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       blockDecayLambda: BLOCK_DECAY_LAMBDA,
       blocks: migrateLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
       ...emptyGraph(),
     };
   } else if (schemaVersion === 6) {
@@ -234,12 +288,38 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
     snapshot = {
       ...structuredClone(legacy),
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
-      blocks: legacy.blocks.map((block) => ({ ...structuredClone(block), lastLiftedBy: null })),
+      blocks: readyLegacyBlocks(legacy.blocks.map((block) => ({ ...structuredClone(block), lastLiftedBy: null }))),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
       ...emptyGraph(),
     };
   } else if (schemaVersion === 7) {
     const legacy = value as LegacySnapshotV7;
-    snapshot = { ...structuredClone(legacy), schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION, ...emptyGraph() };
+    snapshot = {
+      ...structuredClone(legacy),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blocks: readyLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
+      ...emptyGraph(),
+    };
+  } else if (schemaVersion === 8) {
+    const legacy = value as LegacySnapshotV8;
+    snapshot = {
+      ...structuredClone(legacy),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      blocks: readyLegacyBlocks(legacy.blocks),
+      summaryJobs: [],
+      extractionJobs: legacyExtractionJobs(legacy.extractionJobs),
+      externalMemoryImportJobs: [],
+    };
+  } else if (schemaVersion === 9) {
+    const legacy = value as LegacySnapshotV9;
+    snapshot = {
+      ...structuredClone(legacy),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+      externalMemoryImportJobs: [],
+    };
   } else if (schemaVersion === STRATAGATE_STORAGE_SCHEMA_VERSION) {
     snapshot = structuredClone(value) as StrataGateSnapshot;
   } else {
@@ -254,7 +334,8 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   if (!Number.isFinite(snapshot.blockDecayLambda) || snapshot.blockDecayLambda < 0) {
     throw new TypeError('Invalid StrataGate snapshot: blockDecayLambda must be a non-negative finite number');
   }
-  for (const key of ['openTail', 'blocks', 'events', 'graphNodes', 'graphEdges', 'graphProjectionJobs', 'elements', 'extractionJobs', 'elementProjectionJobs', 'usageReceipts', 'ingestionReceipts'] as const) {
+  if (!Array.isArray(snapshot.externalMemoryImportJobs)) snapshot.externalMemoryImportJobs = [];
+  for (const key of ['openTail', 'blocks', 'summaryJobs', 'events', 'graphNodes', 'graphEdges', 'graphProjectionJobs', 'elements', 'extractionJobs', 'elementProjectionJobs', 'usageReceipts', 'ingestionReceipts', 'externalMemoryImportJobs'] as const) {
     if (!Array.isArray(snapshot[key])) throw new TypeError(`Invalid StrataGate snapshot: ${key} must be an array`);
   }
   if (!Array.isArray(snapshot.successfulModelResponses)) snapshot.successfulModelResponses = [];
@@ -262,6 +343,14 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
     event.temporal = { ...event.temporal, eventType: normalizeStandardEventType(event.temporal.eventType) };
   }
   for (const block of snapshot.blocks) {
+    if (block.processingStatus !== 'pending' && block.processingStatus !== 'ready') {
+      throw new TypeError('Invalid StrataGate snapshot: Block processingStatus must be pending or ready');
+    }
+    if (block.processingStatus === 'ready'
+      && (!block.l0Title || !block.l1Summary || !Array.isArray(block.l0Tags) || !Array.isArray(block.l2Keypoints)
+        || typeof block.shouldExtract !== 'boolean')) {
+      throw new TypeError('Invalid StrataGate snapshot: ready Block must contain validated L0-L2 layers');
+    }
     if (!Number.isSafeInteger(block.pointerAnchorBlockPosition) || block.pointerAnchorBlockPosition < 1) {
       throw new TypeError('Invalid StrataGate snapshot: pointerAnchorBlockPosition must be a positive integer');
     }

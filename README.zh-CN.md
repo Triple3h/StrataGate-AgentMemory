@@ -224,7 +224,7 @@ await memory.recordMemoryUse({ eventIds, elementIds });
 
 库导出 `EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN`、`EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN` 和 `externalMemoryJsonExtractor`，可让外部 AI 输出可校验的 `stratagate.external-memory.v2` JSON，再由本地模型从五种处理方式中选择。v2 将记忆性质与内容分类分开；时间字段严格区分“被提及时间”和“实际发生时间”。日期不确定时，系统会省略日期并保留原始说法，不会根据当前日期或聊天顺序猜测。
 
-完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。DeepSeek Harness 管理界面目前采用更简单的直接导入：每条有效候选都会新增为 Event，暂时不会执行核心 API 已支持的合并、取代、冲突和去重判断。
+完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。DeepSeek Harness 管理界面会先预览导入，JSON 不合格时使用模型兜底恢复，确定性忽略完全重复项，并让当前模型结合 Top-K 本地匹配选择新增、合并、取代、冲突或忽略。导入分析及逐条进度会持久化，关闭后重新打开页面可继续查看；高置信度判断自动采用，低置信度项可人工选择具体动作；提交后可按批次撤销。
 
 新事件可以取代旧事件，但旧事件及其来源仍然保留。遗忘可以让事件退出搜索，同时不破坏来源链路。
 

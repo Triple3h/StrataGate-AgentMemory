@@ -12,7 +12,7 @@ describe('turn ingestion receipts', () => {
       { deferProcessing: true },
     )
 
-    expect(appended).toEqual({ sealedBlock: null, extractedEvents: [], projectedElements: [] })
+    expect(appended).toEqual({ sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] })
     expect(memory.listOpenTail()).toHaveLength(2)
     expect(memory.listBlocks()).toHaveLength(0)
 
@@ -29,7 +29,7 @@ describe('turn ingestion receipts', () => {
     expect(memory.turn).toBe(1)
     expect(memory.listOpenTail()).toHaveLength(2)
     expect(memory.hasIngestionReceipt('external:1')).toBe(true)
-    expect(duplicate).toEqual({ sealedBlock: null, extractedEvents: [], projectedElements: [] })
+    expect(duplicate).toEqual({ sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] })
   })
 
   it('keeps ingestion receipts atomic and durable across SQLite restarts', async () => {

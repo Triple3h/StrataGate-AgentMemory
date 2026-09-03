@@ -15,6 +15,11 @@ const summarizer: BlockSummarizer = async (messages) => ({
   shouldExtract: true,
 });
 
+const nonExtractingSummarizer: BlockSummarizer = async (messages) => ({
+  ...(await summarizer(messages)),
+  shouldExtract: false,
+});
+
 const extractor: EventExtractor = async ({ target }) => ({
   shouldExtract: true,
   reason: 'stable preference',
@@ -40,11 +45,11 @@ describe('StrataGate lifecycle', () => {
     expect(() => new UnsafeConstructor()).toThrow('Use StrataGate.open() for SQLite');
   });
 
-  it('seals blocks, delays extraction, searches, and records adoption separately', async () => {
+  it('seals blocks, completes extraction, searches, and records adoption separately', async () => {
     const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer, extractor, idFactory: ids() });
     const first = await memory.appendTurn({ user: 'Please keep answers concise.', assistant: 'Understood.' });
     expect(first.sealedBlock).not.toBeNull();
-    expect(first.extractedEvents).toHaveLength(0);
+    expect(first.extractedEvents).toHaveLength(1);
 
     const second = await memory.appendTurn({ user: 'What did I ask?', assistant: 'Let me check.' });
     expect(second.extractedEvents).toHaveLength(1);
@@ -69,7 +74,7 @@ describe('StrataGate lifecycle', () => {
     const event = memory.listEvents()[0];
     expect(event).toBeDefined();
     if (!event) return;
-    await memory.forgetEvent(event.id);
+    for (const candidate of memory.listEvents()) await memory.forgetEvent(candidate.id);
     expect(await memory.searchEvents('concise')).toHaveLength(0);
     expect(memory.listEvents()[0]?.sourceMessageIds.length).toBeGreaterThan(0);
   });
@@ -82,8 +87,6 @@ describe('StrataGate lifecycle', () => {
     });
     const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer, extractor: extractorWithNoEvents, idFactory: ids() });
     await memory.appendTurn({ user: 'Target evidence', assistant: 'Recorded.' });
-    await expect(memory.appendTurn({ user: 'Next context', assistant: 'Continuing.' }))
-      .rejects.toThrow('returned no valid events');
     expect(memory.listEvents()).toHaveLength(0);
     expect(memory.listExtractionJobs()).toMatchObject([{
       status: 'failed',
@@ -91,7 +94,7 @@ describe('StrataGate lifecycle', () => {
     }]);
   });
 
-  it('retries skipped extraction jobs once when explicitly requested', async () => {
+  it('treats skipped extraction jobs as completed even when retry is requested', async () => {
     let attempts = 0;
     const retryableExtractor: EventExtractor = async ({ target }) => {
       attempts += 1;
@@ -112,8 +115,8 @@ describe('StrataGate lifecycle', () => {
     await memory.appendTurn({ user: 'Second block', assistant: 'Continuing.' });
     expect(memory.listExtractionJobs()[0]?.status).toBe('skipped');
     const resumed = await memory.resumePendingWork({ retrySkipped: true });
-    expect(resumed.extractedEvents).toHaveLength(1);
-    expect(memory.listExtractionJobs()[0]?.status).toBe('succeeded');
+    expect(resumed.extractedEvents).toHaveLength(0);
+    expect(memory.listExtractionJobs()[0]?.status).toBe('skipped');
     expect(attempts).toBe(2);
   });
 
@@ -123,7 +126,7 @@ describe('StrataGate lifecycle', () => {
       blockTurnSize: 2,
       summarizer,
       extractor: async ({ target, next }) => {
-        extractionPairs.push([target.threadId ?? '', next.threadId ?? '']);
+        extractionPairs.push([target.threadId ?? '', next?.threadId ?? '']);
         return { shouldExtract: false, reason: 'test only', events: [] };
       },
       idFactory: ids(),
@@ -148,7 +151,7 @@ describe('StrataGate lifecycle', () => {
 
     expect(memory.getBlockContext('session-a')).toHaveLength(2);
     expect(memory.getBlockContext('session-b')).toHaveLength(1);
-    expect(extractionPairs).toContainEqual(['session-a', 'session-a']);
+    expect(extractionPairs).toContainEqual(['session-a', '']);
     expect(extractionPairs).not.toContainEqual(['session-a', 'session-b']);
     expect(extractionPairs).not.toContainEqual(['session-b', 'session-a']);
   });
@@ -157,7 +160,7 @@ describe('StrataGate lifecycle', () => {
     const memory = StrataGate.inMemory({
       blockTurnSize: 2,
       blockDecayLambda: 0.3,
-      summarizer,
+      summarizer: nonExtractingSummarizer,
       idFactory: ids(),
     });
 
@@ -186,7 +189,7 @@ describe('StrataGate lifecycle', () => {
   });
 
   it('records whether a Block lift came from an Agent or the user', async () => {
-    const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer, idFactory: ids() });
+    const memory = StrataGate.inMemory({ blockTurnSize: 1, summarizer: nonExtractingSummarizer, idFactory: ids() });
     const first = await memory.appendTurn({ user: 'First', assistant: 'Stored' });
     await memory.expandBlock(first.sealedBlock!.id, 4);
     expect(memory.listBlocks()[0]?.lastLiftedBy).toBe('agent');

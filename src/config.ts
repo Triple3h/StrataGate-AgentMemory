@@ -13,6 +13,7 @@ export interface Config {
   provider?: string
   model?: string
   maxOutputTokens?: number
+  structuredTaskTimeoutMs?: number
 }
 
 export interface ResolvedConfig {
@@ -26,6 +27,7 @@ export interface ResolvedConfig {
   provider?: string
   model?: string
   maxOutputTokens: number
+  structuredTaskTimeoutMs?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -40,7 +42,8 @@ export const Config: z<Config> = z.object({
   ingestSubagents: z.boolean().default(false),
   provider: z.string(),
   model: z.string(),
-  maxOutputTokens: z.natural().min(256).default(10_000),
+  maxOutputTokens: z.natural().min(256).default(2_048),
+  structuredTaskTimeoutMs: z.natural().min(1_000).default(45_000),
 })
 
 export function resolveConfig(config: Config): ResolvedConfig {
@@ -62,6 +65,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     blockDecayLambda: Math.max(0, config.blockDecayLambda ?? 0.3),
     ingestSubagents: config.ingestSubagents ?? false,
     ...(provider && model ? { provider, model } : {}),
-    maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 10_000)),
+    maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 2_048)),
+    structuredTaskTimeoutMs: Math.max(1_000, Math.floor(config.structuredTaskTimeoutMs ?? 45_000)),
   }
 }

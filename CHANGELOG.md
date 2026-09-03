@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.2.47 - 2026-09-02
+
+- Package the ordered, per-tool retrieval visualization as a new installable DSH release.
+
+## 0.2.46 - 2026-09-02
+
+- Show a quiet, expandable answer-tail retrieval receipt when matching memories were checked but not adopted, preserving each tool retrieval as an ordered group with separately numbered candidates and on-demand source details.
+
+## 0.2.45 - 2026-09-02
+
+- Show a quiet answer-tail retrieval note when matching memories were checked but not adopted.
+
+## 0.2.44 - 2026-09-02
+
+- Fuse BM25 and structured Event/Element relevance with the existing adoption-based time-decay ranking, without admitting irrelevant recent memories.
+
+## 0.2.43 - 2026-09-01
+
+- Simplify adopted-memory citations with compact answer-tail summaries, collapsed related/source details, and explicit context-use labels.
+- Render adopted Knowledge Graph references as focused neighborhoods and show all Block levels while highlighting only the adopted level.
+
+## 0.2.42 - 2026-09-01
+
+- Restore live assistant rendering on DSH `0.1.0-rc.7` by publishing memory-citation location data under the registered conversation kind.
+- Derive answer-tail citations from supported `memory_record_use` tool call and result events instead of persisting an unsupported custom session event.
+- Preserve read compatibility for legacy citation events while allowing migrated session history to replay without refresh-only failures.
+
+## 0.2.41 - 2026-09-01
+
+- Render program-owned Event, Knowledge Graph, and Block citations under the exact assistant answer that adopted them through `memory_record_use`.
+- Preserve adopted evidence kind, source reference, Block level, and expansion state in durable usage audits and session history.
+- Open citation details directly from the answer tail, including the selected memory content and its source conversation.
+
+## 0.2.40 - 2026-08-31
+
+- Make Knowledge Graph limits explicit, render the top 100 nodes by default, and let users reveal 100 more at a time.
+- Add total-aware pagination for Events and Blocks in 40-item pages and usage audits in 100-item pages.
+
+## 0.2.39 - 2026-08-31
+
+- Preview external-memory imports without writes, skip exact duplicates deterministically, and ask the configured model to adjudicate Top-K local matches.
+- Apply high-confidence decisions automatically while requiring confirmation only for low-confidence candidates.
+- Commit imports atomically and support undoing a committed import batch, including affected Event relationships and derived projections.
+- Keep model adjudication outside storage revision ownership, then reload and retry only the short idempotent commit so concurrent writes cannot fail a running import.
+- Persist external-memory analysis jobs with per-candidate progress, recover malformed exports through a model fallback, and resume progress plus low-confidence review after reopening the import page.
+- Keep import status polling alive across transient network failures, reload stale active namespaces before retry, and resume background adjudication from the latest SQLite revision after concurrent memory writes.
+
+## 0.2.37 - 2026-08-29
+
+- Seal each completed Block immediately with deterministic L3-L4 and permanent L5, while keeping model-pending Blocks out of decay and native-surface replacement until L0-L2 and Event processing both complete.
+- Add persisted summary jobs, bounded exponential retries, and SQLite schema v9 migration so derivation failures cannot lose turns, receipts, or block later sealing.
+- Resolve exact-model `reasoningEffort: off` support, fall back once on explicit rejection, cache negative capability by route, and bound structured tasks by output tokens and a hard timeout.
+
 ## 0.2.36 - 2026-08-28
 
 - Make completed conversation turns per Block editable in Advanced Settings, persist it globally, and suggest an optional λ adjustment that preserves decay speed per turn.

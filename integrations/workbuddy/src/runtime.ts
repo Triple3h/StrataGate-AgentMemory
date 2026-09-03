@@ -457,7 +457,7 @@ export class WorkBuddyRuntime {
         database: this.config.database,
         namespace: this.config.namespace,
         blockTurnSize: this.config.blockTurnSize,
-        summarizer: callbacks.summarizer,
+        ...(callbacks.summarizer ? { summarizer: callbacks.summarizer } : {}),
         ...(callbacks.extractor ? { extractor: callbacks.extractor } : {}),
         ...(callbacks.elementProjector ? { elementProjector: callbacks.elementProjector } : {}),
       })

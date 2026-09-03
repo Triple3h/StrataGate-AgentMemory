@@ -149,7 +149,7 @@ export function registerMemoryTools(ctx: Context, runtime: StrataGateRuntime): v
 
   ctx.tools.register(defineTool({
     name: 'memory_record_use',
-    description: 'Close one StrataGate retrieval batch. Pass its batch_id and exactly the evidenceRefs from that batch actually used in the answer, or [] when none were used. Non-empty refs require that batch\'s sufficient assessment. Omitting batch_id selects the latest batch for sequential compatibility.',
+    description: 'Close one StrataGate retrieval batch. Pass its batch_id and exactly the evidenceRefs from that batch actually used in the answer, or [] when none were used. Non-empty refs require that batch\'s sufficient assessment. The host renders successful selections as answer-tail citations, so do not write a manual citation list. Omitting batch_id selects the latest batch for sequential compatibility.',
     parameters: {
       batch_id: { type: 'string', description: 'The batchId to close. Omit only in a strictly sequential flow.' },
       evidence_refs: { type: 'array', items: { type: 'string' }, required: true },

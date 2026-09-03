@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { StrataGate } from '@diqier/stratagate'
-import { describe, expect, it } from 'vitest'
+import { SqliteStorage } from '@diqier/stratagate/sqlite'
+import { describe, expect, it, vi } from 'vitest'
 import type { DshModelBridge } from '../src/llm.js'
 import { StrataGateRuntime } from '../src/runtime.js'
 
@@ -45,6 +46,132 @@ function turnEvents(): SessionEvent[] {
 }
 
 describe('DSH runtime ingestion', () => {
+  it('runs malformed external-memory recovery in a resumable background job', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-import-job-'))
+    const database = join(directory, 'memory.db')
+    const models = {
+      ...fakeModels,
+      runDetached: async <T>(_sessionId: string, operation: () => Promise<T>): Promise<T> => operation(),
+      externalMemoryExtractor: async () => ({ candidates: [{ title: '恢复记忆', summary: '从损坏输入恢复。' }] }),
+      externalMemoryDecider: async () => ({ action: 'ADD' as const, confidence: 0.99 }),
+    } as unknown as DshModelBridge
+    const runtime = new StrataGateRuntime({
+      database, namespaceMode: 'project', namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 6, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, models)
+    try {
+      await (runtime as unknown as { space: (value: Session) => Promise<StrataGate> }).space(session)
+      const namespace = (await runtime.adminNamespaces())[0]!
+      const started = await runtime.adminPreviewExternalMemory(namespace, '{broken') as { jobId: string; status: string }
+      expect(started.status).toBe('extracting')
+      await vi.waitFor(async () => {
+        const status = await runtime.adminExternalMemoryStatus(namespace, started.jobId) as { status: string; processedCount: number }
+        expect(status).toMatchObject({ status: 'awaiting_confirmation', processedCount: 1 })
+      })
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('commits an external-memory decision after revisions change during the model call without rerunning it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-import-conflict-'))
+    const database = join(directory, 'memory.db')
+    let releaseDecision!: (decision: { action: 'ADD'; confidence: number }) => void
+    let markDeciderStarted!: () => void
+    const decisionPending = new Promise<{ action: 'ADD'; confidence: number }>((resolve) => {
+      releaseDecision = resolve
+    })
+    const deciderStarted = new Promise<void>((resolve) => {
+      markDeciderStarted = resolve
+    })
+    let deciderCalls = 0
+    const models = {
+      ...fakeModels,
+      runDetached: async <T>(_sessionId: string, operation: () => Promise<T>): Promise<T> => operation(),
+      externalMemoryDecider: async () => {
+        deciderCalls += 1
+        markDeciderStarted()
+        return decisionPending
+      },
+    } as unknown as DshModelBridge
+    const runtime = new StrataGateRuntime({
+      database, namespaceMode: 'project', namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 6, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, models)
+    try {
+      const memory = await (runtime as unknown as { space: (value: Session) => Promise<StrataGate> }).space(session)
+      const namespace = runtime.namespaceFor(session)
+      const job = await memory.createExternalMemoryImportJob(JSON.stringify({
+        schemaVersion: 'stratagate.external-memory.v2', sourceType: 'external_ai_memory_export',
+        candidates: [{ title: '模型等待期间发生写入', summary: '后台任务应复用已经得到的判断。' }],
+      }))
+      ;(runtime as unknown as { scheduleExternalMemoryImport: (key: string, id: string) => void })
+        .scheduleExternalMemoryImport(namespace, job.id)
+      await deciderStarted
+
+      const storage = new SqliteStorage({ filename: database })
+      try {
+        for (let index = 0; index < 2; index += 1) {
+          const loaded = await storage.load(namespace)
+          expect(loaded).not.toBeNull()
+          await storage.save(namespace, loaded!.snapshot, loaded!.revision)
+        }
+      } finally {
+        await storage.close()
+      }
+      releaseDecision({ action: 'ADD', confidence: 0.99 })
+
+      await vi.waitFor(async () => {
+        const status = await runtime.adminExternalMemoryStatus(namespace, job.id) as { status: string }
+        expect(status.status).toBe('ready')
+      })
+      expect(deciderCalls).toBe(1)
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('reloads the latest namespace revision before retrying a failed import', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-import-stale-retry-'))
+    const database = join(directory, 'memory.db')
+    const models = {
+      ...fakeModels,
+      runDetached: async <T>(_sessionId: string, operation: () => Promise<T>): Promise<T> => operation(),
+      externalMemoryDecider: async () => ({ action: 'ADD' as const, confidence: 0.99 }),
+    } as unknown as DshModelBridge
+    const runtime = new StrataGateRuntime({
+      database, namespaceMode: 'project', namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 6, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, models)
+    try {
+      const memory = await (runtime as unknown as { space: (value: Session) => Promise<StrataGate> }).space(session)
+      const namespace = runtime.namespaceFor(session)
+      const job = await memory.createExternalMemoryImportJob(JSON.stringify({
+        schemaVersion: 'stratagate.external-memory.v2', sourceType: 'external_ai_memory_export',
+        candidates: [{ title: '重试恢复', summary: '使用最新数据库 revision。' }],
+      }))
+      await memory.failExternalMemoryImportJob(job.id, new Error('temporary failure'))
+      const storage = new SqliteStorage({ filename: database })
+      try {
+        const loaded = await storage.load(namespace)
+        await storage.save(namespace, loaded!.snapshot, loaded!.revision)
+      } finally {
+        await storage.close()
+      }
+      const retried = await runtime.adminRetryExternalMemory(namespace, job.id) as { status: string }
+      expect(retried.status).toBe('processing')
+      await vi.waitFor(async () => {
+        const status = await runtime.adminExternalMemoryStatus(namespace, job.id) as { status: string }
+        expect(status.status).toBe('ready')
+      })
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('returns compact event/graph/raw cards while expand preserves full details', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-compact-search-'))
     const database = join(directory, 'memory.db')
@@ -345,7 +472,7 @@ describe('DSH runtime ingestion', () => {
     }
   })
 
-  it('does not cache a rejected namespace opening after pending-work recovery fails', async () => {
+  it('keeps namespace opening usable while a failed background recovery is retried', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-recovery-'))
     const database = join(directory, 'memory.db')
     let attempts = 0
@@ -367,9 +494,20 @@ describe('DSH runtime ingestion', () => {
       maxOutputTokens: 2048,
     }, models)
     try {
+      const seed = await StrataGate.open({
+        database,
+        namespace: runtime.namespaceFor(session),
+        blockTurnSize: 1,
+      })
+      await seed.appendTurn({ user: 'recover me', assistant: 'stored', threadId: String(session.id) }, { deferDerivation: true })
+      await seed.close()
       const space = (runtime as unknown as { space: (session: Session) => Promise<StrataGate> }).space
-      await expect(space.call(runtime, session)).rejects.toThrow('temporary recovery failure')
-      await expect(space.call(runtime, session)).resolves.toBeInstanceOf(StrataGate)
+      const memory = await space.call(runtime, session)
+      expect(memory).toBeInstanceOf(StrataGate)
+      await vi.waitFor(() => {
+        expect(attempts).toBeGreaterThanOrEqual(2)
+        expect(memory.listBlocks()[0]?.processingStatus).toBe('ready')
+      })
     } finally {
       await runtime.close().catch(() => {})
       await rm(directory, { recursive: true, force: true })
@@ -520,6 +658,10 @@ describe('DSH runtime ingestion', () => {
       appendPlainTurn(2, 'SEALED ORIGINAL TWO', 'SEALED ANSWER TWO')
       await runtime.flush()
 
+      await vi.waitFor(() => {
+        expect(activeSession.deriveMessages()).toHaveLength(1)
+      })
+
       let derived = activeSession.deriveMessages()
       expect(derived).toHaveLength(1)
       expect(derived[0]).toMatchObject({
@@ -596,6 +738,9 @@ describe('DSH runtime ingestion', () => {
 
       appendPlainTurn(4, 'SECOND BLOCK CLOSER', 'SECOND BLOCK ANSWER')
       await runtime.flush()
+      await vi.waitFor(() => {
+        expect(nativeMemory.getBlockContext(String(activeSession.id))).toHaveLength(2)
+      })
       const decayed = nativeMemory.getBlockContext(String(activeSession.id))
       expect(decayed.map(({ level }) => level)).toEqual([3, 5])
       derived = activeSession.deriveMessages()
@@ -667,7 +812,7 @@ describe('DSH runtime ingestion', () => {
       await seed.close()
 
       const batch = await runtime.searchEvents(activeSession, 'pnpm') as { batchId: string; evidenceRefs: string[] }
-      expect(batch.evidenceRefs).toHaveLength(2)
+      expect(batch.evidenceRefs).toHaveLength(3)
       await runtime.assess(activeSession, {
         verdict: 'sufficient',
         evidence_refs: batch.evidenceRefs,
@@ -688,6 +833,11 @@ describe('DSH runtime ingestion', () => {
           turn: 9,
           batchId: batch.batchId,
           evidenceRefs: selectedRefs,
+          citations: [expect.objectContaining({
+            kind: 'event',
+            evidenceRef: selectedRefs[0],
+            detailKind: 'eventId',
+          })],
           verdict: 'sufficient',
           nextStrategy: 'answer',
         },
@@ -700,7 +850,23 @@ describe('DSH runtime ingestion', () => {
       const mentionCounts = new Map(afterSelected?.events.map((event) => [event.id, event.weight.mentionCount]))
       await runtime.searchEvents(activeSession, 'pnpm')
       expect(runtime.needsRecordUse(activeSession)).toBe(true)
-      await runtime.recordUse(activeSession, 'call-audit-zero', [])
+      const zeroUse = await runtime.recordUse(activeSession, 'call-audit-zero', []) as {
+        retrievalSequence: number
+        retrievedCount: number
+        retrievedMemories: Array<Record<string, unknown>>
+        evidenceRefs: string[]
+        citations: Array<Record<string, unknown>>
+      }
+      expect(zeroUse).toMatchObject({
+        retrievalSequence: expect.any(Number),
+        retrievedCount: batch.evidenceRefs.length,
+        evidenceRefs: [],
+        citations: [],
+      })
+      expect(zeroUse.retrievedMemories).toHaveLength(batch.evidenceRefs.length)
+      expect(zeroUse.retrievedMemories).toEqual(expect.arrayContaining([
+        expect.objectContaining({ batchId: expect.any(String), evidenceRef: expect.any(String), title: expect.any(String) }),
+      ]))
       expect(runtime.needsRecordUse(activeSession)).toBe(false)
       const afterZero = await runtime.adminSnapshot(namespace)
       for (const event of afterZero?.events ?? []) {
@@ -730,9 +896,14 @@ describe('DSH runtime ingestion', () => {
       ingestSubagents: false,
       maxOutputTokens: 2048,
     }, fakeModels)
+    const citationEvents: Array<{ type: string; data: Record<string, unknown> }> = []
     const activeSession = {
       ...session,
       events: [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 10 } }],
+      append: vi.fn((type: string, data: Record<string, unknown>) => {
+        citationEvents.push({ type, data })
+        return { type, data, seq: citationEvents.length, time: citationEvents.length + 1 }
+      }),
     } as unknown as Session
     const namespace = runtime.namespaceFor(activeSession)
 
@@ -848,11 +1019,12 @@ describe('DSH runtime ingestion', () => {
         'parallel-event',
         [eventRef, eventRef],
         eventBatch.batchId,
-      ) as { batchId: string; evidenceRefs: string[]; duplicateEvidenceRefs: string[] }
+      ) as { batchId: string; evidenceRefs: string[]; duplicateEvidenceRefs: string[]; citations: Array<Record<string, unknown>> }
       expect(recordedEvent).toMatchObject({
         batchId: eventBatch.batchId,
         evidenceRefs: [eventRef],
         duplicateEvidenceRefs: [eventRef],
+        citations: [expect.objectContaining({ kind: 'event', evidenceRef: eventRef, detailKind: 'eventId' })],
       })
 
       await runtime.assess(activeSession, {
@@ -862,7 +1034,10 @@ describe('DSH runtime ingestion', () => {
         missing: '',
         next_strategy: 'answer',
       }, graphBatch.batchId)
-      await runtime.recordUse(activeSession, 'parallel-graph', graphBatch.evidenceRefs, graphBatch.batchId)
+      const recordedGraph = await runtime.recordUse(activeSession, 'parallel-graph', graphBatch.evidenceRefs, graphBatch.batchId) as { citations: Array<Record<string, unknown>> }
+      expect(recordedGraph.citations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'graph', evidenceRef: graphBatch.evidenceRefs[0], detailKind: 'nodeId' }),
+      ]))
 
       // rawBatch is older than blockBatch but remains addressable after newer batches are created.
       await runtime.assess(activeSession, {
@@ -872,9 +1047,29 @@ describe('DSH runtime ingestion', () => {
         missing: '',
         next_strategy: 'answer',
       }, rawBatch.batchId)
-      await runtime.recordUse(activeSession, 'parallel-raw', rawBatch.evidenceRefs, rawBatch.batchId)
+      const recordedRaw = await runtime.recordUse(activeSession, 'parallel-raw', rawBatch.evidenceRefs, rawBatch.batchId) as { citations: Array<Record<string, unknown>> }
+      expect(recordedRaw.citations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'block', evidenceRef: rawBatch.evidenceRefs[0], detailKind: 'blockId' }),
+      ]))
+
+      const expandedBatch = await runtime.expandBlock(activeSession, sourceBlock.id, 'L5') as Batch
+      await runtime.assess(activeSession, {
+        verdict: 'sufficient',
+        evidence_refs: expandedBatch.evidenceRefs,
+        fit: 'The expanded Block contains the exact source wording.',
+        missing: '',
+        next_strategy: 'answer',
+      }, expandedBatch.batchId)
+      const recordedExpanded = await runtime.recordUse(activeSession, 'parallel-expanded-block', expandedBatch.evidenceRefs, expandedBatch.batchId) as { citations: Array<Record<string, unknown>> }
+      expect(recordedExpanded.citations).toEqual([
+        expect.objectContaining({ kind: 'block', id: sourceBlock.id, level: 5, expanded: true, detailKind: 'blockId' }),
+      ])
       await runtime.recordUse(activeSession, 'parallel-block-empty', [], blockBatch.batchId)
       expect(runtime.needsRecordUse(activeSession)).toBe(false)
+      expect(recordedEvent).toMatchObject({ namespace })
+      expect(citationEvents).not.toContainEqual(expect.objectContaining({
+        type: 'stratagate/memory-citations',
+      }))
 
       const receipts = (await runtime.adminSnapshot(namespace))?.usageReceipts ?? []
       expect(receipts).toContainEqual(expect.objectContaining({

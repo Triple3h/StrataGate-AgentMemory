@@ -104,6 +104,18 @@ function modelBridge(responses: Array<{ text?: string; tool?: unknown; toolName?
 }
 
 describe('DeepSeek Harness model JSON retries', () => {
+  it('returns an external-memory action with bounded confidence', async () => {
+    const { bridge, session, calls } = modelBridge([{ tool: {
+      action: 'SUPERSEDE', existingEventIds: ['evt_old'], reason: '同一事实的新状态', confidence: 1.4,
+    } }])
+    const decision = await bridge.run(session, () => bridge.externalMemoryDecider({
+      candidate: { title: '数据库迁移', summary: '已迁移到 PostgreSQL。' },
+      matches: [],
+    }))
+    expect(decision).toMatchObject({ action: 'SUPERSEDE', existingEventIds: ['evt_old'], confidence: 1 })
+    expect(calls.mock.calls[0]?.[0].tools[0].name).toBe('stratagate_decide_external_memory')
+  })
+
   it('retries once with a correction instruction after invalid JSON', async () => {
     const { bridge, session, calls } = modelBridge([
       { text: 'not json' },
@@ -134,7 +146,7 @@ describe('DeepSeek Harness model JSON retries', () => {
     expect((error as Error).message).toContain('did not produce a valid stratagate_summarize_block call after 2 attempts')
     expect((error as Error).message).toContain('still not json')
     expect(calls).toHaveBeenCalledTimes(2)
-    expect(calls.mock.calls[1]?.[0].maxTokens).toBe(10_000)
+    expect(calls.mock.calls[1]?.[0].maxTokens).toBe(256)
   })
 
   it('uses tool-call arguments even when the provider also returns reasoning', async () => {
@@ -180,7 +192,7 @@ describe('DeepSeek Harness model JSON retries', () => {
       l0Title: 'target', l0Tags: [], l1Summary: 'target summary', l2Keypoints: ['target point'],
       l3Condensed: 'target condensed', l4Readable: 'target readable',
       l5Raw: [{ id: 'msg_target', role: 'user', content: 'target message', createdAt: '2026-01-01T00:00:00.000Z' }],
-      shouldExtract: true, pointerCurrentLevel: 5, pointerAnchorLevel: 5,
+      shouldExtract: true, processingStatus: 'ready', pointerCurrentLevel: 5, pointerAnchorLevel: 5,
       pointerAnchorBlockPosition: 1, lastLiftedAt: null, lastLiftedBy: null, createdAt: '2026-01-01T00:00:00.000Z',
     } as MemoryBlock
     const next = {
@@ -210,7 +222,7 @@ describe('DeepSeek Harness model JSON retries', () => {
       id: 'blk_target', sequence: 1, startTurn: 1, endTurn: 2,
       l0Title: 'target', l0Tags: [], l1Summary: '', l2Keypoints: [], l3Condensed: '', l4Readable: '',
       l5Raw: [{ id: 'msg_target', role: 'user', content: 'target message', createdAt: '2026-01-01T00:00:00.000Z' }],
-      shouldExtract: true, pointerCurrentLevel: 5, pointerAnchorLevel: 5,
+      shouldExtract: true, processingStatus: 'ready', pointerCurrentLevel: 5, pointerAnchorLevel: 5,
       pointerAnchorBlockPosition: 1, lastLiftedAt: null, lastLiftedBy: null, createdAt: '2026-01-01T00:00:00.000Z',
     } as MemoryBlock
     const { bridge, session } = modelBridge([{
@@ -277,5 +289,104 @@ describe('DeepSeek Harness model JSON retries', () => {
     expect(calls.mock.calls[0]?.[0].tools?.[0]?.name).toBe('stratagate_project_knowledge_graph')
     expect(calls.mock.calls[0]?.[0].tools?.[0]?.parameters?.properties?.nodes?.items?.required).toContain('tags')
     expect(calls.mock.calls[0]?.[0].system).toContain('tags describe the node')
+  })
+})
+
+describe('reasoningEffort off compatibility', () => {
+  const summaryTool = { l0Title: 'ok', l0Tags: [], l1Summary: 'valid', l2Keypoints: [], shouldExtract: false }
+
+  function bridgeWithCapability(
+    resolveModelInfo: (...args: any[]) => Promise<any>,
+    stream?: (options: any) => AsyncIterable<any>,
+  ): { bridge: DshModelBridge; session: Session; calls: ReturnType<typeof vi.fn>; adapterUpdated: () => void } {
+    const calls = vi.fn()
+    let adapterUpdated = () => {}
+    const ctx = {
+      llm: {
+        resolveModelInfo,
+        stream: stream ?? ((options: any) => {
+          calls(options)
+          return (async function* () {
+            yield { type: 'tool-call-delta' as const, index: 0, id: 'call' as never, name: options.tools[0].name, argumentsDelta: JSON.stringify(summaryTool) }
+            yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+          })()
+        }),
+      },
+      on: (_event: string, listener: () => void) => { adapterUpdated = listener },
+      logger: { warn: vi.fn() },
+    } as unknown as Context
+    const bridge = new DshModelBridge(ctx, {
+      database: ':memory:', namespaceMode: 'session', namespacePrefix: 'test', globalNamespace: 'global',
+      blockTurnSize: 1, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 512,
+      structuredTaskTimeoutMs: 50,
+    })
+    const session = { id: 'off-test', requestHeader: () => ({ config: { provider: 'provider-a', model: 'model-a' } }) } as unknown as Session
+    return { bridge, session, calls, adapterUpdated: () => adapterUpdated() }
+  }
+
+  it('sends off when the exact model explicitly supports it', async () => {
+    const { bridge, session, calls } = bridgeWithCapability(async () => ({ reasoning: { efforts: [{ id: 'off', name: 'Off' }] } }))
+    await bridge.run(session, () => bridge.summarizer([]))
+    expect(calls.mock.calls[0]?.[0].reasoningEffort).toBe('off')
+  })
+
+  it('omits off when the exact model explicitly does not support it', async () => {
+    const { bridge, session, calls } = bridgeWithCapability(async () => ({ reasoning: { efforts: [{ id: 'low', name: 'Low' }] } }))
+    await bridge.run(session, () => bridge.summarizer([]))
+    expect(calls.mock.calls[0]?.[0]).not.toHaveProperty('reasoningEffort')
+  })
+
+  it.each([
+    ['unknown capability', async () => ({})],
+    ['failed capability lookup', async () => { throw new Error('lookup failed') }],
+  ])('tries off first for %s', async (_label, resolveModelInfo) => {
+    const { bridge, session, calls } = bridgeWithCapability(resolveModelInfo)
+    await bridge.run(session, () => bridge.summarizer([]))
+    expect(calls.mock.calls[0]?.[0].reasoningEffort).toBe('off')
+  })
+
+  it('removes rejected off once and caches the exact route as unsupported', async () => {
+    const calls = vi.fn()
+    const { bridge, session } = bridgeWithCapability(async () => ({}), (options: any) => {
+      calls(options)
+      const index = calls.mock.calls.length
+      return (async function* () {
+        if (index === 1) {
+          yield { type: 'finish' as const, reason: { kind: 'error' as const, failure: { code: 'INVALID_REQUEST', message: 'reasoningEffort off is unsupported' } } }
+          return
+        }
+        yield { type: 'tool-call-delta' as const, index: 0, id: 'call' as never, name: options.tools[0].name, argumentsDelta: JSON.stringify(summaryTool) }
+        yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+      })()
+    })
+
+    await bridge.run(session, () => bridge.summarizer([]))
+    await bridge.run(session, () => bridge.summarizer([]))
+    expect(calls).toHaveBeenCalledTimes(3)
+    expect(calls.mock.calls[0]?.[0].reasoningEffort).toBe('off')
+    expect(calls.mock.calls[1]?.[0]).not.toHaveProperty('reasoningEffort')
+    expect(calls.mock.calls[2]?.[0]).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('aborts an accepted off request that keeps reasoning past the deadline', async () => {
+    const { bridge, session } = bridgeWithCapability(async () => ({}), (options: any) => (async function* () {
+      yield { type: 'reasoning-delta' as const, index: 0, text: 'Deep diving' }
+      await new Promise<void>((resolve) => options.signal.addEventListener('abort', () => resolve(), { once: true }))
+      yield { type: 'finish' as const, reason: { kind: 'aborted' as const, failure: { code: 'ABORTED', message: 'aborted' } } }
+    })())
+    await expect(bridge.run(session, () => bridge.summarizer([]))).rejects.toThrow('timed out after 50ms')
+  })
+
+  it('re-resolves capability after route or adapter changes', async () => {
+    const resolved = vi.fn(async (_provider: string, model: string) => ({
+      reasoning: { efforts: model === 'model-a' ? [{ id: 'off', name: 'Off' }] : [{ id: 'low', name: 'Low' }] },
+    }))
+    const { bridge, session, adapterUpdated } = bridgeWithCapability(resolved)
+    await bridge.run(session, () => bridge.summarizer([]))
+    const changedSession = { id: 'changed', requestHeader: () => ({ config: { provider: 'provider-a', model: 'model-b' } }) } as unknown as Session
+    await bridge.run(changedSession, () => bridge.summarizer([]))
+    adapterUpdated()
+    await bridge.run(session, () => bridge.summarizer([]))
+    expect(resolved).toHaveBeenCalledTimes(3)
   })
 })

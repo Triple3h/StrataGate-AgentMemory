@@ -6,7 +6,7 @@ import { handleAdminRequest, type WebResponse } from '../src/web.js'
 const fullFailure = 'StrataGate model response was not valid JSON\nRaw response (full):\n' + 'x'.repeat(600)
 
 const snapshot: StrataGateSnapshot = {
-  schemaVersion: 8,
+  schemaVersion: 10,
   currentTurn: 8,
   blockTurnSize: 4,
   blockDecayLambda: 0.3,
@@ -36,7 +36,9 @@ const snapshot: StrataGateSnapshot = {
     pointerAnchorBlockPosition: 1,
     lastLiftedAt: null,
     lastLiftedBy: null,
+    processingStatus: 'ready',
   }],
+  summaryJobs: [],
   events: [{
     id: 'evt_1',
     title: 'Use pnpm',
@@ -85,9 +87,10 @@ const snapshot: StrataGateSnapshot = {
     status: 'succeeded',
     attempts: 1,
     lastError: null,
+    nextRetryAt: null,
     updatedAt: '2026-08-18T00:01:00.000Z',
   }, {
-    blockId: 'blk_failed', status: 'failed', attempts: 2, lastError: fullFailure, updatedAt: '2026-08-18T00:02:00.000Z',
+    blockId: 'blk_failed', status: 'failed', attempts: 2, lastError: fullFailure, nextRetryAt: null, updatedAt: '2026-08-18T00:02:00.000Z',
   }],
   elementProjectionJobs: [],
   usageReceipts: [{
@@ -107,6 +110,7 @@ const snapshot: StrataGateSnapshot = {
     createdAt: '2026-08-18T00:01:00.000Z',
   }],
   ingestionReceipts: [],
+  externalMemoryImportJobs: [],
 }
 
 let updatedLambda: number | null = null
@@ -115,6 +119,7 @@ let expandedBlock: { namespace: string; id: string; target: string | number } | 
 const runtime = {
   adminNamespaces: async () => ['dsh:project:test'],
   adminSnapshot: async (namespace: string) => namespace === 'dsh:project:test' ? snapshot : null,
+  adminSnapshotEntries: async () => [{ namespace: 'dsh:project:test', revision: 7, snapshot }],
   adminWorkspaceName: () => 'StrataGate',
   adminSetBlockTurnSize: async (value: number) => {
     updatedTurnSize = value
@@ -144,7 +149,7 @@ const skippedRuntime = {
     : null,
 } as unknown as StrataGateRuntime
 
-async function request(url: string, method = 'GET', targetRuntime = runtime, body?: unknown): Promise<{ status: number; body: any; headers: Record<string, string> }> {
+async function request(url: string, method = 'GET', targetRuntime = runtime, body?: unknown, requestHeaders?: Record<string, string>): Promise<{ status: number; body: any; headers: Record<string, string> }> {
   const headers: Record<string, string> = {}
   let text = ''
   const response: WebResponse = {
@@ -152,25 +157,50 @@ async function request(url: string, method = 'GET', targetRuntime = runtime, bod
     setHeader: (name, value) => { headers[name] = value },
     end: (body) => { text = body },
   }
-  await handleAdminRequest(targetRuntime, { method, url, body }, response)
-  return { status: response.statusCode, body: JSON.parse(text), headers }
+  await handleAdminRequest(targetRuntime, { method, url, body, ...(requestHeaders ? { headers: requestHeaders } : {}) }, response)
+  return { status: response.statusCode, body: text ? JSON.parse(text) : null, headers }
 }
 
 describe('StrataGate admin routes', () => {
-  it('accepts external memory JSON through the import route', async () => {
-    let received: { namespace: string; text: string } | null = null
+  it('supports preview, commit, and undo through the import route', async () => {
+    const received: unknown[] = []
     const importRuntime = {
-      adminImportExternalMemory: async (namespace: string, text: string) => {
-        received = { namespace, text }
-        return { importedCount: 2 }
+      adminPreviewExternalMemory: async (namespace: string, text: string) => {
+        received.push({ operation: 'preview', namespace, text }); return { jobId: 'job-1', status: 'processing' }
+      },
+      adminExternalMemoryStatus: async (namespace: string, jobId?: string) => {
+        received.push({ operation: 'status', namespace, jobId }); return { jobId: 'job-1', status: 'processing' }
+      },
+      adminRetryExternalMemory: async (namespace: string, jobId: string) => {
+        received.push({ operation: 'retry', namespace, jobId }); return { jobId, status: 'processing' }
+      },
+      adminCommitExternalMemory: async (namespace: string, jobId: string, choices: Array<{ index: number; action: string }>) => {
+        received.push({ operation: 'commit', namespace, jobId, choices }); return { importedCount: 2, sourceBlockId: 'blk_import' }
+      },
+      adminUndoExternalMemory: async (namespace: string, sourceBlockId: string) => {
+        received.push({ operation: 'undo', namespace, sourceBlockId }); return { removedEventIds: ['evt_1'] }
       },
     } as unknown as StrataGateRuntime
-    const result = await request('/api/stratagate/import', 'POST', importRuntime, {
-      namespace: 'dsh:project:test',
+    const preview = await request('/api/stratagate/import', 'POST', importRuntime, {
+      operation: 'preview', namespace: 'dsh:project:test',
       text: '{"schemaVersion":"stratagate.external-memory.v2","candidates":[]}',
     })
-    expect(result).toMatchObject({ status: 200, body: { importedCount: 2 } })
-    expect(received).toEqual({ namespace: 'dsh:project:test', text: '{"schemaVersion":"stratagate.external-memory.v2","candidates":[]}' })
+    const status = await request('/api/stratagate/import', 'POST', importRuntime, {
+      operation: 'status', namespace: 'dsh:project:test', jobId: 'job-1',
+    })
+    const getStatus = await request('/api/stratagate/import?operation=status&namespace=dsh%3Aproject%3Atest&jobId=job-1', 'GET', importRuntime)
+    const commit = await request('/api/stratagate/import', 'POST', importRuntime, {
+      operation: 'commit', namespace: 'dsh:project:test', jobId: 'job-1', choices: [{ index: 1, action: 'CONFLICT' }],
+    })
+    const undo = await request('/api/stratagate/import', 'POST', importRuntime, {
+      operation: 'undo', namespace: 'dsh:project:test', sourceBlockId: 'blk_import',
+    })
+    expect(preview).toMatchObject({ status: 200, body: { jobId: 'job-1', status: 'processing' } })
+    expect(status).toMatchObject({ status: 200, body: { jobId: 'job-1', status: 'processing' } })
+    expect(getStatus).toMatchObject({ status: 200, body: { jobId: 'job-1', status: 'processing' } })
+    expect(commit).toMatchObject({ status: 200, body: { importedCount: 2 } })
+    expect(undo).toMatchObject({ status: 200, body: { removedEventIds: ['evt_1'] } })
+    expect(received).toHaveLength(5)
   })
 
   it('serves the complete external memory export prompt', async () => {
@@ -241,6 +271,40 @@ describe('StrataGate admin routes', () => {
         relatedNodes: [{ id: 'node_1' }],
       }],
     })
+  })
+
+  it('serves one revision-aware dashboard snapshot and returns 304 when unchanged', async () => {
+    const first = await request('/api/stratagate/dashboard?namespace=dsh%3Aproject%3Atest')
+    expect(first).toMatchObject({
+      status: 200,
+      body: {
+        namespace: 'dsh:project:test',
+        revision: 7,
+        processing: false,
+        data: {
+          events: [{ id: 'evt_1' }],
+          graph: { nodes: [{ id: 'node_1' }] },
+          blocks: [{ id: 'blk_1' }],
+          audit: [{ id: 'dsh:s1:tool:c1' }],
+          pagination: {
+            events: { total: 1, offset: 0, limit: 40 },
+            blocks: { total: 1, offset: 0, limit: 40 },
+            audit: { total: 1, offset: 0, limit: 100 },
+          },
+        },
+      },
+    })
+    expect(first.headers.ETag).toMatch(/^"[A-Za-z0-9_-]+"$/)
+    expect(first.headers['Cache-Control']).toBe('private, no-cache')
+
+    const unchanged = await request(
+      '/api/stratagate/dashboard?namespace=dsh%3Aproject%3Atest',
+      'GET',
+      runtime,
+      undefined,
+      { 'if-none-match': first.headers.ETag! },
+    )
+    expect(unchanged).toMatchObject({ status: 304, body: null, headers: { ETag: first.headers.ETag } })
   })
 
   it('filters short-term Blocks and the open tail by the selected conversation', async () => {
@@ -320,6 +384,40 @@ describe('StrataGate admin routes', () => {
     expect(result.body.messages[0].toolCalls[0].arguments.authorization).toBe('Bearer [REDACTED]')
   })
 
+  it('returns the adopted graph node with its directly related graph neighborhood', async () => {
+    const relatedRuntime = {
+      adminSnapshot: async () => ({
+        ...snapshot,
+        graphNodes: [
+          ...snapshot.graphNodes,
+          {
+            ...snapshot.graphNodes[0]!,
+            id: 'node_2',
+            name: 'StrataGate',
+            type: 'project' as const,
+          },
+        ],
+        graphEdges: [{
+          id: 'edge_1',
+          fromNodeId: 'node_2',
+          toNodeId: 'node_1',
+          relation: '使用',
+          status: 'active' as const,
+          confidence: 0.93,
+          sourceEventIds: ['evt_1'],
+          createdAt: '2026-08-18T00:00:00.000Z',
+          updatedAt: '2026-08-18T00:00:00.000Z',
+        }],
+      }),
+    } as unknown as StrataGateRuntime
+    const result = await request('/api/stratagate/sources?namespace=graph&nodeId=node_1', 'GET', relatedRuntime)
+    expect(result.body).toMatchObject({
+      node: { id: 'node_1' },
+      nodes: [{ id: 'node_1' }, { id: 'node_2' }],
+      edges: [{ id: 'edge_1', fromNodeId: 'node_2', toNodeId: 'node_1', relation: '使用' }],
+    })
+  })
+
   it('expands a block into its organized events and elements', async () => {
     const result = await request('/api/stratagate/sources?namespace=dsh%3Aproject%3Atest&blockId=blk_1')
     expect(result.body).toMatchObject({
@@ -354,6 +452,15 @@ describe('StrataGate admin routes', () => {
       events: [{ id: 'evt_1' }],
       sourceMessages: [{ id: 'msg_1' }],
     })
+  })
+
+  it('keeps per-request caps while allowing later memory and audit pages', async () => {
+    const events = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=events&offset=1&limit=200')
+    const blocks = await request('/api/stratagate/memories?namespace=dsh%3Aproject%3Atest&kind=blocks&offset=1&limit=200')
+    const audits = await request('/api/stratagate/audit?namespace=dsh%3Aproject%3Atest&offset=1&limit=100')
+    expect(events.body).toMatchObject({ total: 1, offset: 1, limit: 200, items: [] })
+    expect(blocks.body).toMatchObject({ total: 1, offset: 1, limit: 200, items: [] })
+    expect(audits.body).toMatchObject({ total: 1, offset: 1, limit: 100, items: [] })
   })
 
   it('updates the global Block settings while memory routes remain read-only', async () => {

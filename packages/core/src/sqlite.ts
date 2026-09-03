@@ -6,6 +6,7 @@ import {
   cloneSnapshot,
   type ElementProjectionJob,
   type ExtractionJob,
+  type BlockSummaryJob,
   type GraphProjectionJob,
   type IngestionReceipt,
   type LoadedStrataGateState,
@@ -23,6 +24,7 @@ import type {
   ElementFactStatus,
   EventCard,
   EventTemporal,
+  ExternalMemoryImportJob,
   GraphEdge,
   GraphNode,
   MemoryBlock,
@@ -40,6 +42,11 @@ export interface SqliteStorageOptions {
   filename: string;
   readonly?: boolean;
   timeoutMs?: number;
+}
+
+export interface NamespaceRevision {
+  namespace: string;
+  revision: number;
 }
 
 interface SpaceRow {
@@ -80,6 +87,7 @@ interface BlockRow {
   pointer_anchor_block_position: number;
   last_lifted_at: string | null;
   last_lifted_by: 'user' | 'agent' | null;
+  processing_status: MemoryBlock['processingStatus'];
 }
 
 interface EventRow {
@@ -118,6 +126,21 @@ interface ExtractionJobRow {
   status: ExtractionJob['status'];
   attempts: number;
   last_error: string | null;
+  next_retry_at: string | null;
+  updated_at: string;
+}
+
+interface ExternalMemoryImportJobRow {
+  id: string;
+  payload_json: string;
+}
+
+interface BlockSummaryJobRow {
+  block_id: string;
+  status: BlockSummaryJob['status'];
+  attempts: number;
+  last_error: string | null;
+  next_retry_at: string | null;
   updated_at: string;
 }
 
@@ -235,6 +258,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   pointer_anchor_block_position INTEGER NOT NULL,
   last_lifted_at TEXT,
   last_lifted_by TEXT CHECK (last_lifted_by IS NULL OR last_lifted_by IN ('user', 'agent')),
+  processing_status TEXT NOT NULL CHECK (processing_status IN ('pending', 'ready')),
   PRIMARY KEY (namespace, id),
   UNIQUE (namespace, sequence),
   FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
@@ -359,6 +383,19 @@ CREATE TABLE IF NOT EXISTS extraction_jobs (
   status TEXT NOT NULL,
   attempts INTEGER NOT NULL,
   last_error TEXT,
+  next_retry_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (namespace, block_id),
+  FOREIGN KEY (namespace, block_id) REFERENCES blocks(namespace, id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS block_summary_jobs (
+  namespace TEXT NOT NULL,
+  block_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  last_error TEXT,
+  next_retry_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (namespace, block_id),
   FOREIGN KEY (namespace, block_id) REFERENCES blocks(namespace, id) ON DELETE CASCADE
@@ -414,6 +451,16 @@ CREATE TABLE IF NOT EXISTS ingestion_receipts (
   receipt_id TEXT NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY (namespace, receipt_id),
+  FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS external_memory_import_jobs (
+  namespace TEXT NOT NULL,
+  id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (namespace, id),
   FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE
 ) STRICT;
 `;
@@ -507,11 +554,14 @@ export class SqliteStorage implements StorageAdapter {
       startTurn: row.start_turn,
       endTurn: row.end_turn,
       createdAt: row.created_at,
-      shouldExtract: Boolean(row.should_extract),
-      l0Title: row.l0_title,
-      l0Tags: parseJson<string[]>(row.l0_tags_json, 'blocks.l0_tags_json'),
-      l1Summary: row.l1_summary,
-      l2Keypoints: parseJson<string[]>(row.l2_keypoints_json, 'blocks.l2_keypoints_json'),
+      processingStatus: row.processing_status,
+      ...(row.l0_title ? {
+        shouldExtract: Boolean(row.should_extract),
+        l0Title: row.l0_title,
+        l0Tags: parseJson<string[]>(row.l0_tags_json, 'blocks.l0_tags_json'),
+        l1Summary: row.l1_summary,
+        l2Keypoints: parseJson<string[]>(row.l2_keypoints_json, 'blocks.l2_keypoints_json'),
+      } : {}),
       l3Condensed: row.l3_condensed,
       l4Readable: row.l4_readable,
       l5Raw: messagesByBlock.get(row.id) ?? [],
@@ -520,6 +570,18 @@ export class SqliteStorage implements StorageAdapter {
       pointerAnchorBlockPosition: row.pointer_anchor_block_position,
       lastLiftedAt: row.last_lifted_at,
       lastLiftedBy: row.last_lifted_by,
+    }));
+
+    const summaryJobs = (this.database.prepare(`
+      SELECT block_id, status, attempts, last_error, next_retry_at, updated_at
+      FROM block_summary_jobs WHERE namespace = ? ORDER BY block_id
+    `).all(key) as unknown as BlockSummaryJobRow[]).map<BlockSummaryJob>((row) => ({
+      blockId: row.block_id,
+      status: row.status,
+      attempts: row.attempts,
+      lastError: row.last_error,
+      nextRetryAt: row.next_retry_at,
+      updatedAt: row.updated_at,
     }));
 
     const sourceRows = this.database.prepare(`
@@ -639,13 +701,14 @@ export class SqliteStorage implements StorageAdapter {
     });
 
     const extractionJobs = (this.database.prepare(`
-      SELECT block_id, status, attempts, last_error, updated_at
+      SELECT block_id, status, attempts, last_error, next_retry_at, updated_at
       FROM extraction_jobs WHERE namespace = ? ORDER BY block_id
     `).all(key) as unknown as ExtractionJobRow[]).map<ExtractionJob>((row) => ({
       blockId: row.block_id,
       status: row.status,
       attempts: row.attempts,
       lastError: row.last_error,
+      nextRetryAt: row.next_retry_at,
       updatedAt: row.updated_at,
     }));
 
@@ -696,6 +759,12 @@ export class SqliteStorage implements StorageAdapter {
       createdAt: row.created_at,
     }));
 
+    const externalMemoryImportJobs = (this.database.prepare(`
+      SELECT id, payload_json FROM external_memory_import_jobs
+      WHERE namespace = ? ORDER BY created_at, id
+    `).all(key) as unknown as ExternalMemoryImportJobRow[])
+      .map((row) => parseJson<ExternalMemoryImportJob>(row.payload_json, 'external_memory_import_jobs.payload_json'));
+
     const graphState = this.database.prepare(`
       SELECT nodes_json, edges_json, jobs_json FROM graph_state WHERE namespace = ?
     `).get(key) as GraphStateRow | undefined;
@@ -711,6 +780,7 @@ export class SqliteStorage implements StorageAdapter {
       blockDecayLambda: space.block_decay_lambda,
       openTail,
       blocks,
+      summaryJobs,
       events,
       graphNodes,
       graphEdges,
@@ -720,6 +790,7 @@ export class SqliteStorage implements StorageAdapter {
       elementProjectionJobs,
       usageReceipts,
       ingestionReceipts,
+      externalMemoryImportJobs,
       successfulModelResponses,
     };
     assertValidSnapshot(snapshot);
@@ -787,8 +858,9 @@ export class SqliteStorage implements StorageAdapter {
       INSERT INTO blocks (
         namespace, id, thread_id, sequence, start_turn, end_turn, created_at, should_extract,
         l0_title, l0_tags_json, l1_summary, l2_keypoints_json, l3_condensed, l4_readable,
-        pointer_current_level, pointer_anchor_level, pointer_anchor_block_position, last_lifted_at, last_lifted_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        pointer_current_level, pointer_anchor_level, pointer_anchor_block_position, last_lifted_at, last_lifted_by,
+        processing_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
         thread_id = excluded.thread_id,
         sequence = excluded.sequence,
@@ -806,7 +878,8 @@ export class SqliteStorage implements StorageAdapter {
         pointer_anchor_level = excluded.pointer_anchor_level,
         pointer_anchor_block_position = excluded.pointer_anchor_block_position,
         last_lifted_at = excluded.last_lifted_at,
-        last_lifted_by = excluded.last_lifted_by
+        last_lifted_by = excluded.last_lifted_by,
+        processing_status = excluded.processing_status
     `);
     for (const block of snapshot.blocks) {
       insertBlock.run(
@@ -817,11 +890,11 @@ export class SqliteStorage implements StorageAdapter {
         block.startTurn,
         block.endTurn,
         block.createdAt,
-        Number(block.shouldExtract),
-        block.l0Title,
-        JSON.stringify(block.l0Tags),
-        block.l1Summary,
-        JSON.stringify(block.l2Keypoints),
+        Number(block.shouldExtract ?? false),
+        block.l0Title ?? '',
+        JSON.stringify(block.l0Tags ?? []),
+        block.l1Summary ?? '',
+        JSON.stringify(block.l2Keypoints ?? []),
         block.l3Condensed,
         block.l4Readable,
         block.pointerCurrentLevel,
@@ -829,6 +902,7 @@ export class SqliteStorage implements StorageAdapter {
         block.pointerAnchorBlockPosition,
         block.lastLiftedAt,
         block.lastLiftedBy,
+        block.processingStatus,
       );
     }
 
@@ -1018,16 +1092,32 @@ export class SqliteStorage implements StorageAdapter {
 
     const insertJob = this.database.prepare(`
       INSERT INTO extraction_jobs (
-        namespace, block_id, status, attempts, last_error, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        namespace, block_id, status, attempts, last_error, next_retry_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, block_id) DO UPDATE SET
         status = excluded.status,
         attempts = excluded.attempts,
         last_error = excluded.last_error,
+        next_retry_at = excluded.next_retry_at,
         updated_at = excluded.updated_at
     `);
     for (const job of snapshot.extractionJobs) {
-      insertJob.run(namespace, job.blockId, job.status, job.attempts, job.lastError, job.updatedAt);
+      insertJob.run(namespace, job.blockId, job.status, job.attempts, job.lastError, job.nextRetryAt, job.updatedAt);
+    }
+
+    const insertSummaryJob = this.database.prepare(`
+      INSERT INTO block_summary_jobs (
+        namespace, block_id, status, attempts, last_error, next_retry_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (namespace, block_id) DO UPDATE SET
+        status = excluded.status,
+        attempts = excluded.attempts,
+        last_error = excluded.last_error,
+        next_retry_at = excluded.next_retry_at,
+        updated_at = excluded.updated_at
+    `);
+    for (const job of snapshot.summaryJobs) {
+      insertSummaryJob.run(namespace, job.blockId, job.status, job.attempts, job.lastError, job.nextRetryAt, job.updatedAt);
     }
 
     const insertElementProjectionJob = this.database.prepare(`
@@ -1100,6 +1190,15 @@ export class SqliteStorage implements StorageAdapter {
       insertIngestionReceipt.run(namespace, receipt.id, receipt.createdAt);
     }
 
+    this.database.prepare('DELETE FROM external_memory_import_jobs WHERE namespace = ?').run(namespace);
+    const insertExternalMemoryImportJob = this.database.prepare(`
+      INSERT INTO external_memory_import_jobs (namespace, id, payload_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const job of snapshot.externalMemoryImportJobs) {
+      insertExternalMemoryImportJob.run(namespace, job.id, JSON.stringify(job), job.createdAt, job.updatedAt);
+    }
+
     this.database.prepare('DELETE FROM model_response_history WHERE namespace = ?').run(namespace);
     const insertSuccessfulModelResponse = this.database.prepare(`
       INSERT INTO model_response_history (namespace, id, kind, response, created_at)
@@ -1123,7 +1222,7 @@ export class SqliteStorage implements StorageAdapter {
         this.database.exec(THREAD_INDEXES);
         this.database.exec(`PRAGMA user_version = ${STRATAGATE_STORAGE_SCHEMA_VERSION}`);
       });
-    } else if (version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7) {
+    } else if (version >= 1 && version < STRATAGATE_STORAGE_SCHEMA_VERSION) {
       this.immediateTransaction(() => {
         this.database.exec(SCHEMA);
         if (version === 1) {
@@ -1158,6 +1257,13 @@ export class SqliteStorage implements StorageAdapter {
         }
         if (!blockColumns.some(({ name }) => name === 'last_lifted_by')) {
           this.database.exec("ALTER TABLE blocks ADD COLUMN last_lifted_by TEXT CHECK (last_lifted_by IS NULL OR last_lifted_by IN ('user', 'agent'))");
+        }
+        if (!blockColumns.some(({ name }) => name === 'processing_status')) {
+          this.database.exec("ALTER TABLE blocks ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'ready' CHECK (processing_status IN ('pending', 'ready'))");
+        }
+        const extractionColumns = this.database.prepare("PRAGMA table_info('extraction_jobs')").all() as unknown as Array<{ name: string }>;
+        if (!extractionColumns.some(({ name }) => name === 'next_retry_at')) {
+          this.database.exec('ALTER TABLE extraction_jobs ADD COLUMN next_retry_at TEXT');
         }
         const messageColumns = this.database.prepare("PRAGMA table_info('messages')").all() as unknown as Array<{ name: string }>;
         if (!messageColumns.some(({ name }) => name === 'thread_id')) {
@@ -1211,5 +1317,11 @@ export class SqliteStorage implements StorageAdapter {
     this.assertOpen();
     return (this.database.prepare('SELECT namespace FROM memory_spaces ORDER BY namespace').all() as Array<{ namespace: string }>)
       .map(({ namespace }) => namespace);
+  }
+
+  listNamespaceRevisions(): NamespaceRevision[] {
+    this.assertOpen();
+    return this.database.prepare('SELECT namespace, revision FROM memory_spaces ORDER BY namespace')
+      .all() as unknown as NamespaceRevision[];
   }
 }

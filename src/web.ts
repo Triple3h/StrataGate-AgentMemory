@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import type { Context } from '@deepseek-ai/cordis'
 import {
@@ -7,12 +8,13 @@ import {
   KNOWLEDGE_GRAPH_PROJECTOR_VERSION,
   type ElementCard,
   type EventCard,
+  type ExternalMemoryAction,
   type MemoryBlock,
   type RawMessage,
   type StrataGateSnapshot,
   type UsageReceipt,
 } from '@diqier/stratagate'
-import type { StrataGateRuntime } from './runtime.js'
+import type { AdminSnapshotEntry, StrataGateRuntime } from './runtime.js'
 import { clusterKnowledgeGraph } from './graph-clustering.js'
 
 const STRATAGATE_DSH_VERSION = '0.2.36'
@@ -54,6 +56,7 @@ export interface WebResponse {
 export interface WebRequest {
   method?: string
   url?: string
+  headers?: Record<string, string | string[] | undefined>
   /** Parsed JSON body supplied by the host web server (or a JSON string). */
   body?: unknown
   [Symbol.asyncIterator]?: () => AsyncIterator<Uint8Array | string>
@@ -121,6 +124,13 @@ function sourceMessages(snapshot: StrataGateSnapshot, ids?: ReadonlySet<string>)
 }
 
 function blockLayers(block: MemoryBlock): Array<{ level: number; content: string }> {
+  if (block.processingStatus !== 'ready' || !block.l0Title || !block.l0Tags || !block.l1Summary || !block.l2Keypoints) {
+    return [
+      { level: 3, content: block.l3Condensed },
+      { level: 4, content: block.l4Readable },
+      { level: 5, content: block.l5Raw.map((message) => `${message.role}: ${message.content}`).join('\n\n') },
+    ]
+  }
   return [
     { level: 0, content: `${block.l0Title}\n标签：${block.l0Tags.join('、') || '无'}` },
     { level: 1, content: block.l1Summary || block.l0Title },
@@ -185,15 +195,19 @@ class AdminHttpError extends Error {
   }
 }
 
-async function overview(runtime: StrataGateRuntime): Promise<unknown> {
-  const namespaces = await runtime.adminNamespaces()
+async function overview(runtime: StrataGateRuntime, cachedEntries?: readonly AdminSnapshotEntry[]): Promise<unknown> {
+  const entries = cachedEntries ?? await Promise.all((await runtime.adminNamespaces()).map(async (namespace) => ({
+    namespace,
+    revision: 0,
+    snapshot: await runtime.adminSnapshot(namespace),
+  })))
   const rows = []
-  for (const namespace of namespaces) {
-    const snapshot = await runtime.adminSnapshot(namespace)
+  for (const { namespace, snapshot } of entries) {
     if (!snapshot) continue
     const failedJobs = snapshot.extractionJobs.filter(({ status }) => status === 'failed').length
       + snapshot.graphProjectionJobs.filter(({ status }) => status === 'failed').length
-    const processingJobs = snapshot.extractionJobs.filter(({ status }) => status === 'running').length
+    const processingJobs = snapshot.summaryJobs.filter(({ status, nextRetryAt }) => status === 'pending' || status === 'running' || (status === 'failed' && nextRetryAt !== null)).length
+      + snapshot.extractionJobs.filter(({ status, nextRetryAt }) => status === 'running' || (status === 'failed' && nextRetryAt !== null)).length
       + snapshot.graphProjectionJobs.filter(({ status }) => status === 'pending' || status === 'running').length
     const failedJobDetails = [
       ...snapshot.extractionJobs
@@ -316,10 +330,41 @@ async function importExternalMemory(runtime: StrataGateRuntime, req: WebRequest)
     throw new AdminHttpError(400, '导入请求缺少 JSON body')
   }
   const namespace = typeof body.namespace === 'string' ? body.namespace.trim() : ''
-  const text = typeof body.text === 'string' ? body.text.trim() : ''
   if (!namespace) throw new AdminHttpError(400, 'namespace is required')
-  if (!text) throw new AdminHttpError(400, 'text is required')
-  return runtime.adminImportExternalMemory(namespace, text)
+  const operation = typeof body.operation === 'string' ? body.operation : 'preview'
+  if (operation === 'preview') {
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    if (!text) throw new AdminHttpError(400, 'text is required')
+    return runtime.adminPreviewExternalMemory(namespace, text)
+  }
+  if (operation === 'status') {
+    const jobId = typeof body.jobId === 'string' ? body.jobId.trim() : undefined
+    return runtime.adminExternalMemoryStatus(namespace, jobId)
+  }
+  if (operation === 'retry') {
+    const jobId = typeof body.jobId === 'string' ? body.jobId.trim() : ''
+    if (!jobId) throw new AdminHttpError(400, 'jobId is required')
+    return runtime.adminRetryExternalMemory(namespace, jobId)
+  }
+  if (operation === 'commit') {
+    const jobId = typeof body.jobId === 'string' ? body.jobId.trim() : ''
+    if (!jobId) throw new AdminHttpError(400, 'jobId is required')
+    const allowed = new Set<ExternalMemoryAction>(['ADD', 'MERGE', 'SUPERSEDE', 'CONFLICT', 'IGNORE'])
+    const choices = Array.isArray(body.choices) ? body.choices.flatMap((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+      const item = value as Record<string, unknown>
+      const index = item.index
+      const action = typeof item.action === 'string' ? item.action.toUpperCase() as ExternalMemoryAction : 'IGNORE'
+      return Number.isSafeInteger(index) && allowed.has(action) ? [{ index: index as number, action }] : []
+    }) : []
+    return runtime.adminCommitExternalMemory(namespace, jobId, choices)
+  }
+  if (operation === 'undo') {
+    const sourceBlockId = typeof body.sourceBlockId === 'string' ? body.sourceBlockId.trim() : ''
+    if (!sourceBlockId) throw new AdminHttpError(400, 'sourceBlockId is required')
+    return runtime.adminUndoExternalMemory(namespace, sourceBlockId)
+  }
+  throw new AdminHttpError(400, 'operation must be preview, status, retry, commit, or undo')
 }
 
 function externalMemoryPrompt(): unknown {
@@ -627,10 +672,13 @@ async function sources(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
     if (!node) throw new AdminHttpError(404, `Unknown graph node: ${nodeId}`)
     events = snapshot.events.filter(({ id }) => node.sourceEventIds.includes(id))
     ids = new Set(events.flatMap(({ sourceMessageIds }) => sourceMessageIds))
+    const edges = snapshot.graphEdges.filter(({ fromNodeId, toNodeId }) => fromNodeId === node.id || toNodeId === node.id)
+    const relatedNodeIds = new Set([node.id, ...edges.flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId])])
     return {
       namespace,
       node,
-      edges: snapshot.graphEdges.filter(({ fromNodeId, toNodeId }) => fromNodeId === node.id || toNodeId === node.id),
+      nodes: snapshot.graphNodes.filter(({ id }) => relatedNodeIds.has(id)),
+      edges,
       events: events.map(eventSummary),
       messages: sourceMessages(snapshot, ids),
     }
@@ -713,6 +761,90 @@ async function audit(runtime: StrataGateRuntime, url: URL): Promise<unknown> {
   }
 }
 
+interface DashboardResult {
+  etag: string
+  notModified: boolean
+  body?: unknown
+}
+
+function requestHeader(req: WebRequest, name: string): string {
+  const headers = req.headers ?? {}
+  const key = Object.keys(headers).find((candidate) => candidate.toLocaleLowerCase() === name.toLocaleLowerCase())
+  const value = key ? headers[key] : undefined
+  return Array.isArray(value) ? value.join(', ') : value ?? ''
+}
+
+async function dashboard(runtime: StrataGateRuntime, url: URL, ifNoneMatch: string): Promise<DashboardResult> {
+  const entries = await runtime.adminSnapshotEntries()
+  const requestedNamespace = url.searchParams.get('namespace')?.trim() ?? ''
+  const selected = entries.find(({ namespace }) => namespace === requestedNamespace) ?? entries[0]
+  const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+  const revisionKey = entries.map(({ namespace, revision }) => `${namespace}:${revision}`).join('|')
+  const etag = `"${createHash('sha256').update(`${revisionKey}\0${selected?.namespace ?? ''}\0${threadId}`).digest('base64url').slice(0, 24)}"`
+  if (ifNoneMatch.split(',').map((value) => value.trim()).includes(etag)) return { etag, notModified: true }
+
+  const overviewValue = await overview(runtime, entries)
+  if (!selected) {
+    return { etag, notModified: false, body: { namespace: null, overview: overviewValue, data: null, processing: false } }
+  }
+
+  const snapshotRuntime = {
+    adminSnapshot: async (namespace: string) => namespace === selected.namespace ? selected.snapshot : null,
+  } as unknown as StrataGateRuntime
+  const memoryUrl = (kind: string, limit?: string): URL => {
+    const target = new URL(url)
+    target.searchParams.set('namespace', selected.namespace)
+    target.searchParams.set('kind', kind)
+    if (limit) target.searchParams.set('limit', limit)
+    return target
+  }
+  const [eventResult, graphResult, blockResult, auditResult] = await Promise.all([
+    memories(snapshotRuntime, memoryUrl('events', '40')),
+    memories(snapshotRuntime, memoryUrl('graph')),
+    memories(snapshotRuntime, memoryUrl('blocks', '40')),
+    audit(snapshotRuntime, memoryUrl('audit', '100')),
+  ]) as [any, any, any, any]
+  const selectedOverview = (overviewValue as { namespaces?: Array<{ namespace: string; processingJobs?: number }> })
+    .namespaces?.find(({ namespace }) => namespace === selected.namespace)
+  return {
+    etag,
+    notModified: false,
+    body: {
+      namespace: selected.namespace,
+      revision: selected.revision,
+      overview: overviewValue,
+      processing: Number(selectedOverview?.processingJobs ?? 0) > 0,
+      data: {
+        events: eventResult.items ?? [],
+        graph: graphResult,
+        blocks: blockResult.items ?? [],
+        openBlock: blockResult.openBlock ?? null,
+        conversations: blockResult.conversations ?? [],
+        activeThreadId: blockResult.activeThreadId ?? null,
+        audit: auditResult.items ?? [],
+        pagination: {
+          events: { total: eventResult.total ?? 0, offset: eventResult.offset ?? 0, limit: eventResult.limit ?? 40 },
+          blocks: { total: blockResult.total ?? 0, offset: blockResult.offset ?? 0, limit: blockResult.limit ?? 40 },
+          audit: { total: auditResult.total ?? 0, offset: auditResult.offset ?? 0, limit: auditResult.limit ?? 100 },
+        },
+      },
+    },
+  }
+}
+
+function sendDashboard(res: WebResponse, result: DashboardResult): void {
+  res.setHeader('ETag', result.etag)
+  res.setHeader('Cache-Control', 'private, no-cache')
+  if (result.notModified) {
+    res.statusCode = 304
+    res.end('')
+    return
+  }
+  res.statusCode = 200
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  res.end(JSON.stringify(redactValue(result.body)))
+}
+
 export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebRequest, res: WebResponse): Promise<void> {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -724,10 +856,21 @@ export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebReq
       if (req.method !== 'PATCH') throw new AdminHttpError(405, 'StrataGate Block expansion requires PATCH')
       sendJson(res, 200, await expandBlock(runtime, url))
     } else if (path === '/api/stratagate/import') {
-      if (req.method === 'GET') sendJson(res, 200, externalMemoryPrompt())
+      if (req.method === 'GET') {
+        const operation = url.searchParams.get('operation')
+        if (operation === 'status') {
+          const namespace = url.searchParams.get('namespace')?.trim() ?? ''
+          if (!namespace) throw new AdminHttpError(400, 'namespace is required')
+          const jobId = url.searchParams.get('jobId')?.trim() || undefined
+          sendJson(res, 200, await runtime.adminExternalMemoryStatus(namespace, jobId))
+        } else {
+          sendJson(res, 200, externalMemoryPrompt())
+        }
+      }
       else if (req.method === 'POST') sendJson(res, 200, await importExternalMemory(runtime, req))
       else throw new AdminHttpError(405, 'External memory import requires GET or POST')
     } else if (req.method !== 'GET') throw new AdminHttpError(405, 'StrataGate memory data is read-only')
+    else if (path === '/api/stratagate/dashboard') sendDashboard(res, await dashboard(runtime, url, requestHeader(req, 'if-none-match')))
     else if (path === '/api/stratagate/overview') sendJson(res, 200, await overview(runtime))
     else if (path === '/api/stratagate/memories') sendJson(res, 200, await memories(runtime, url))
     else if (path === '/api/stratagate/sources') sendJson(res, 200, await sources(runtime, url))

@@ -40,7 +40,7 @@ describe('WorkBuddyRuntime', () => {
     })
 
     const namespace = await memory.getBlocks('thread-b', 'namespace')
-    expect(namespace).toMatchObject({ scope: 'namespace', results: [{ threadId: 'thread-a' }] })
+    expect(namespace).toMatchObject({ scope: 'namespace', namespaceBlockCount: 1, results: [] })
   })
 
   it('persists L5 first and derives blocks in the background', async () => {
@@ -194,7 +194,7 @@ describe('WorkBuddyRuntime', () => {
 
     expect(await memory.status()).toMatchObject({
       mode: 'full',
-      counts: { blocks: 2, events: 1, elements: 1 },
+      counts: { blocks: 2, events: 2, elements: 1 },
     })
     const elements = await memory.searchElements('Singapore', 'session-1')
     expect(elements.results[0]).toMatchObject({ kind: 'element', content: 'Singapore' })
@@ -248,7 +248,7 @@ process.stdout.write(JSON.stringify({ structured_output: result }))
     expect(await memory.status()).toMatchObject({
       mode: 'full',
       model: { provider: 'workbuddy', model: 'lite' },
-      counts: { blocks: 2, events: 1, elements: 1 },
+      counts: { blocks: 2, events: 2, elements: 1 },
     })
   })
 })

@@ -75,7 +75,6 @@ describe('Event-backed knowledge graph', () => {
     };
     const memory = await StrataGate.openWithStorage(options);
     await memory.appendTurn({ user: 'a', assistant: 'b' });
-    await memory.appendTurn({ user: 'c', assistant: 'd' });
     expect(memory.listGraphProjectionJobs()[0]).toMatchObject({ status: 'failed', attempts: 1, lastError: 'rate limited' });
 
     const restored = await StrataGate.openWithStorage(options);

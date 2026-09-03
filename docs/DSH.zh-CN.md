@@ -80,7 +80,7 @@ DSH_HOME/stratagate/memory.db
 - 默认不保存子 Agent 的对话轮次；同一项目中的子 Agent 仍然可以读取项目记忆。
 - 每个 DSH 对话轮次都有持久化的写入回执，因此重放或重试不会导致重复保存。
 - StrataGate 会执行 Block 摘要、Event 提取、版本化 Knowledge Graph 投影、搜索、Evidence Gate（证据门控）以及仅在使用后触发的强化。
-- Block 封存后，插件使用 DSH 原生 surface `replace`，以该 Block 当前衰减得到的 L0–L5 表示替换对应的原始 surface 消息。后续模型请求前，如果衰减、手动提升或 λ 调整改变了当前层级，插件会再次替换该 checkpoint。尚未封存的 open tail 与完整工具调用/结果链继续作为 DSH 原生消息保留。
+- Block 到达边界时，StrataGate 先持久化真实的 L3–L5，不修改 DSH surface。只有 L0–L2 校验通过且 Event 处理完成、Block 进入可衰减状态后，插件才使用原生 surface `replace`；待处理或失败的 Block 始终保留原始会话消息。后续衰减、手动提升或 λ 调整也只更新已就绪 checkpoint。尚未封存的 open tail 与完整工具调用/结果链继续作为 DSH 原生消息保留。
 - 每次主模型调用前，动态系统上下文只注入最多 4 条项目级激活 Event 和 4 个 active Graph Node，不再序列化 Current conversation、open tail、已封 Block 或 tool calls。
 
 激活查询由当前人类消息和当前会话 open tail 的最近两个 turn 组成。现有 BM25 搜索继续作为词面相关性门槛，只有 pinned 和 safety 记忆可以例外进入候选；现有记忆权重提供第二路排序，再由 RRF 融合相关性与权重排序。激活区固定使用约 900 tokens 的预算，不会随数据库增大而增长。
@@ -130,7 +130,7 @@ ID、`blockId`、角色、轮次和有界摘录。`narrative`、`quotes`、来�
 
 界面不允许直接编辑、删除或批准 Event、图谱事实和来源消息，但可以通过三种明确操作改变记忆状态：手动展开 Block、导入其他 AI 的记忆，以及在“高级设置”中修改每个 Block 包含的完整对话轮数或全局 Block 衰减系数 λ。修改轮数时，界面会解释两者关系并给出保持单位对话衰减速度的建议 λ，是否采用由用户决定。保存后设置立即应用到所有已有工作区，同时成为新工作区默认值，并在重启后保持；已封存 Block 不会重新切分。
 
-当前界面的导入流程有意保持简单：它会校验粘贴的 `stratagate.external-memory.v2` JSON，并把每条有效候选新增为 Event；暂时不会与已有 Event 自动合并、取代、标记冲突或去重。消息内容和结构化工具轨迹中的常见令牌及凭证格式，会在离开本地服务器前被脱敏。SQLite 数据库始终是唯一可信数据源。
+当前界面会在写入前校验并预览粘贴的 `stratagate.external-memory.v2` JSON：不合格内容会进入模型兜底恢复，恢复候选全部需要人工确认。完全重复项会被确定性忽略，其余候选由当前模型结合 Top-K 本地 Event 判断新增、合并、取代、冲突或忽略。分析任务和逐条进度持久化到 SQLite，关闭并重新打开页面后会恢复进度；高置信度判断自动采用，低置信度项可由用户选择具体动作；提交后可按批次撤销。消息内容和结构化工具轨迹中的常见令牌及凭证格式，会在离开本地服务器前被脱敏。SQLite 数据库始终是唯一可信数据源。
 
 ## 配置
 

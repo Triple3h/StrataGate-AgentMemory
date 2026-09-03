@@ -17,6 +17,7 @@ export interface RawMessage {
 
 export type BlockLevel = 0 | 1 | 2 | 3 | 4 | 5;
 export type BlockLiftSource = 'user' | 'agent';
+export type BlockProcessingStatus = 'pending' | 'ready';
 
 export interface BlockLayers {
   l0Title: string;
@@ -28,14 +29,20 @@ export interface BlockLayers {
   l5Raw: RawMessage[];
 }
 
-export interface MemoryBlock extends BlockLayers {
+export interface MemoryBlock extends Omit<BlockLayers, 'l0Title' | 'l0Tags' | 'l1Summary' | 'l2Keypoints'> {
   id: string;
   threadId?: string;
   sequence: number;
   startTurn: number;
   endTurn: number;
   createdAt: string;
-  shouldExtract: boolean;
+  /** Model-generated layers are absent until a validated summarizer result is persisted. */
+  l0Title?: string;
+  l0Tags?: string[];
+  l1Summary?: string;
+  l2Keypoints?: string[];
+  shouldExtract?: boolean;
+  processingStatus: BlockProcessingStatus;
   pointerCurrentLevel: BlockLevel;
   pointerAnchorLevel: BlockLevel;
   pointerAnchorBlockPosition: number;
@@ -135,7 +142,7 @@ export interface EventCard extends Omit<EventCardInput, 'id'> {
 export interface ExtractionContext {
   previous: MemoryBlock | null;
   target: MemoryBlock;
-  next: MemoryBlock;
+  next: MemoryBlock | null;
   timeline: Array<Pick<EventCard, 'id' | 'title' | 'temporal'>>;
 }
 
@@ -185,6 +192,8 @@ export interface ExternalMemoryDecision {
   /** Optional consolidated candidate used by MERGE. */
   mergedCandidate?: ExternalMemoryCandidate;
   reason?: string;
+  /** Calibrated adjudication confidence. Missing confidence requires review. */
+  confidence?: number;
 }
 
 export type ExternalMemoryExtractor = (
@@ -210,6 +219,65 @@ export interface ExternalMemoryImportDecision {
   existingEventIds: string[];
   createdEventId?: string;
   reason?: string;
+  confidence?: number;
+}
+
+export interface ExternalMemoryPreviewDecision extends ExternalMemoryImportDecision {
+  matches: ExternalMemoryMatch[];
+  requiresConfirmation: boolean;
+  mergedCandidate?: ExternalMemoryCandidate;
+}
+
+export interface ExternalMemoryImportPreview {
+  importedAt: string;
+  baseRevision: number;
+  decisions: ExternalMemoryPreviewDecision[];
+}
+
+export type ExternalMemoryImportJobStatus =
+  | 'extracting'
+  | 'processing'
+  | 'awaiting_confirmation'
+  | 'ready'
+  | 'failed'
+  | 'committed'
+  | 'undone';
+
+/** Crash-safe progress for one external-memory import analysis. */
+export interface ExternalMemoryImportJob {
+  id: string;
+  text: string;
+  importedAt: string;
+  status: ExternalMemoryImportJobStatus;
+  candidates: ExternalMemoryCandidate[];
+  decisions: ExternalMemoryPreviewDecision[];
+  processedCount: number;
+  totalCount: number;
+  recoveredFromInvalidJson: boolean;
+  parseError: string | null;
+  lastError: string | null;
+  sourceBlockId: string | null;
+  importedCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Read-only work prepared before a model call; it holds no storage revision. */
+export interface ExternalMemoryImportWorkItem {
+  jobId: string;
+  index: number;
+  candidate: ExternalMemoryCandidate;
+  matches: ExternalMemoryMatch[];
+  forceConfirmation: boolean;
+  deterministicDecision?: ExternalMemoryDecision;
+}
+
+export interface ExternalMemoryCommitOptions {
+  text: string;
+  importedAt: string;
+  baseRevision: number;
+  decisions: ExternalMemoryPreviewDecision[];
+  candidates: ExternalMemoryCandidate[];
 }
 
 export interface ExternalMemoryImportResult {
@@ -217,6 +285,12 @@ export interface ExternalMemoryImportResult {
   decisions: ExternalMemoryImportDecision[];
   addedEvents: EventCard[];
   changedEventIds: string[];
+}
+
+export interface ExternalMemoryUndoResult {
+  sourceBlockId: string;
+  removedEventIds: string[];
+  restoredEventIds: string[];
 }
 
 export type MemoryElementType = 'person' | 'project' | 'organization' | 'tool' | 'place';
@@ -377,6 +451,8 @@ export interface SearchOptions {
   eventType?: string;
   happenedFrom?: string;
   happenedTo?: string;
+  /** Disable retrieval bookkeeping for read-only previews. */
+  trackRetrieval?: boolean;
 }
 
 export interface EventSearchResult {
@@ -420,6 +496,7 @@ export interface RawSearchHit {
 
 export interface AppendTurnResult {
   sealedBlock: MemoryBlock | null;
+  readyBlocks: MemoryBlock[];
   extractedEvents: EventCard[];
   projectedElements: ElementCard[];
 }
