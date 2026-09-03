@@ -25,6 +25,24 @@ async function runtime(): Promise<WorkBuddyRuntime> {
 }
 
 describe('WorkBuddyRuntime', () => {
+  it('makes block scope and empty reasons explicit', async () => {
+    const memory = await runtime()
+    await memory.appendTurn({ user: 'thread A marker', assistant: 'saved', threadId: 'thread-a', receiptId: 'turn-a' })
+    await memory.processPending()
+
+    const session = await memory.getBlocks('thread-b')
+    expect(session).toMatchObject({
+      scope: 'session',
+      threadId: 'thread-b',
+      results: [],
+      namespaceBlockCount: 1,
+      emptyReason: 'blocks_exist_in_other_threads',
+    })
+
+    const namespace = await memory.getBlocks('thread-b', 'namespace')
+    expect(namespace).toMatchObject({ scope: 'namespace', namespaceBlockCount: 1, results: [] })
+  })
+
   it('persists L5 first and derives blocks in the background', async () => {
     const memory = await runtime()
     await memory.appendTurn({
@@ -176,7 +194,7 @@ describe('WorkBuddyRuntime', () => {
 
     expect(await memory.status()).toMatchObject({
       mode: 'full',
-      counts: { blocks: 2, events: 1, elements: 1 },
+      counts: { blocks: 2, events: 2, elements: 1 },
     })
     const elements = await memory.searchElements('Singapore', 'session-1')
     expect(elements.results[0]).toMatchObject({ kind: 'element', content: 'Singapore' })
@@ -230,7 +248,7 @@ process.stdout.write(JSON.stringify({ structured_output: result }))
     expect(await memory.status()).toMatchObject({
       mode: 'full',
       model: { provider: 'workbuddy', model: 'lite' },
-      counts: { blocks: 2, events: 1, elements: 1 },
+      counts: { blocks: 2, events: 2, elements: 1 },
     })
   })
 })

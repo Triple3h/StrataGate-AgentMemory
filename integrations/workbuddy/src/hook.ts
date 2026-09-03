@@ -94,6 +94,7 @@ async function stop(input: HookInput): Promise<unknown> {
 
   await runtime.appendTurn({
     ...turn,
+    threadId: sessionId,
     receiptId: `workbuddy:${sessionId}:transcript:${delta.startOffset}-${delta.endOffset}`,
   })
   await runtime.state.writeCursor(sessionId, {

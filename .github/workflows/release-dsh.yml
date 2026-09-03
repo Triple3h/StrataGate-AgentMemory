@@ -40,20 +40,17 @@ jobs:
       - name: Verify tag and package version match
         shell: bash
         run: |
-          expected="stratagate-dsh-v$(node -p 'require("./integrations/deepseek-harness/package.json").version')"
+          expected="stratagate-dsh-v$(node -p 'require("./package.json").version')"
           test "$GITHUB_REF_NAME" = "$expected" || { echo "Expected tag $expected, received $GITHUB_REF_NAME"; exit 1; }
       - run: npm run check
       - run: npm test
-      - run: npm run check:dsh
-      - run: npm run test:dsh
-      - run: npm run build:dsh
       - run: npm run verify:dsh
       - name: Pack release assets from one artifact
         shell: bash
         run: |
-          version="$(node -p 'require("./integrations/deepseek-harness/package.json").version')"
+          version="$(node -p 'require("./package.json").version')"
           versioned="stratagate-dsh-${version}.tgz"
-          npm pack --workspace stratagate-dsh --silent
+          npm pack --silent
           test -f "$versioned"
           cp "$versioned" stratagate-dsh.tgz
           cmp "$versioned" stratagate-dsh.tgz

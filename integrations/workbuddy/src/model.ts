@@ -119,7 +119,7 @@ export function fallbackSummarizer(messages: readonly RawMessage[]): Awaited<Ret
 }
 
 export interface ModelCallbacks {
-  summarizer: BlockSummarizer
+  summarizer?: BlockSummarizer
   extractor?: EventExtractor
   elementProjector?: ElementProjector
 }
@@ -337,7 +337,7 @@ export function modelCallbacks(workBuddy?: WorkBuddyModelConfig, external?: Mode
   const bridges: StructuredModelBridge[] = []
   if (workBuddy) bridges.push(new WorkBuddyHeadlessModelBridge(workBuddy))
   if (external) bridges.push(new OpenAICompatibleModelBridge(external))
-  if (bridges.length === 0) return { summarizer: async (messages) => fallbackSummarizer(messages) }
+  if (bridges.length === 0) return {}
 
   const attempt = async <T>(operation: (bridge: StructuredModelBridge) => Promise<T>): Promise<T> => {
     let lastError: unknown
@@ -351,13 +351,7 @@ export function modelCallbacks(workBuddy?: WorkBuddyModelConfig, external?: Mode
     throw lastError
   }
   return {
-    summarizer: async (messages) => {
-      try {
-        return await attempt((bridge) => bridge.summarizer(messages))
-      } catch {
-        return fallbackSummarizer(messages)
-      }
-    },
+    summarizer: (messages) => attempt((bridge) => bridge.summarizer(messages)),
     extractor: (context) => attempt((bridge) => bridge.extractor(context)),
     elementProjector: (context) => attempt((bridge) => bridge.projector(context)),
   }

@@ -14,3 +14,9 @@ codebuddy --plugin-dir ./integrations/workbuddy
 ```
 
 See [README.zh-CN.md](README.zh-CN.md) for the complete workflow, model configuration, tool contract, privacy boundary, and marketplace installation instructions.
+
+Search cards are compact by default. Event and fact hits keep stable ids, title, summary/value, time,
+and `rankScore`; `rankScore` is only the BM25/RRF ordering metric, not confidence or factual accuracy.
+Raw hits keep a bounded excerpt plus message id and `blockId`; expand the block for complete source content.
+
+`memory_get_blocks` defaults to the active session (`scope=session`) and accepts `scope=namespace` to list every thread in the current project namespace. Responses include the selected scope, namespace, thread id, counts, and a machine-readable `emptyReason`; `memory_search_raw` defaults to namespace scope and accepts the same filter so raw block hits can be browsed or expanded consistently.

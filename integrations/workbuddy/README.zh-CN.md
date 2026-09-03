@@ -1,5 +1,9 @@
 # StrataGate Full for WorkBuddy Desktop
 
+搜索默认返回紧凑卡片：Event/事实保留稳定 ID、标题、摘要或值、时间和 `rankScore`；`rankScore` 仅是
+BM25/RRF 排序指标，不是置信度或事实准确率。Raw 命中保留有界摘录、消息 ID 和 `blockId`，完整原文
+通过 Block expand 获取，详细 Event/Element 字段仍由现有 expand 工具提供。
+
 StrataGate Full 是 WorkBuddy Desktop 的本地优先跨会话记忆插件。它把 Host Adapter 和 MCP Server 放在同一个插件中：回答前自动检索并通过 `additionalContext` 注入历史证据，回答后从 transcript 增量保存完整 L5，再由常驻 MCP 进程调用 WorkBuddy 自带的 `lite` 模型生成 L0–L4、Event 和 Element。用户不需要另外填写 API Key。
 
 ## 工作流
@@ -82,6 +86,8 @@ memory_record_use      memory_status
 ```
 
 所有搜索和展开都会返回新的 `batchId`。`memory_assess` 只能引用该批次中的 evidence refs；`sufficient` 还必须选择 `next_strategy=answer`。`memory_record_use` 使用 `assessmentId` 作为幂等采用回执。
+
+`memory_get_blocks` 默认使用当前会话范围（`scope=session`），也可传入 `scope=namespace` 查看当前项目命名空间的全部 thread。响应会明确返回 scope、namespace、threadId、计数和机器可读的 `emptyReason`；`memory_search_raw` 默认使用 namespace 范围并支持同样的 scope 过滤，raw 命中的 block 可以继续浏览或展开。
 
 ## GitHub Star 邀请
 

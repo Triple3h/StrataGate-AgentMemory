@@ -1,10 +1,10 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@diqier/stratagate": ["../../src/index.ts"],
-      "@diqier/stratagate/sqlite": ["../../src/sqlite.ts"]
+      "@diqier/stratagate": ["../../packages/core/src/index.ts"],
+      "@diqier/stratagate/sqlite": ["../../packages/core/src/sqlite.ts"]
     },
     "rootDir": "../..",
     "noEmit": true

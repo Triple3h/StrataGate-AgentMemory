@@ -15,7 +15,7 @@ StrataGate helps long-running AI agents remember across sessions without turning
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[中文说明](README.zh-CN.md) · [DeepSeek Harness guide](integrations/deepseek-harness/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
+[中文说明](README.zh-CN.md) · [DeepSeek Harness guide](docs/DSH.md) · [Architecture](docs/ARCHITECTURE.md) · [Full evaluation](docs/EVALUATION.md)
 
 <strong>Current public result:</strong> on LoCoMo `conv-26`, StrataGate averaged <strong>80.46%</strong> across 10 independent Judge runs, versus <strong>63.22%</strong> for Mem0 base. [See the scope and protocol](#experimental-results).
 
@@ -58,7 +58,7 @@ By default, the database is stored at:
 DSH_HOME/stratagate/memory.db
 ```
 
-Removing the plugin does not delete the database. For screenshots, configuration, memory tools, and the exact automatic-capture rules, see the [DeepSeek Harness plugin guide](integrations/deepseek-harness/README.md).
+Removing the plugin does not delete the database. For screenshots, configuration, memory tools, and the exact automatic-capture rules, see the [DeepSeek Harness plugin guide](docs/DSH.md).
 
 ## The problem behind the design
 
@@ -128,7 +128,7 @@ For example, if a user says “Use pnpm for this project,” StrataGate keeps th
 
 By default, every 12 complete conversation turns are sealed into one memory block. Messages that have not yet reached the boundary remain in the open tail and are not compressed or extracted early.
 
-This is the core-library default. The DeepSeek Harness plugin defaults to 6 turns per Block so Event extraction becomes available sooner, and exposes `blockTurnSize` as a user setting. Block age is the distance from the latest sealed Block in the same thread, so open-tail turns do not cause decay. The default Block-decay coefficient is `0.30`.
+This is the core-library default. The DeepSeek Harness plugin defaults to 6 turns per Block so Event extraction becomes available sooner, and exposes `blockTurnSize` as a user setting. Block age is the distance from the latest ready Block in the same thread, so open-tail and model-pending Blocks do not cause decay. The default Block-decay coefficient is `0.30`.
 
 Each sealed block contains six levels of detail:
 
@@ -141,7 +141,7 @@ Each sealed block contains six levels of detail:
 | L4 | Readable near-verbatim conversation | Verify natural-language context and tool results |
 | L5 | Complete messages and tool records | Final source |
 
-New blocks start at L5. As more conversation follows, the default displayed level becomes progressively shallower; deeper detail can be expanded again when needed.
+At the boundary, StrataGate first seals permanent L5 together with deterministic L4 and L3, before any model call. The Block remains model-pending—and cannot replace native conversation history or participate in decay—until validated L0–L2 and Event processing complete. Ready Blocks then decay toward shallower levels as more ready Blocks follow; deeper detail can be expanded again when needed.
 
 L0–L4 are derived views of the same source. They never overwrite or rewrite L5. Event cards likewise reference their source blocks and cannot modify them.
 
@@ -185,9 +185,7 @@ In this structure:
 
 Separating mention time from occurrence time prevents the system from treating a message timestamp as the event timestamp. It also gives the system enough information to resolve relative expressions such as “last week” and “next month.”
 
-Event extraction is delayed: after block `N` is sealed, precise extraction waits until block `N+1` exists. The extractor can read neighboring blocks as context, but every new fact and source reference must come from target block `N`.
-
-This reduces the chance that context is cut at a block boundary while preventing facts from neighboring conversations from being written into the wrong event.
+After L0–L2 validates, Event extraction runs independently without waiting for block `N+1`. The extractor may read the previous Block and the nearest available later ready Block as context, but every new fact and source reference must come from target block `N`.
 
 <a id="current-state-graph"></a>
 
@@ -245,10 +243,10 @@ An event being retrieved does not mean that it helped the answer.
 Search therefore updates only observable retrieval records; it does not directly increase memory weight. After the answer is complete, the application explicitly calls:
 
 ```ts
-await memory.recordMemoryUse({ eventIds });
+await memory.recordMemoryUse({ eventIds, elementIds });
 ```
 
-Only Events, including the source Events behind adopted graph evidence, update their long-term weight.
+Only Events, or the source Events behind adopted graph evidence, update their long-term weight. Legacy Element evidence remains supported by integrations that still use it.
 
 This avoids a common feedback loop:
 
@@ -272,7 +270,7 @@ A new event can supersede an old one, while the old event and its source remain 
 
 The exported prompt and parser use the `stratagate.external-memory.v2` format. Unknown dates remain unknown: the importer preserves the original temporal wording instead of guessing from the current date or message order. See [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) for the current integration guide.
 
-The DeepSeek Harness UI currently provides a simpler direct-import flow: every valid candidate is added as a new Event. It does not yet run the core merge, supersession, conflict, or duplicate decision step.
+The DeepSeek Harness UI previews every import, skips exact duplicates deterministically, and asks the configured model to choose add, merge, supersede, conflict, or ignore against Top-K local matches. High-confidence decisions are applied automatically; only low-confidence decisions require confirmation. Each committed batch can be undone from the result screen.
 
 ## A real retrieval path
 
@@ -386,49 +384,40 @@ npm run build
 
 The main code and documentation entry points are:
 
-- [`examples/basic.ts`](examples/basic.ts): minimal code example;
-- [`src/store.ts`](src/store.ts): core state, Block/Event/graph lifecycle, import, and retrieval;
-- [`src/events.ts`](src/events.ts): stable Event-type normalization;
-- [`src/graph.ts`](src/graph.ts): provenance-checked graph projection and graph state;
-- [`src/external-memory.ts`](src/external-memory.ts): external-memory schema, prompts, parser, and extractor;
-- [`src/search.ts`](src/search.ts): deterministic BM25 token ranking and RRF fusion;
-- [`src/retrieval.ts`](src/retrieval.ts): evidence-gate normalization and constraint validation;
-- [`src/blocks.ts`](src/blocks.ts): layering rules and deterministic pruning;
+- [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts): minimal core-engine example;
+- [`packages/core/src/store.ts`](packages/core/src/store.ts): core state, Block/Event/graph lifecycle, import, and retrieval;
+- [`packages/core/src/events.ts`](packages/core/src/events.ts): stable Event-type normalization;
+- [`packages/core/src/elements.ts`](packages/core/src/elements.ts): provenance-checked element projection and time views;
+- [`packages/core/src/graph.ts`](packages/core/src/graph.ts): provenance-checked graph projection and graph state;
+- [`packages/core/src/external-memory.ts`](packages/core/src/external-memory.ts): external-memory schema, prompts, parser, and extractor;
+- [`packages/core/src/search.ts`](packages/core/src/search.ts): deterministic BM25 token ranking and RRF fusion;
+- [`packages/core/src/retrieval.ts`](packages/core/src/retrieval.ts): evidence-gate normalization and constraint validation;
+- [`packages/core/src/blocks.ts`](packages/core/src/blocks.ts): layering rules and deterministic pruning;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): complete system boundaries and implementation invariants;
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): complete experiment history and failure analysis.
 
-`examples/basic.ts` demonstrates the core API; it does not fully reproduce the agent tool loop used in the benchmark. See the evaluation document for the model calls, tool orchestration, and Judge protocol used in the evaluation.
+`packages/core/examples/basic.ts` demonstrates the core API; it does not fully reproduce the agent tool loop used in the benchmark. See the evaluation document for the model calls, tool orchestration, and Judge protocol used in the evaluation.
 
 ## Documentation and reproduction
 
 | Resource | Contents |
 | --- | --- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, layering rules, Event/graph protocols, retrieval, evidence-gate constraints, weighting, and storage invariants |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, layering rules, Event/Element protocols, retrieval, evidence-gate constraints, weighting, and storage invariants |
 | [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) | External-memory export format, import flow, and integration example |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | R1–R8 experiments, model sensitivity, Mem0 comparison, failure analysis, and reporting boundaries |
 | [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json) | Current result, per-stage statistics, run information, and source artifact hashes |
-| [`examples/basic.ts`](examples/basic.ts) | Minimal code example |
+| [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts) | Minimal code example |
 
 ## Repository layout
 
 ```text
-src/
-  blocks.ts       Conversation layering, deterministic pruning, and level decay
-  events.ts       Stable Event-type normalization
-  external-memory.ts  External-memory schema, prompts, parsing, and extraction
-  graph.ts        Provenance-checked knowledge-graph projection
-  retrieval.ts    Evidence-gate input, normalization, and constraint validation
-  search.ts       BM25 lexical ranking and reciprocal-rank fusion
-  storage.ts      Persistent snapshots and the StorageAdapter protocol
-  sqlite.ts       Optional transactional SQLite adapter
-  store.ts        In-memory state, lifecycle, import, and retrieval
-  types.ts        Data structures and model-adapter interfaces
-  weights.ts      Adoption records, forgetting, and weighting rules
-
-tests/            Core-rule and storage tests
-examples/         Minimal code example
-docs/             Architecture and complete evaluation
-benchmarks/       Machine-readable experiment results
+src/                    DeepSeek Harness Host and Web client adapter
+tests/                  DeepSeek Harness integration tests
+cordis.patch.yml        Root-level DSH bundle manifest
+packages/core/          Shared memory engine, core tests, and example
+integrations/workbuddy/ WorkBuddy Host Adapter and MCP integration
+docs/                   DSH usage, architecture, and evaluation
+benchmarks/             Machine-readable experiment results
 ```
 
 ## When StrataGate is a good fit
@@ -444,7 +433,7 @@ Choose StrataGate when you want several of these properties together:
 
 Consider a different plugin first when the user's main requirement is free-form visual editing of memory records, hosted multi-user synchronization across products, or a minimal manually maintained notes file. StrataGate includes a read-oriented knowledge-graph view, but it is optimized for automatic, local, evidence-traceable memory rather than collaborative knowledge-base editing.
 
-For DeepSeek Harness, follow the [quick start](#quick-start-deepseek-harness). The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`integrations/deepseek-harness`](integrations/deepseek-harness).
+For DeepSeek Harness, follow the [quick start](#quick-start-deepseek-harness). The DSH-specific behavior, tools, configuration, and failure semantics are documented in [`docs/DSH.md`](docs/DSH.md).
 
 ## Contributing
 

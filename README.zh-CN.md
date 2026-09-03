@@ -15,7 +15,7 @@ StrataGate 让长期运行的 AI Agent 跨会话记住信息，同时避免把�
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![欢迎贡献](https://img.shields.io/badge/%E6%AC%A2%E8%BF%8E%E8%B4%A1%E7%8C%AE-brightgreen.svg)](CONTRIBUTING.zh-CN.md)
 
-[English](README.md) · [DeepSeek Harness 插件说明](integrations/deepseek-harness/docs/README.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
+[English](README.md) · [DeepSeek Harness 插件说明](docs/DSH.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [完整评测](docs/EVALUATION.md)
 
 <strong>当前公开结果：</strong>在 LoCoMo `conv-26` 上，StrataGate 经过 10 次独立评审的平均准确率为 <strong>80.46%</strong>，Mem0 base 为 <strong>63.22%</strong>。[查看测试范围与方法](#实验结果)。
 
@@ -58,7 +58,7 @@ dsh plugin --profile web add stratagate-dsh
 DSH_HOME/stratagate/memory.db
 ```
 
-移除插件不会删除数据库。截图、配置项、记忆工具和自动记录规则见 [DeepSeek Harness 插件中文说明](integrations/deepseek-harness/docs/README.zh-CN.md)。
+移除插件不会删除数据库。截图、配置项、记忆工具和自动记录规则见 [DeepSeek Harness 插件中文说明](docs/DSH.zh-CN.md)。
 
 ## 这些设计要解决什么问题
 
@@ -128,7 +128,7 @@ StrataGate 的目标不是让 Agent 每次检索更多，而是让它知道：**
 
 默认每 12 轮完整对话封存为一个记忆块。尚未达到边界的消息保留在 open tail 中，不会提前压缩或抽取。
 
-这是核心库的默认值。DeepSeek Harness 插件为了更及时地产生 Event，默认每 6 轮封存一个 Block，并允许用户通过 `blockTurnSize` 自定义。Block 的 age 是它与同一线程中最新已封存 Block 的距离，因此 open tail 中新增轮次不会触发衰减；默认 Block 衰减系数为 `0.30`。
+这是核心库的默认值。DeepSeek Harness 插件为了更及时地产生 Event，默认每 6 轮封存一个 Block，并允许用户通过 `blockTurnSize` 自定义。Block 的 age 是它与同一线程中最新已就绪 Block 的距离，因此 open tail 和模型待处理 Block 不会触发衰减；默认 Block 衰减系数为 `0.30`。
 
 每个已封存的块包含六种详细程度：
 
@@ -141,7 +141,7 @@ StrataGate 的目标不是让 Agent 每次检索更多，而是让它知道：**
 | L4 | 接近原文的可读对话 | 核对自然语言上下文和工具结果 |
 | L5 | 完整消息和工具记录 | 最终来源 |
 
-新块从 L5 开始。随着后续对话增加，默认展示层级逐渐变浅；需要更多细节时，可以重新展开。
+Block 到达边界时，StrataGate 会在任何模型调用之前，先原子地保存永久 L5 与确定性生成的 L4、L3。随后 Block 保持模型待处理状态，不能替换原生对话历史，也不参与衰减；只有 L0–L2 校验和 Event 处理完成后才进入就绪状态。随着后续就绪 Block 增加，默认展示层级逐渐变浅；需要更多细节时，可以重新展开。
 
 L0–L4 都是同一份来源的派生视图，不会覆盖或重写 L5。事件卡同样只能引用原始块，不能反向修改来源。
 
@@ -185,9 +185,7 @@ L0–L4 都是同一份来源的派生视图，不会覆盖或重写 L5。事件
 
 将“提及时间”和“发生时间”分开，可以避免把消息日期直接当成事件日期，也让系统有条件正确解析“上周”“下个月”等相对时间。
 
-事件抽取采用延迟策略：块 `N` 封存后，会等块 `N+1` 出现再进行精确抽取。抽取器可以读取相邻块作为上下文，但新增事实和引用必须来自目标块 `N`。
-
-这样既能减少上下文被块边界切断的问题，又能阻止相邻对话中的事实被错误写入当前事件。
+L0–L2 校验完成后，Event 抽取会独立运行，不再等待块 `N+1`。抽取器可以读取前一个 Block 和最近可用的后续就绪 Block 作为上下文，但新增事实和引用必须来自目标块 `N`。
 
 <a id="current-state-graph"></a>
 
@@ -245,10 +243,10 @@ expand_block
 因此，搜索只更新可观测的检索记录，不会直接增加记忆权重。回答完成后，应用需要显式调用：
 
 ```ts
-await memory.recordMemoryUse({ eventIds });
+await memory.recordMemoryUse({ eventIds, elementIds });
 ```
 
-只有真正被答案采用的事件，包括图谱证据背后的来源事件，才会更新长期权重。
+只有真正被答案采用的事件，或图谱证据背后的来源事件，才会更新长期权重。仍使用旧版元素卡的接入方式也继续受到支持。
 
 这样可以避免一个常见反馈循环：
 
@@ -279,7 +277,7 @@ await memory.recordMemoryUse({ eventIds });
 
 库导出 `EXTERNAL_MEMORY_EXPORT_PROMPT_ZH_CN`、`EXTERNAL_MEMORY_DECIDER_PROMPT_ZH_CN` 和 `externalMemoryJsonExtractor`，可让外部 AI 输出可校验的 `stratagate.external-memory.v2` JSON，再由本地模型从五种处理方式中选择。v2 将记忆性质与内容分类分开；时间字段严格区分“被提及时间”和“实际发生时间”。日期不确定时，系统会省略日期并保留原始说法，不会根据当前日期或聊天顺序猜测。
 
-完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。DeepSeek Harness 管理界面目前采用更简单的直接导入：每条有效候选都会新增为 Event，暂时不会执行核心 API 已支持的合并、取代、冲突和去重判断。
+完整接入示例和提示词说明见 [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md)。DeepSeek Harness 管理界面会先预览导入，JSON 不合格时使用模型兜底恢复，确定性忽略完全重复项，并让当前模型结合 Top-K 本地匹配选择新增、合并、取代、冲突或忽略。导入分析及逐条进度会持久化，关闭后重新打开页面可继续查看；高置信度判断自动采用，低置信度项可人工选择具体动作；提交后可按批次撤销。
 
 新事件可以取代旧事件，但旧事件及其来源仍然保留。遗忘可以让事件退出搜索，同时不破坏来源链路。
 
@@ -395,49 +393,40 @@ npm run build
 
 代码与文档的主要入口：
 
-- [`examples/basic.ts`](examples/basic.ts)：最小代码示例；
-- [`src/store.ts`](src/store.ts)：核心状态、Block/Event/图谱生命周期、导入和检索；
-- [`src/events.ts`](src/events.ts)：统一事件类型；
-- [`src/graph.ts`](src/graph.ts)：校验来源的知识图谱整理和状态维护；
-- [`src/external-memory.ts`](src/external-memory.ts)：外部记忆格式、提示词、解析和提取；
-- [`src/search.ts`](src/search.ts)：确定性 BM25 排序和 RRF 融合；
-- [`src/retrieval.ts`](src/retrieval.ts)：证据门规范化与约束校验；
-- [`src/blocks.ts`](src/blocks.ts)：分层规则与确定性精简；
+- [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts)：核心引擎最小示例；
+- [`packages/core/src/store.ts`](packages/core/src/store.ts)：核心状态、Block/Event/图谱生命周期、导入和检索；
+- [`packages/core/src/events.ts`](packages/core/src/events.ts)：统一事件类型；
+- [`packages/core/src/elements.ts`](packages/core/src/elements.ts)：校验来源的元素投影与时间视图；
+- [`packages/core/src/graph.ts`](packages/core/src/graph.ts)：校验来源的知识图谱整理和状态维护；
+- [`packages/core/src/external-memory.ts`](packages/core/src/external-memory.ts)：外部记忆格式、提示词、解析和提取；
+- [`packages/core/src/search.ts`](packages/core/src/search.ts)：确定性 BM25 排序和 RRF 融合；
+- [`packages/core/src/retrieval.ts`](packages/core/src/retrieval.ts)：证据门规范化与约束校验；
+- [`packages/core/src/blocks.ts`](packages/core/src/blocks.ts)：分层规则与确定性精简；
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：完整系统边界与实现不变量；
 - [`docs/EVALUATION.md`](docs/EVALUATION.md)：完整实验过程与失败分析。
 
-`examples/basic.ts` 用于展示核心接口，而不是完整复现 benchmark 中的 Agent 工具循环。评测所使用的模型调用、工具编排和 Judge 协议见评测文档。
+`packages/core/examples/basic.ts` 用于展示核心接口，而不是完整复现 benchmark 中的 Agent 工具循环。评测所使用的模型调用、工具编排和 Judge 协议见评测文档。
 
 ## 文档与复现
 
 | 资源 | 内容 |
 | --- | --- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 数据流、分层规则、事件/图谱协议、检索、证据门约束、权重和存储不变量 |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 数据流、分层规则、事件/元素协议、检索、证据门约束、权重和存储不变量 |
 | [`docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md`](docs/EXTERNAL_MEMORY_IMPORT.zh-CN.md) | 外部记忆导出格式、导入流程和接入示例 |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | R1–R8 实验、模型敏感性、Mem0 对比、失败分析和报告边界 |
 | [`benchmarks/locomo-conv26-r8-final.json`](benchmarks/locomo-conv26-r8-final.json) | 当前结果、逐阶段统计、运行信息和源产物哈希 |
-| [`examples/basic.ts`](examples/basic.ts) | 最小代码示例 |
+| [`packages/core/examples/basic.ts`](packages/core/examples/basic.ts) | 最小代码示例 |
 
 ## 项目结构
 
 ```text
-src/
-  blocks.ts       对话块分层、确定性精简和层级衰减
-  events.ts       统一事件类型
-  external-memory.ts  外部记忆格式、提示词、解析和提取
-  graph.ts        校验来源的知识图谱整理
-  retrieval.ts    证据门输入、规范化和约束校验
-  search.ts       BM25 词面排序和 RRF 融合
-  storage.ts      持久化快照和 StorageAdapter 协议
-  sqlite.ts       可选的事务式 SQLite adapter
-  store.ts        内存状态、生命周期、导入和检索
-  types.ts        数据结构和模型适配接口
-  weights.ts      采用记录、遗忘和权重规则
-
-tests/            核心规则与存储测试
-examples/         最小代码示例
-docs/             架构和完整评测文档
-benchmarks/       机器可读实验结果
+src/                    DeepSeek Harness Host 与 Web client 适配层
+tests/                  DeepSeek Harness 集成测试
+cordis.patch.yml        根目录 DSH bundle 清单
+packages/core/          共享记忆引擎、核心测试和示例
+integrations/workbuddy/ WorkBuddy Host Adapter 与 MCP 接入
+docs/                   DSH 使用、架构和完整评测文档
+benchmarks/             机器可读实验结果
 ```
 
 ## 什么情况下适合使用 StrataGate
@@ -453,7 +442,7 @@ benchmarks/       机器可读实验结果
 
 如果你最需要的是自由编辑记忆内容、跨产品的云端多人协作，或者只想维护一个简单的手写便签文件，应先考虑其他插件。StrataGate 已提供以查看和追溯为主的知识图谱界面，但它更适合自动、本地、证据可追溯的 Agent 记忆工作流，而不是多人知识库编辑。
 
-DeepSeek Harness 用户可以从[快速开始](#quick-start-deepseek-harness)安装。DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](integrations/deepseek-harness/docs/README.zh-CN.md)。
+DeepSeek Harness 用户可以从[快速开始](#quick-start-deepseek-harness)安装。DSH 适配层的行为、工具、配置和失败恢复方式见 [DeepSeek Harness 插件中文文档](docs/DSH.zh-CN.md)。
 
 ## 参与贡献
 

@@ -50,18 +50,18 @@ Hosts may attach a `threadId` to each turn. Open tails, Block boundaries, neighb
 
 When the boundary is reached:
 
-1. L5 stores the raw messages and tool traces.
-2. L4 converts tool payloads into readable summaries while preserving natural-language turns.
-3. L3 applies a deterministic, bounded condensation policy.
-4. A caller-provided summarizer produces L0-L2 and a conservative `shouldExtract` decision.
-5. The block pointer starts at L5 and decays toward L0 as newer Blocks are sealed in the same thread.
+1. One atomic sealing transaction moves the source messages into permanent L5 and writes deterministic L4 and L3.
+2. The sealed Block is marked model-pending. It is provenance, but it is excluded from decay and cannot replace native conversation history.
+3. A background summarizer produces and validates L0-L2 plus a conservative `shouldExtract` decision.
+4. Event extraction completes with either validated Events or an explicit valid empty result.
+5. Only then is the Block marked ready: its pointer starts at L5, it may replace native history, and it decays toward L0 as newer ready Blocks enter the same thread.
 
 The block weight is:
 
 ```text
 w(age) = exp(-lambda_block * age)
 
-age = latest sealed Block position - pointer anchor Block position
+age = latest ready Block position - pointer anchor Block position
 lambda_block = 0.30 by default
 ```
 
@@ -78,13 +78,13 @@ L3 may remove only:
 
 Short repeated natural-language messages are retained. L3 never performs semantic paraphrasing.
 
-## Delayed event extraction
+## Event extraction
 
-If block `N` is marked as a candidate, precise extraction waits until block `N+1` is sealed. The extractor receives:
+After L0-L2 validates, a candidate Block is extracted independently; a later Block is not required. The extractor receives:
 
 - target block `N`, including its L5 source and legal evidence IDs;
 - previous block `N-1` L2 keypoints for context, if it exists;
-- next block `N+1` L2 keypoints for context;
+- the nearest available later ready Block's L2 keypoints for context, if one exists;
 - a compact timeline of existing event IDs, titles, and temporal fields.
 
 The target is the only legal source of new facts and quotations. Neighbor blocks are context-only and must not contribute events or source references. Source message IDs are checked against the target block. The reference implementation falls back to all target messages when an extractor returns no valid source ID; stricter adapters may reject the card instead.
@@ -150,6 +150,12 @@ Event and fact-level element search use two inspectable ranking sources:
 2. structured rankings from fields such as participant, event type, time range, element name, and element type.
 
 Reciprocal-rank fusion combines the available rankings. A non-empty query with no lexical or structured match returns an empty result rather than all candidates. Element search returns the matched fact plus its element ID, validity interval, and event provenance; callers expand the full element card only when needed. The reference path does not use embeddings or vector similarity.
+
+Integration tool responses intentionally expose compact search cards. They retain stable IDs, summaries,
+timestamps, and evidence references while leaving narrative/quotes/source-message lists and full graph
+facts/edges to the expand tools. `rankScore` is a BM25/RRF ordering metric only, not confidence or
+factual accuracy. Graph relation-only hits are filtered as likely adjacency noise; name, alias, tag,
+state, fact, type, and other descriptive matches remain eligible across all supported node types.
 
 ## Event weight and adoption
 
@@ -217,14 +223,16 @@ Every namespace has a monotonically increasing revision. A write supplies the re
 External model calls are never made inside a database transaction:
 
 1. a completed raw turn is committed immediately;
-2. summarization runs outside the transaction, then sealing commits atomically;
-3. extraction first commits a running job, calls the extractor, then atomically commits either the event cards or a failed/skipped job state;
-4. element projection follows the same claim/call/complete boundary after its source events are durable;
-5. `resumePendingWork()` retries only failed or interrupted work after restart; callers may explicitly request one bounded retry of skipped extraction jobs with `retrySkipped: true`.
+2. every complete Block is sealed atomically with real L3-L5 before any model call;
+3. summarization first claims a persisted job, runs outside the transaction, and commits validated L0-L2 or a failed job with bounded retry metadata;
+4. extraction first commits a running job, calls the extractor, then atomically commits either the event cards, a valid empty result, or a failed job state;
+5. element projection follows the same claim/call/complete boundary after its source events are durable;
+6. failed model jobs retry at most three total attempts with exponential backoff; completed empty extraction is terminal and is not retried.
 
 The adapter preserves these invariants:
 
-- blocks and L5 messages are append-only;
+- blocks and L5 messages are append-only, including when every derived task fails;
+- model-pending Blocks are excluded from decay and native-history replacement;
 - card provenance references an existing source block and message set;
 - search hits do not increment adoption state;
 - supersession retains the old event;
@@ -233,4 +241,4 @@ The adapter preserves these invariants:
 - forget is reversible unless an application explicitly implements irreversible deletion;
 - usage receipts are idempotent for one answer turn through a unique `receiptId`.
 
-SQLite schema v7 includes normalized element, fact, provenance, projection-job, ingestion-receipt, usage-audit, optional thread ownership for messages and Blocks, persisted Block-decay settings and anchors, and the user-or-Agent source of each Block lift. Usage receipts can carry the DSH session, turn, retrieval batch, assessment, and exact evidence references that led to an answer. Opening a schema-v1 through v6 database migrates it in one transaction and preserves existing namespaces, blocks, events, jobs, and receipts. Schema-v5 turn anchors are converted to per-thread Block positions; schema-v6 lift timestamps are retained with an unknown legacy source. Pre-v5 Blocks retain no inferred thread ownership, so they remain archival provenance without being attached to a new session. SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.
+SQLite schema v10 includes durable external-memory import jobs and per-candidate progress, in addition to the normalized Block processing state, summary/extraction retry jobs, graph, element, provenance, receipt, decay-anchor, and lift-source data introduced earlier. Opening a schema-v1 through v9 database migrates it in one transaction and preserves existing namespaces, Blocks, Events, jobs, and receipts. Existing pre-v9 Blocks are treated as ready because their persisted L0-L5 layers were already accepted by the older engine. Schema-v5 turn anchors are converted to per-thread Block positions; schema-v6 lift timestamps retain an unknown legacy source. Pre-v5 Blocks retain no inferred thread ownership, so they remain archival provenance without being attached to a new session. SQLite uses WAL, foreign keys, and per-namespace optimistic concurrency. It does not provide encryption at rest. Search still uses the reference in-memory ranking after hydration, so enabling persistence does not silently change retrieval semantics. Database-native lexical/vector indexes and a Postgres implementation remain separate future work.
