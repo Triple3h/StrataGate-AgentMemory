@@ -45,14 +45,24 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run verify:dsh
-      - run: npm publish --provenance --access public
+      - name: Pack release assets from one artifact
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          versioned="stratagate-dsh-${version}.tgz"
+          npm pack --silent
+          test -f "$versioned"
+          cp "$versioned" stratagate-dsh.tgz
+          cmp "$versioned" stratagate-dsh.tgz
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Publish exact package artifact
+        run: npm publish "stratagate-dsh-${VERSION}.tgz" --provenance --access public
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          version="$(node -p 'require("./package.json").version')"
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "StrataGate DSH $version"
+          gh release create "$GITHUB_REF_NAME" "stratagate-dsh-${VERSION}.tgz" stratagate-dsh.tgz --verify-tag --generate-notes --title "StrataGate DSH $VERSION"
 
   publish-artifact:
     if: github.event_name == 'workflow_dispatch'
@@ -78,6 +88,8 @@ jobs:
           tar -xOf "$filename" package/package.json > package-manifest.json
           test "$(node -p 'require("./package-manifest.json").name')" = "stratagate-dsh"
           test "$(node -p 'require("./package-manifest.json").version')" = "$VERSION"
+          cp "$filename" stratagate-dsh.tgz
+          cmp "$filename" stratagate-dsh.tgz
       - name: Publish exact package artifact
         run: npm publish "stratagate-dsh-${VERSION}.tgz" --provenance --access public
       - name: Create GitHub release with verified artifact
@@ -85,4 +97,4 @@ jobs:
         run: |
           tag="stratagate-dsh-v${VERSION}"
           filename="stratagate-dsh-${VERSION}.tgz"
-          gh release create "$tag" "$filename" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "StrataGate DSH $VERSION"
+          gh release create "$tag" "$filename" stratagate-dsh.tgz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "StrataGate DSH $VERSION"

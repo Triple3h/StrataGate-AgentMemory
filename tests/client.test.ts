@@ -28,6 +28,31 @@ describe('StrataGate Web client contract', () => {
     expect(typeof registration.render).toBe('function')
   })
 
+  it('adds a short-term memory compression inspector to the sidebar footer', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    let definition: any
+    runInNewContext(source, {
+      URLSearchParams,
+      window: { __ModuleLoader__: { load: (value: unknown) => { definition = value } } },
+    })
+    const plugin = definition.factory((name: string) => {
+      if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
+      return { createElement: (...args: unknown[]) => args, Fragment: 'fragment', useState: () => [], useEffect: () => {}, useCallback: (fn: unknown) => fn, useRef: () => ({ current: null }) }
+    })
+    const registrations: any[] = []
+    const slots = {
+      inject: (_name: string, callback: () => void) => callback(),
+      register: (metadata: unknown, render: unknown) => { registrations.push({ metadata, render }) },
+    }
+    plugin.apply({ get: (name: string) => name === 'slots' ? slots : undefined })
+    const inspector = registrations.find(({ metadata }) => metadata.id === 'stratagate-compression')
+    expect(inspector.metadata).toMatchObject({ name: 'sidebar.footer.action', order: 40 })
+    expect(typeof inspector.render).toBe('function')
+    expect(source).toContain('短期记忆正在怎样变轻')
+    expect(source).toContain('压缩不会删除证据；L5 原文始终保存在本地')
+    expect(source).toContain("api('sources', { namespace, blockId: selectedBlock.id })")
+  })
+
   it('publishes adopted memory citations into the closing answer turn tail', () => {
     const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
     let definition: any

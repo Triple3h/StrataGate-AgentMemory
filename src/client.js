@@ -6,6 +6,10 @@ window.__ModuleLoader__.load({
     const exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
     const React = require('react')
+    const ReactDOM = (() => {
+      try { return require('react-dom') } catch {}
+      return globalThis.ReactDOM || null
+    })()
     const h = React.createElement
     const cytoscape = globalThis.__StrataGateGraphLibraries?.cytoscape
     const STAR_REPOSITORY_URL = 'https://github.com/diqierjia/StrataGate-AgentMemory'
@@ -95,6 +99,13 @@ window.__ModuleLoader__.load({
       .sg-support-card{padding:14px 0;border-bottom:1px solid var(--sg-border)}.sg-support-card h3{margin:0;font-size:14px}.sg-support-card p{margin:4px 0 10px;color:var(--sg-muted);font-size:12px}.sg-primary-link{display:inline-flex;padding:7px 11px;border:1px solid var(--sg-accent);border-radius:6px;background:var(--sg-accent);color:#fff;text-decoration:none;cursor:pointer}.sg-check{display:flex;align-items:flex-start;gap:8px;margin:9px 0;color:var(--sg-text);font-size:12px}.sg-check input{margin-top:3px}.sg-privacy-note{padding:10px 11px;margin:12px 0;border-radius:7px;background:var(--sg-good-soft);color:var(--sg-good);font-size:12px}.sg-footer{margin-top:24px;padding-top:13px;border-top:1px solid var(--sg-border);text-align:center;color:var(--sg-muted);font-size:12px}.sg-footer button{padding:2px 4px;border:0;background:transparent;color:var(--sg-accent);cursor:pointer}.sg-virtual-note{margin-top:6px;color:var(--sg-muted);font-size:11px}
       @media (max-width:560px){.sg-decay-head{align-items:flex-start;flex-direction:column}.sg-conversation{width:100%;justify-content:flex-start}.sg-conversation select{max-width:100%;flex:1}}
       @media (prefers-reduced-motion:reduce){.sg-memory *,.sg-memory *:before,.sg-memory *:after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.sg-processing-icon{animation:none}.sg-skeleton:after{display:none}}
+    `
+
+    const compressionWidgetCss = `
+      .sg-compression-widget,.sg-compression-panel{--sgc-bg:var(--dsw-alias-bg-layer-2,#17191d);--sgc-surface:var(--dsw-specific-input-major,#22252a);--sgc-soft:var(--dsw-alias-interactive-bg-hover-solid,#2b2e34);--sgc-text:var(--dsw-alias-label-primary,#f4f5f7);--sgc-muted:var(--dsw-alias-label-secondary,#a5a9b1);--sgc-border:var(--dsw-alias-border-l2,rgba(255,255,255,.12));--sgc-accent:var(--dsw-alias-state-business-primary,#5f8fe8);--sgc-good:var(--dsw-alias-state-success-primary,#42c77a);color:var(--sgc-text);font:12px/1.5 "Segoe UI Variable Text","Segoe UI",ui-sans-serif,system-ui,-apple-system,"Microsoft YaHei",sans-serif;font-variant-numeric:tabular-nums}.sg-compression-widget *,.sg-compression-panel *{box-sizing:border-box}.sg-compression-launcher{position:relative;display:grid;place-items:center;width:36px;height:36px;flex:0 0 36px;padding:0;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--sgc-muted);cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,color 160ms ease,transform 160ms ease}.sg-compression-launcher:hover,.sg-compression-launcher[aria-expanded="true"]{border-color:color-mix(in srgb,var(--sgc-accent) 30%,var(--sgc-border));background:color-mix(in srgb,var(--sgc-accent) 11%,var(--sgc-soft));color:var(--sgc-text);transform:translateY(-1px)}.sg-compression-launcher:active{transform:scale(.97)}.sg-compression-launcher:focus-visible,.sg-compression-panel :is(button,select):focus-visible{outline:2px solid var(--sgc-accent);outline-offset:2px}.sg-compression-glyph{position:relative;width:22px;height:20px}.sg-compression-glyph i{position:absolute;left:50%;width:18px;height:6px;border:1.5px solid currentColor;border-radius:3px;transform:translateX(-50%)}.sg-compression-glyph i:nth-child(1){top:1px;opacity:.42}.sg-compression-glyph i:nth-child(2){top:7px;width:14px;opacity:.68}.sg-compression-glyph i:nth-child(3){top:13px;width:9px;color:var(--sgc-accent)}.sg-compression-live{position:absolute;right:4px;top:4px;width:6px;height:6px;border:1px solid var(--sgc-bg);border-radius:50%;background:var(--sgc-good)}.sg-compression-tip{position:absolute;left:0;bottom:calc(100% + 8px);z-index:4;width:max-content;max-width:190px;padding:6px 8px;border:1px solid var(--sgc-border);border-radius:7px;background:var(--sgc-bg);color:var(--sgc-muted);box-shadow:0 8px 24px rgba(0,0,0,.24);pointer-events:none;opacity:0;transform:translateY(3px);transition:opacity 140ms ease,transform 140ms ease}.sg-compression-launcher:hover .sg-compression-tip,.sg-compression-launcher:focus-visible .sg-compression-tip{opacity:1;transform:translateY(0)}
+      .sg-compression-panel{position:fixed;z-index:2147482500;width:min(438px,calc(100vw - 24px));max-height:min(690px,calc(100dvh - 24px));overflow:auto;border:1px solid color-mix(in srgb,var(--sgc-accent) 26%,var(--sgc-border));border-radius:16px;background:radial-gradient(circle at 12% -8%,color-mix(in srgb,var(--sgc-accent) 13%,transparent),transparent 34%),color-mix(in srgb,var(--sgc-bg) 96%,transparent);box-shadow:0 24px 70px rgba(3,8,20,.42),inset 0 1px 0 rgba(255,255,255,.07);backdrop-filter:blur(18px);animation:sg-compression-in 220ms cubic-bezier(.22,1,.36,1) both}.sg-compression-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:17px 18px 14px}.sg-compression-kicker{display:flex;align-items:center;gap:7px;margin-bottom:3px;color:var(--sgc-accent);font-size:11px;font-weight:680}.sg-compression-kicker:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--sgc-good);box-shadow:0 0 0 4px color-mix(in srgb,var(--sgc-good) 14%,transparent)}.sg-compression-head h2{margin:0;font-size:18px;line-height:1.25;font-weight:730;letter-spacing:-.025em}.sg-compression-close{display:grid;place-items:center;width:28px;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;color:var(--sgc-muted);font-size:20px;cursor:pointer}.sg-compression-close:hover{background:var(--sgc-soft);color:var(--sgc-text)}.sg-compression-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:0 18px 13px}.sg-compression-field{display:grid;gap:4px;min-width:0;color:var(--sgc-muted);font-size:10px}.sg-compression-field select{width:100%;min-width:0;height:32px;padding:0 25px 0 8px;border:1px solid var(--sgc-border);border-radius:7px;background:var(--sgc-surface);color:var(--sgc-text);font-size:11px;text-overflow:ellipsis}.sg-compression-body{padding:0 18px 18px}.sg-compression-empty,.sg-compression-error{padding:24px 14px;border:1px dashed var(--sgc-border);border-radius:11px;color:var(--sgc-muted);text-align:center}.sg-compression-error{color:#e9a66d}.sg-compression-map{position:relative;padding:14px;border:1px solid var(--sgc-border);border-radius:12px;background:color-mix(in srgb,var(--sgc-surface) 78%,transparent);overflow:hidden}.sg-compression-map:after{content:"";position:absolute;right:-54px;top:-70px;width:150px;height:150px;border:1px solid color-mix(in srgb,var(--sgc-accent) 18%,transparent);border-radius:50%;box-shadow:0 0 0 18px color-mix(in srgb,var(--sgc-accent) 4%,transparent),0 0 0 38px color-mix(in srgb,var(--sgc-accent) 3%,transparent);pointer-events:none}.sg-compression-map-head{position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.sg-compression-map-title{min-width:0}.sg-compression-map-title strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.sg-compression-map-title span{color:var(--sgc-muted);font-size:10px}.sg-compression-current{flex:0 0 auto;padding:3px 7px;border:1px solid color-mix(in srgb,var(--sgc-accent) 52%,var(--sgc-border));border-radius:6px;background:color-mix(in srgb,var(--sgc-accent) 13%,transparent);color:var(--sgc-accent);font-weight:720}.sg-compression-flow{position:relative;z-index:1;display:grid;grid-template-columns:72px 1fr 78px;align-items:center;gap:10px;margin:15px 0 12px}.sg-compression-endpoint{display:grid;gap:2px}.sg-compression-endpoint:last-child{text-align:right}.sg-compression-endpoint strong{font-size:11px}.sg-compression-endpoint span{color:var(--sgc-muted);font-size:9px}.sg-compression-track{position:relative;display:grid;grid-template-columns:repeat(6,1fr);align-items:center}.sg-compression-track:before{content:"";position:absolute;left:7%;right:7%;height:1px;background:var(--sgc-border)}.sg-compression-node{position:relative;display:grid;place-items:center;width:18px;height:18px;margin:auto;border:1px solid var(--sgc-border);border-radius:50%;background:var(--sgc-bg);color:var(--sgc-muted);font-size:8px}.sg-compression-node.passed{border-color:color-mix(in srgb,var(--sgc-accent) 45%,var(--sgc-border));background:color-mix(in srgb,var(--sgc-accent) 16%,var(--sgc-bg));color:var(--sgc-text)}.sg-compression-node.current{width:24px;height:24px;border-color:var(--sgc-accent);background:var(--sgc-accent);color:#fff;font-size:10px;font-weight:760;box-shadow:0 0 0 5px color-mix(in srgb,var(--sgc-accent) 14%,transparent)}.sg-compression-preview{position:relative;z-index:1;padding:10px 11px;border-left:2px solid var(--sgc-accent);border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--sgc-bg) 62%,transparent)}.sg-compression-preview-label{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px;color:var(--sgc-muted);font-size:9px}.sg-compression-preview p{max-height:94px;margin:0;overflow:auto;color:var(--sgc-text);font-size:11px;line-height:1.58;white-space:pre-wrap}.sg-compression-proof{display:flex;align-items:flex-start;gap:7px;margin:10px 1px 0;color:var(--sgc-muted);font-size:10px}.sg-compression-proof:before{content:"✓";display:grid;place-items:center;width:16px;height:16px;flex:0 0 auto;border-radius:50%;background:color-mix(in srgb,var(--sgc-good) 15%,transparent);color:var(--sgc-good);font-weight:800}.sg-compression-list-label{display:flex;justify-content:space-between;gap:10px;margin:15px 0 7px;color:var(--sgc-muted);font-size:10px}.sg-compression-blocks{display:grid;gap:5px}.sg-compression-block{display:grid;grid-template-columns:35px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;min-height:42px;padding:6px 8px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--sgc-text);text-align:left;cursor:pointer}.sg-compression-block:hover{background:var(--sgc-soft)}.sg-compression-block.selected{border-color:color-mix(in srgb,var(--sgc-accent) 35%,var(--sgc-border));background:color-mix(in srgb,var(--sgc-accent) 8%,var(--sgc-surface))}.sg-compression-block-level{display:grid;place-items:center;width:30px;height:26px;border:1px solid color-mix(in srgb,var(--sgc-accent) 38%,var(--sgc-border));border-radius:6px;color:var(--sgc-accent);font-weight:740}.sg-compression-block-copy{min-width:0}.sg-compression-block-copy strong,.sg-compression-block-copy span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sg-compression-block-copy strong{font-size:11px}.sg-compression-block-copy span{color:var(--sgc-muted);font-size:9px}.sg-compression-block-arrow{color:var(--sgc-muted);font-size:16px}.sg-compression-loading{display:grid;gap:8px;padding:8px 0}.sg-compression-loading i{height:10px;border-radius:4px;background:var(--sgc-soft);animation:sg-compression-pulse 1.2s ease-in-out infinite}.sg-compression-loading i:nth-child(2){width:76%}.sg-compression-loading i:nth-child(3){width:54%}@keyframes sg-compression-in{from{opacity:0;transform:translateX(-8px) scale(.985)}to{opacity:1;transform:translateX(0) scale(1)}}@keyframes sg-compression-pulse{50%{opacity:.45}}
+      @media (max-width:700px){.sg-compression-panel{left:12px!important;right:12px;width:auto;top:auto!important;bottom:12px;max-height:calc(100dvh - 24px)}.sg-compression-controls{grid-template-columns:1fr}.sg-compression-flow{grid-template-columns:60px 1fr 66px}}
+      @media (prefers-reduced-motion:reduce){.sg-compression-widget *,.sg-compression-panel *{animation-duration:.01ms!important;transition-duration:.01ms!important}}
     `
 
     const citationCss = `
@@ -1586,6 +1597,149 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function compressionLayerName(level) {
+      return ['标题索引', '一句摘要', '关键要点', '紧凑原文', '精简原文', '原始对话'][Number(level)] || '分层记忆'
+    }
+
+    function compressionLayerFallback(block) {
+      const level = Number(block?.currentLevel ?? 0)
+      if (level === 0) return [block?.title, ...(block?.tags || []).map((tag) => '#' + tag)].filter(Boolean).join('\n')
+      if (level === 1) return block?.summary || block?.title || '摘要正在生成'
+      if (level === 2) return (block?.keypoints || []).map((point) => '• ' + point).join('\n') || block?.summary || block?.title || '关键点正在生成'
+      return block?.summary || block?.title || '正在读取这一层的内容'
+    }
+
+    function MemoryCompressionWidget({ wide }) {
+      const launcherRef = React.useRef(null)
+      const panelRef = React.useRef(null)
+      const requestRef = React.useRef(null)
+      const [open, setOpen] = React.useState(false)
+      const [panelPos, setPanelPos] = React.useState({ left: 62, top: 120 })
+      const [payload, setPayload] = React.useState(null)
+      const [namespace, setNamespace] = React.useState('')
+      const [conversationId, setConversationId] = React.useState('')
+      const [selectedBlockId, setSelectedBlockId] = React.useState('')
+      const [detail, setDetail] = React.useState(null)
+      const [loading, setLoading] = React.useState(false)
+      const [detailLoading, setDetailLoading] = React.useState(false)
+      const [error, setError] = React.useState('')
+
+      const placePanel = React.useCallback(() => {
+        const rect = launcherRef.current?.getBoundingClientRect()
+        if (!rect) return
+        const width = Math.min(438, window.innerWidth - 24)
+        const estimatedHeight = Math.min(690, window.innerHeight - 24)
+        const fitsRight = rect.right + 12 + width <= window.innerWidth - 12
+        const left = fitsRight ? rect.right + 12 : Math.max(12, rect.left - width - 12)
+        const top = Math.min(Math.max(12, rect.top - 220), Math.max(12, window.innerHeight - estimatedHeight - 12))
+        setPanelPos({ left, top })
+      }, [])
+
+      const load = React.useCallback((nextNamespace, nextConversationId, quiet) => {
+        requestRef.current?.abort()
+        const controller = new AbortController()
+        requestRef.current = controller
+        if (!quiet) setLoading(true)
+        setError('')
+        const params = {}
+        if (nextNamespace) params.namespace = nextNamespace
+        if (nextConversationId) params.threadId = nextConversationId
+        return dashboardApi(params, { signal: controller.signal }).then((result) => {
+          if (result.notModified || !result.data) return
+          const next = result.data
+          const nextData = next.data || { blocks: [], conversations: [], openBlock: null }
+          setPayload(next)
+          setNamespace(next.namespace || '')
+          setConversationId(nextData.activeThreadId || nextConversationId || '')
+          setSelectedBlockId((current) => nextData.blocks?.some((block) => block.id === current)
+            ? current
+            : [...(nextData.blocks || [])].sort((left, right) => Number(right.sequence || 0) - Number(left.sequence || 0))[0]?.id || '')
+        }).catch((reason) => {
+          if (reason?.name !== 'AbortError') setError(String(reason?.message || reason))
+        }).finally(() => {
+          if (requestRef.current === controller) requestRef.current = null
+          if (!quiet) setLoading(false)
+        })
+      }, [])
+
+      React.useEffect(() => () => requestRef.current?.abort(), [])
+      React.useEffect(() => {
+        if (!open) return undefined
+        placePanel()
+        if (!payload && !loading) void load('', '', false)
+        const reposition = () => placePanel()
+        window.addEventListener('resize', reposition)
+        window.addEventListener('scroll', reposition, true)
+        return () => {
+          window.removeEventListener('resize', reposition)
+          window.removeEventListener('scroll', reposition, true)
+        }
+      }, [open, payload, loading, load, placePanel])
+      React.useEffect(() => {
+        if (!open) return undefined
+        const close = (event) => {
+          if (event.key === 'Escape') { setOpen(false); launcherRef.current?.focus(); return }
+          if (event.type === 'pointerdown' && !launcherRef.current?.contains(event.target) && !panelRef.current?.contains(event.target)) setOpen(false)
+        }
+        document.addEventListener('keydown', close)
+        document.addEventListener('pointerdown', close)
+        return () => {
+          document.removeEventListener('keydown', close)
+          document.removeEventListener('pointerdown', close)
+        }
+      }, [open])
+
+      const data = payload?.data || { blocks: [], conversations: [], openBlock: null }
+      const blocks = [...(data.blocks || [])].sort((left, right) => Number(right.sequence || 0) - Number(left.sequence || 0))
+      const selectedBlock = blocks.find((block) => block.id === selectedBlockId) || blocks[0] || null
+      React.useEffect(() => {
+        if (!open || !namespace || !selectedBlock?.id) { setDetail(null); return undefined }
+        let active = true
+        setDetail(null)
+        setDetailLoading(true)
+        void api('sources', { namespace, blockId: selectedBlock.id }).then((value) => {
+          if (active) setDetail(value)
+        }).catch((reason) => {
+          if (active) setError(String(reason?.message || reason))
+        }).finally(() => {
+          if (active) setDetailLoading(false)
+        })
+        return () => { active = false }
+      }, [open, namespace, selectedBlock?.id])
+
+      const currentLevel = Number(selectedBlock?.currentLevel ?? 0)
+      const currentLayer = (detail?.layers || []).find((layer) => Number(layer.level) === currentLevel)
+      const preview = currentLayer?.content || compressionLayerFallback(selectedBlock)
+      const overviewItems = payload?.overview?.namespaces || []
+      const panel = open ? h('aside', { ref: panelRef, id: 'sg-compression-panel', className: 'sg-compression-panel', role: 'dialog', 'aria-label': '短期记忆压缩透视', style: { left: panelPos.left + 'px', top: panelPos.top + 'px' } },
+        h('header', { className: 'sg-compression-head' },
+          h('div', null, h('div', { className: 'sg-compression-kicker' }, '实时记忆透视'), h('h2', null, '短期记忆正在怎样变轻')),
+          h('button', { type: 'button', className: 'sg-compression-close', onClick: () => { setOpen(false); launcherRef.current?.focus() }, 'aria-label': '关闭短期记忆透视' }, '×')),
+        h('div', { className: 'sg-compression-controls' },
+          h('label', { className: 'sg-compression-field' }, h('span', null, '工作区'), h('select', { value: namespace, disabled: loading || !overviewItems.length, onChange: (event) => { setSelectedBlockId(''); setDetail(null); void load(event.target.value, '', false) }, 'aria-label': '记忆工作区' }, overviewItems.map((item) => h('option', { key: item.namespace, value: item.namespace }, projectName(item))))),
+          h('label', { className: 'sg-compression-field' }, h('span', null, '对话'), h('select', { value: conversationId, disabled: loading || !data.conversations?.length, onChange: (event) => { setSelectedBlockId(''); setDetail(null); void load(namespace, event.target.value, false) }, 'aria-label': '记忆对话' }, (data.conversations || []).map((conversation) => h('option', { key: conversation.id, value: conversation.id }, conversation.label))))),
+        h('div', { className: 'sg-compression-body' },
+          error ? h('div', { className: 'sg-compression-error' }, '暂时无法读取记忆：' + error) : loading ? h('div', { className: 'sg-compression-loading', 'aria-label': '正在读取短期记忆' }, h('i'), h('i'), h('i')) : !selectedBlock ? h('div', { className: 'sg-compression-empty' }, data.openBlock?.messages ? '这段对话还在开放块中，封存后会出现分层压缩视图。' : '当前对话还没有可视化的短期记忆块。') : h(React.Fragment, null,
+            h('section', { className: 'sg-compression-map', 'aria-label': '所选记忆块的压缩过程' },
+              h('div', { className: 'sg-compression-map-head' }, h('div', { className: 'sg-compression-map-title' }, h('strong', null, selectedBlock.title || 'Block #' + selectedBlock.sequence), h('span', null, turnRangeText(selectedBlock.turnRange) + ' · 距最新 ' + selectedBlock.distanceFromLatest + ' 个 Block')), h('span', { className: 'sg-compression-current' }, '现在 L' + currentLevel)),
+              h('div', { className: 'sg-compression-flow' },
+                h('div', { className: 'sg-compression-endpoint' }, h('strong', null, 'L5 原始对话'), h('span', null, Number(selectedBlock.sourceMessages || 0) + ' 条消息')),
+                h('div', { className: 'sg-compression-track', 'aria-label': '从 L5 到 L0 的六级压缩' }, [5, 4, 3, 2, 1, 0].map((level) => h('span', { key: level, className: 'sg-compression-node ' + (level === currentLevel ? 'current' : level >= currentLevel ? 'passed' : ''), title: 'L' + level + ' · ' + compressionLayerName(level) }, level))),
+                h('div', { className: 'sg-compression-endpoint' }, h('strong', null, 'L' + currentLevel + ' 当前视图'), h('span', null, compressionLayerName(currentLevel)))),
+              h('div', { className: 'sg-compression-preview' }, h('div', { className: 'sg-compression-preview-label' }, h('span', null, '此刻保留的内容'), h('span', null, detailLoading ? '读取中…' : 'L' + currentLevel)), h('p', null, detailLoading ? compressionLayerFallback(selectedBlock) : preview)),
+              h('div', { className: 'sg-compression-proof' }, '压缩不会删除证据；L5 原文始终保存在本地，需要细节时可逐层展开。')),
+            h('div', { className: 'sg-compression-list-label' }, h('span', null, '最近的记忆块'), h('span', null, blocks.length + ' 个已封存 · ' + (data.openBlock?.messages || 0) + ' 条未封存消息')),
+            h('div', { className: 'sg-compression-blocks' }, blocks.slice(0, 4).map((block) => h('button', { key: block.id, type: 'button', className: 'sg-compression-block ' + (block.id === selectedBlock.id ? 'selected' : ''), onClick: () => setSelectedBlockId(block.id) }, h('span', { className: 'sg-compression-block-level' }, 'L' + block.currentLevel), h('span', { className: 'sg-compression-block-copy' }, h('strong', null, block.title || 'Block #' + block.sequence), h('span', null, compressionLayerName(block.currentLevel) + ' · ' + turnRangeText(block.turnRange))), h('span', { className: 'sg-compression-block-arrow', 'aria-hidden': 'true' }, '›'))))))) : null
+
+      return h(React.Fragment, null,
+        h('style', null, compressionWidgetCss),
+        h('div', { className: 'sg-compression-widget' }, h('button', { ref: launcherRef, type: 'button', className: 'sg-compression-launcher', 'aria-label': '查看短期记忆如何压缩', 'aria-expanded': open ? 'true' : 'false', 'aria-controls': 'sg-compression-panel', onClick: () => setOpen((value) => !value) },
+          h('span', { className: 'sg-compression-glyph', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')),
+          payload?.processing ? h('span', { className: 'sg-compression-live', 'aria-hidden': 'true' }) : null,
+          wide !== false ? h('span', { className: 'sg-compression-tip' }, '查看短期记忆如何压缩') : null)),
+        panel ? ReactDOM?.createPortal && document.body ? ReactDOM.createPortal(panel, document.body) : panel : null)
+    }
+
     function MemoryPage({ useWorkspaces, useSessions }) {
       const workspaceItems = useWorkspaces((state) => state.items)
       const sessionById = useSessions((state) => state.byId || {})
@@ -1804,6 +1958,13 @@ window.__ModuleLoader__.load({
           select: selectMemoryCitations,
         }, MemoryCitationTail))
       }
+      try {
+        slots.inject('sidebar.footer.action', () => slots.register({
+          name: 'sidebar.footer.action',
+          id: 'stratagate-compression',
+          order: 40,
+        }, MemoryCompressionWidget))
+      } catch {}
       slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'stratagate-memory', order: 32, label: () => 'StrataGate-AgentMemory' }, (props) => h(MemoryPage, props)))
     }
 
