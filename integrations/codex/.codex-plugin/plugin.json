@@ -1,0 +1,37 @@
+{
+  "name": "stratagate-memory",
+  "version": "0.1.0",
+  "description": "Local-first, source-traceable cross-session memory for Codex, powered by the shared StrataGate engine. Auto-recall on UserPromptSubmit, incremental L5 capture on Stop, and evidence-gated MCP retrieval tools.",
+  "author": {
+    "name": "diqier"
+  },
+  "homepage": "https://github.com/diqierjia/StrataGate-AgentMemory/tree/main/integrations/codex",
+  "repository": "https://github.com/diqierjia/StrataGate-AgentMemory",
+  "license": "MIT",
+  "keywords": [
+    "agent-memory",
+    "cross-session-memory",
+    "local-first",
+    "source-tracing",
+    "evidence-gate",
+    "mcp",
+    "codex"
+  ],
+  "category": "Developer Tools",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "skills": ["./skills/"],
+  "interface": {
+    "displayName": "StrataGate Memory",
+    "shortDescription": "Local-first cross-session memory for Codex",
+    "longDescription": "Records completed conversations and tool results into local SQLite, recalls them before each prompt, and exposes evidence-gated MCP retrieval tools. Sources are always preserved for verification.",
+    "developerName": "diqier",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Automatic memory recall on each prompt",
+      "Incremental conversation capture per turn",
+      "Evidence-gated retrieval with source traceability"
+    ],
+    "websiteURL": "https://github.com/diqierjia/StrataGate-AgentMemory"
+  }
+}

@@ -416,6 +416,8 @@ tests/                  DeepSeek Harness integration tests
 cordis.patch.yml        Root-level DSH bundle manifest
 packages/core/          Shared memory engine, core tests, and example
 integrations/workbuddy/ WorkBuddy Host Adapter and MCP integration
+integrations/zcode/    ZCode plugin (thin adapter reusing the workbuddy engine)
+integrations/codex/    Codex plugin (thin adapter reusing the workbuddy engine)
 docs/                   DSH usage, architecture, and evaluation
 benchmarks/             Machine-readable experiment results
 ```

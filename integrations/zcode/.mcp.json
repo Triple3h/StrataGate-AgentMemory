@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "stratagate": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${ZCODE_PLUGIN_ROOT}/../workbuddy/dist/server.cjs"],
+      "cwd": "${ZCODE_PLUGIN_ROOT}/../workbuddy",
+      "env": {
+        "STRATAGATE_DATA_DIR": "${ZCODE_PLUGIN_DATA}",
+        "STRATAGATE_PROJECT_DIR": "${ZCODE_PROJECT_DIR}"
+      }
+    }
+  }
+}

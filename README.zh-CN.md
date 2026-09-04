@@ -425,6 +425,8 @@ tests/                  DeepSeek Harness 集成测试
 cordis.patch.yml        根目录 DSH bundle 清单
 packages/core/          共享记忆引擎、核心测试和示例
 integrations/workbuddy/ WorkBuddy Host Adapter 与 MCP 接入
+integrations/zcode/    ZCode 插件（复用 workbuddy 引擎的薄适配层）
+integrations/codex/    Codex 插件（复用 workbuddy 引擎的薄适配层）
 docs/                   DSH 使用、架构和完整评测文档
 benchmarks/             机器可读实验结果
 ```

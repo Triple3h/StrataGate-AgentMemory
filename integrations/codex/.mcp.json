@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "stratagate": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/../workbuddy/dist/server.cjs"],
+      "cwd": "${PLUGIN_ROOT}/../workbuddy",
+      "env": {
+        "STRATAGATE_DATA_DIR": "${STRATAGATE_DATA_DIR}",
+        "STRATAGATE_DATABASE": "${STRATAGATE_DATABASE}",
+        "STRATAGATE_PROJECT_DIR": "${STRATAGATE_PROJECT_DIR}"
+      }
+    }
+  }
+}

@@ -177,5 +177,10 @@
     "doc": "docs",
     "test": "tests"
   },
-  "author": ""
+  "author": "",
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.27.7": true
+  }
 }

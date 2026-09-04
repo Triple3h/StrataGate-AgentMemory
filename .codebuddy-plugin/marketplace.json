@@ -25,6 +25,40 @@
       "category": "productivity"
     },
     {
+      "name": "stratagate-zcode-memory",
+      "source": {
+        "source": "local",
+        "path": "./integrations/zcode"
+      },
+      "description": "Local-first, source-traceable cross-session memory for ZCode, backed by the shared StrataGate engine (thin adapter over integrations/workbuddy).",
+      "version": "0.1.0",
+      "author": {
+        "name": "diqier"
+      },
+      "homepage": "https://github.com/diqierjia/StrataGate-AgentMemory/tree/main/integrations/zcode",
+      "repository": "https://github.com/diqierjia/StrataGate-AgentMemory",
+      "license": "MIT",
+      "keywords": ["memory", "agent-memory", "zcode", "mcp", "local-first"],
+      "category": "productivity"
+    },
+    {
+      "name": "stratagate-codex-memory",
+      "source": {
+        "source": "local",
+        "path": "./integrations/codex"
+      },
+      "description": "Local-first, source-traceable cross-session memory for Codex, backed by the shared StrataGate engine (thin adapter over integrations/workbuddy).",
+      "version": "0.1.0",
+      "author": {
+        "name": "diqier"
+      },
+      "homepage": "https://github.com/diqierjia/StrataGate-AgentMemory/tree/main/integrations/codex",
+      "repository": "https://github.com/diqierjia/StrataGate-AgentMemory",
+      "license": "MIT",
+      "keywords": ["memory", "agent-memory", "codex", "mcp", "local-first"],
+      "category": "productivity"
+    },
+    {
       "name": "stratagate-dsh-memory",
       "source": {
         "source": "npm",

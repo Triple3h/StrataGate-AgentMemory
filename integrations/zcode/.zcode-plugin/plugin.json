@@ -1,0 +1,24 @@
+{
+  "name": "stratagate-memory",
+  "version": "0.1.0",
+  "description": "Zero-config local-first ZCode memory powered by the shared StrataGate engine: auto-recall on UserPromptSubmit, incremental L5 capture on Stop, and evidence-gated MCP retrieval tools.",
+  "author": {
+    "name": "diqier"
+  },
+  "homepage": "https://github.com/diqierjia/StrataGate-AgentMemory/tree/main/integrations/zcode",
+  "repository": "https://github.com/diqierjia/StrataGate-AgentMemory",
+  "license": "MIT",
+  "keywords": [
+    "agent-memory",
+    "cross-session-memory",
+    "local-first",
+    "source-tracing",
+    "evidence-gate",
+    "mcp",
+    "zcode"
+  ],
+  "category": "productivity",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "skills": ["./skills/"]
+}
