@@ -3,6 +3,8 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { StrataGate } from '@diqier/stratagate'
+import { SqliteStorage } from '@diqier/stratagate/sqlite'
 import { resolveConfig } from '../src/config.js'
 import { WorkBuddyRuntime } from '../src/runtime.js'
 
@@ -250,5 +252,73 @@ process.stdout.write(JSON.stringify({ structured_output: result }))
       model: { provider: 'workbuddy', model: 'lite' },
       counts: { blocks: 2, events: 2, elements: 1 },
     })
+  })
+
+  it('searches and expands the knowledge graph through the shared engine', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'stratagate-workbuddy-graph-test-'))
+    temporaryDirectories.push(dataDir)
+    const database = join(dataDir, 'memory.db')
+    const projectDir = join(dataDir, 'project')
+    const runtimeConfig = resolveConfig({
+      STRATAGATE_DATA_DIR: dataDir,
+      STRATAGATE_DATABASE: database,
+      STRATAGATE_PROJECT_DIR: projectDir,
+      STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+    }, projectDir)
+
+    // Seed a SQLite DB with an event-backed knowledge graph, using the same
+    // namespace the WorkBuddyRuntime below resolves.
+    const storage = new SqliteStorage({ filename: database })
+    const memory = await StrataGate.openWithStorage({
+      storage,
+      namespace: runtimeConfig.namespace,
+      blockTurnSize: 1,
+      summarizer: async () => ({ l0Title: 't', l0Tags: [], l1Summary: 's', l2Keypoints: [], shouldExtract: true }),
+      extractor: async ({ target }) => ({
+        shouldExtract: true,
+        reason: 'durable event',
+        events: [{
+          title: 'Chose Maven',
+          summary: 'The team chose Maven for the build.',
+          sourceMessageIds: [target.l5Raw[0]!.id],
+          sourceBlockId: target.id,
+          temporal: { eventType: 'decision' },
+        }],
+      }),
+      graphProjector: async ({ events }) => ({
+        reason: 'projected',
+        nodes: [
+          { ref: 'tool', name: 'Maven', type: 'tool', tags: ['build'], state: 'Maven is the chosen build tool.', sourceEventIds: [events[0]!.id] },
+          { ref: 'project', name: 'StrataGate', type: 'project', state: 'active', sourceEventIds: [events[0]!.id] },
+        ],
+        edges: [
+          { fromRef: 'project', toRef: 'tool', relation: 'uses', sourceEventIds: [events[0]!.id] },
+        ],
+      }),
+    })
+    await memory.appendTurn({ user: 'We chose Maven.', assistant: 'Using Maven.', receiptId: 'g1' })
+    await memory.appendTurn({ user: 'Keep going.', assistant: 'OK.', receiptId: 'g2' })
+    await memory.resumePendingWork()
+    await memory.close()
+
+    // Query through WorkBuddyRuntime against the same DB file + namespace.
+    const runtime = new WorkBuddyRuntime(runtimeConfig)
+
+    const search = await runtime.searchGraph('Maven build', 'session-1')
+    expect(search.batchId).toMatch(/^batch_/)
+    expect(search.results.length).toBeGreaterThan(0)
+    const maven = search.results.find((item) => item.title === 'Maven')
+    expect(maven).toBeTruthy()
+    expect(maven?.content).toBeTruthy()
+    expect(maven?.rankScore).toEqual(expect.any(Number))
+    expect(maven?.scoreMeaning).toContain('Ranking-only BM25')
+
+    const expanded = await runtime.expandGraphNode(search.batchId, maven!.id!)
+    expect(expanded.results).toHaveLength(1)
+    expect(expanded.results[0]?.title).toBe('Maven')
+    const parsed = JSON.parse(expanded.results[0]!.content)
+    expect(parsed.currentState).toBeDefined()
+    expect(parsed.edges).toEqual(expect.any(Array))
+    expect(expanded.batchId).toMatch(/^batch_/)
   })
 })

@@ -22,6 +22,8 @@ StrataGate registers MCP tools under the `mcp__stratagate__` prefix in ZCode. Ke
 
 - `mcp__stratagate__memory_search_events` — search source-traceable events
 - `mcp__stratagate__memory_search_elements` — search current-state facts
+- `mcp__stratagate__memory_search_graph` — search the Event-backed knowledge graph
+- `mcp__stratagate__memory_expand_graph_node` — expand a graph node (facts + edges)
 - `mcp__stratagate__memory_search_raw` — search L5 raw messages
 - `mcp__stratagate__memory_get_blocks` — list memory blocks
 - `mcp__stratagate__memory_expand_event` / `memory_expand_element` / `memory_expand_block` — expand a card/block

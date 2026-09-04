@@ -345,6 +345,57 @@ export class WorkBuddyRuntime {
     return this.createBatch(source.sessionId, items)
   }
 
+  async searchGraph(query: string, sessionId = sessionIdFallback(), limit = 8): Promise<BatchResult> {
+    const items = await this.withMemory(async (memory) => {
+      const results = await memory.searchGraphNodes(query, limit)
+      return results.map(({ node, score, matchedFields, matchReason }) => ({
+        ref: `graph-node:${node.id}`,
+        kind: 'element' as const,
+        id: node.id,
+        type: node.type,
+        title: node.name,
+        content: short(node.currentState),
+        summary: short(node.currentState),
+        rankScore: score,
+        scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
+        ...(matchedFields && matchedFields.length > 0 ? { matchedFields } : {}),
+        ...(matchReason ? { matchReason } : {}),
+        target: { eventIds: node.sourceEventIds, elementIds: [] },
+      }))
+    })
+    return this.createBatch(sessionId, items)
+  }
+
+  async expandGraphNode(sourceBatchId: string, nodeId: string): Promise<BatchResult> {
+    const source = await this.requireBatch(sourceBatchId)
+    const items = await this.withMemory(async (memory) => {
+      const node = memory.listGraphNodes().find((candidate) => candidate.id === nodeId)
+      if (!node) throw new Error(`Unknown graph node: ${nodeId}`)
+      const edges = memory.listGraphEdges()
+        .filter(({ fromNodeId, toNodeId }) => fromNodeId === nodeId || toNodeId === nodeId)
+        .map(({ fromNodeId, toNodeId, relation }) => ({
+          from: fromNodeId === nodeId ? undefined : fromNodeId,
+          to: toNodeId === nodeId ? undefined : toNodeId,
+          relation,
+        }))
+      return [{
+        ref: `graph-node:${node.id}:expanded`,
+        kind: 'element' as const,
+        id: node.id,
+        type: node.type,
+        title: node.name,
+        content: short(JSON.stringify({
+          currentState: node.currentState,
+          aliases: node.aliases,
+          facts: node.facts,
+          edges,
+        }), 8_000),
+        target: { eventIds: node.sourceEventIds, elementIds: [] },
+      }]
+    })
+    return this.createBatch(source.sessionId, items)
+  }
+
   async assess(batchId: string, input: RetrievalAssessmentInput): Promise<StoredAssessment> {
     const batch = await this.requireBatch(batchId)
     const normalized = normalizeRetrievalAssessment(input, new Set(Object.keys(batch.refs)))

@@ -81,6 +81,7 @@ All tools are exposed as `mcp__stratagate__*` in Codex:
 ```text
 memory_search_events   memory_expand_event
 memory_search_elements memory_expand_element
+memory_search_graph    memory_expand_graph_node
 memory_search_raw      memory_get_blocks
 memory_expand_block    memory_assess
 memory_record_use      memory_status

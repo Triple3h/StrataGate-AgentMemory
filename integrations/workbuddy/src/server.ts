@@ -109,6 +109,27 @@ server.registerTool('memory_search_elements', {
   ...(args.element_type !== undefined ? { type: args.element_type } : {}),
 })))
 
+server.registerTool('memory_search_graph', {
+  title: 'Search StrataGate knowledge graph',
+  description: 'Search the current Event-backed Knowledge Graph for people, projects, organizations, tools, places, facts, and relations. Returns compact node cards with matchedFields/matchReason; call memory_expand_graph_node for complete facts and edges. rankScore is BM25/RRF ordering only, never confidence or factual accuracy. Results are independently assessable.',
+  inputSchema: {
+    query: z.string().min(1).max(2_000),
+    session_id: session,
+    limit: z.number().int().min(1).max(20).optional(),
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+}, (args) => safe(() => runtime.searchGraph(args.query, args.session_id, args.limit ?? 8)))
+
+server.registerTool('memory_expand_graph_node', {
+  title: 'Expand a StrataGate knowledge graph node',
+  description: 'Expand one Knowledge Graph node with its current facts, directed edges, and supporting Event evidence. The result is a new evidence batch and must be assessed before use.',
+  inputSchema: {
+    batch_id: z.string().startsWith('batch_'),
+    node_id: z.string().min(1).max(200),
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+}, (args) => safe(() => runtime.expandGraphNode(args.batch_id, args.node_id)))
+
 server.registerTool('memory_search_raw', {
   title: 'Search raw StrataGate memory',
   description: 'Search recent or archived L5 source messages when derived memory is missing exact wording, dates, constraints, or tool results. Results include a bounded excerpt and blockId; expand the block for complete source details. Defaults to the whole current namespace; use scope=session for the active thread.',
