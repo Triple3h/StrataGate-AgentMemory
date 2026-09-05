@@ -179,6 +179,12 @@ facts/edges to the expand tools. `rankScore` is a BM25/RRF ordering metric only,
 factual accuracy. Graph relation-only hits are filtered as likely adjacency noise; name, alias, tag,
 state, fact, type, and other descriptive matches remain eligible across all supported node types.
 
+Search APIs accept an optional scope/thread context. Session-scoped Events, Element facts, Graph nodes,
+and raw messages are rejected unless their source conversation matches the caller; mixed Graph nodes
+are hidden rather than partially revealing facts. The reusable security helpers in `packages/core/src/security.ts`
+also provide immutable namespace identity comparison and one-way outbound credential redaction. Redaction
+does not alter L5 storage and is not encryption.
+
 ## Event weight and adoption
 
 Event decay uses:

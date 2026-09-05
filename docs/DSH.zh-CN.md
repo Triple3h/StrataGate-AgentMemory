@@ -144,6 +144,8 @@ config:
   blockDecayLambda: 0.3
   ingestSubagents: false
   maxOutputTokens: 10000
+  # 可选：共享 HTTP 管理入口的 Bearer token；仅在非本机访问时启用。
+  # adminToken: replace-with-a-long-random-token
   # 可选：为记忆处理指定专用模型。
   # provider: deepseek
   # model: deepseek-chat
@@ -162,6 +164,10 @@ config:
 ## 隐私与故障处理
 
 记忆保存在配置指定的本地 SQLite 文件中。图谱升级会按优先级小批量处理、逐批保存并在中断后续跑。L5 层会保留原始来源消息，供后续核验。
+
+设置 `adminToken`（或环境变量 `STRATAGATE_ADMIN_TOKEN`）后，管理 API 会要求
+`Authorization: Bearer <token>`；未设置时保持本机插件的兼容行为。详细备份、迁移和
+namespace 隔离步骤见 [安全与隐私运维手册](OPERATIONS.zh-CN.md)。
 
 为便于诊断，每个命名空间会保留最近 5 次成功的记忆模型响应。失败响应会保留完整错误详情；Memory 界面只显示有限长度的预览，并提供复制完整文本的操作。
 

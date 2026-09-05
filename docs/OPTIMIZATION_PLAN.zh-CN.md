@@ -1,6 +1,6 @@
 # StrataGate Agent Memory 优化总体计划
 
-状态：第二阶段已完成，第三阶段待执行
+状态：第六阶段观测、固定数据集评测和自动化生产门禁已实现；GPT Desktop 真实 E2E 与运维演练待执行
 更新日期：2026-09-05
 
 ## 1. 总体结论
@@ -124,9 +124,10 @@ WorkBuddy package verifier 已兼容当前 npm 的 `npm pack --json` 返回格�
 | 检查项 | 结果 |
 | --- | --- |
 | `npm run check` | 通过 |
-| `npm test` | 通过，147 个测试 |
+| `npm test` | 通过，155 个测试（Core 61、DSH 80、WorkBuddy 14） |
 | `npm run build` | 通过 |
 | `npm run verify:workbuddy` | 通过，清洁安装、Hook、MCP handshake |
+| `npm run verify:host` | 通过，跨进程 Hook/MCP、并行 Agent、ZCode、恢复和 receipt smoke |
 | 三端脚本语法检查 | 通过 |
 | 三端 manifest JSON 检查 | 通过 |
 | `git diff --check` | 通过 |
@@ -170,6 +171,26 @@ WorkBuddy package verifier 已兼容当前 npm 的 `npm pack --json` 返回格�
 - 重启和中断恢复至少验证一次；
 - 失败场景不会阻断宿主主流程。
 
+### 6.4 当前实现与证据
+
+已加入可重复执行的宿主协议 smoke：`npm run verify:host`。它启动真实构建产物
+`dist/hook.cjs` 和 `dist/server.cjs`，使用 Codex/WorkBuddy 形状的 hook payload，
+并在临时 SQLite 中交叉核对：
+
+- Agent A/B/C 并行写入同一 project namespace，`agent_id`、`conversation_id`、`user_id`
+  和 `source_adapter` 保持可追溯；
+- 两个 Stop 并发重放同一 transcript 时，稳定 ingestion receipt 只产生一个 turn；
+- `SubagentStart`、`SubagentStop`、`PreCompact`、`Interrupt` 和坏输入均保持可重放，坏输入
+  通过 stderr 可观测且 fail-open；
+- Codex command/tool trace 保留在 raw message；
+- MCP `search -> assess -> record_use` 链路可闭环，重复 `record_use` 不增加 receipt；
+- ZCode prompt recall 生成持久化 batch，随后 ZCode rollout Stop 写入共享 namespace；
+- 重新打开 runtime 后，已落盘的四个 block 可恢复，重复恢复不增加 block。
+
+该 smoke 证明的是宿主协议、跨进程 SQLite 和适配器状态边界，不等同于 GPT Desktop
+真实客户端验证。真实桌面验证仍需在已安装并信任 Hook 的 GPT Desktop/Codex 会话中
+记录实际 payload、Hook 输出和并行 Agent 行为。
+
 ## 7. 第四阶段：发布形态与安装隔离
 
 这阶段不改变记忆语义，专注交付。
@@ -193,6 +214,19 @@ WorkBuddy package verifier 已兼容当前 npm 的 `npm pack --json` 返回格�
 
 默认建议先保留共享构建产物，避免重复打包造成逻辑分叉。
 
+### 7.3 当前实现与验证
+
+共享构建现在由 `integrations/workbuddy/dist` 统一产出。每次
+`npm run build:workbuddy` 会同时生成 `server.cjs`、`hook.cjs`、`runtime.cjs`
+和 `manifest.json`；清单记录 WorkBuddy 引擎版本、Core 版本以及三个运行时文件的
+SHA-256。Codex/ZCode 安装器在修改宿主配置前会验证清单、版本和文件哈希，缺失、篡改
+或构建版本不一致时直接失败，不会写入半完成配置。
+
+安装器还会把已有的 StrataGate MCP/hook 路径迁移到本次验证过的同一份
+`workbuddy/dist`。因此两个宿主不会因为残留旧绝对路径而分别加载不同 Core；升级时只需
+重新构建共享引擎，再分别运行两个安装器。WorkBuddy 发布包把清单一并打包，
+`npm run verify:workbuddy` 会在干净安装后重新校验哈希并完成 Hook/MCP smoke。
+
 ## 8. 第五阶段：安全、隐私与多用户边界
 
 当第三阶段 E2E 通过后，再处理更强的安全边界：
@@ -205,6 +239,26 @@ WorkBuddy package verifier 已兼容当前 npm 的 `npm pack --json` 返回格�
 - 为数据库备份、迁移失败和恢复建立运维手册。
 
 这里的重点是“可证明地不串线”，而不是增加更多记忆类型。
+
+### 8.1 当前实现与运维边界
+
+已落地一组可审计的安全基线：
+
+- Core 在重新打开 namespace 时校验 `userId`、`projectId`、`memoryScope` 和
+  `namespacePrefix`；冲突会拒绝加载并发出 `STRATAGATE_IDENTITY_CONFLICT` 告警。`agentId`、
+  `conversationId` 和 `sourceAdapter` 保持为可变 provenance，不会把协作 Agent 隔离到不同
+  的 project namespace；
+- Event、Element、Graph 和 raw message 检索支持 scope/thread 过滤，session 级数据不会被
+  其他 conversation 读取；管理快照只返回当前用户的 namespace；
+- DSH 管理 HTTP 入口支持通过 `STRATAGATE_ADMIN_TOKEN` 开启 Bearer/header 鉴权，token 使用
+  常量时间比较；模型、MCP 和管理 UI 的出站文本统一执行不可逆凭证脱敏，SQLite 内的 L5
+  原始证据不被覆盖；
+- 外部记忆导入任务保存创建、提交和人工 undo 的 actor、会话、适配器和时间审计轨迹；
+- [OPERATIONS.zh-CN.md](OPERATIONS.zh-CN.md) 固化了文件权限、备份/WAL、迁移失败、冲突恢复
+  和导入撤销流程。备份恢复演练仍需在目标部署环境实际执行，文档不替代演练证据。
+
+新增 `packages/core/tests/security.test.ts` 覆盖 identity 冲突、session 隔离、脱敏和 token
+比较；这些测试证明的是库级边界，不等同于共享 HTTP 入口或多用户生产部署的渗透测试。
 
 ## 9. 第六阶段：评测、可观测性与生产门禁
 
@@ -245,6 +299,25 @@ storage_revision
 5. 至少一轮固定数据集回归评测通过；
 6. 发布包在干净环境可安装和运行。
 
+### 9.4 当前实现与运行方式
+
+Core 新增版本化的 `ObservabilityEvent`/`ObservabilityCollector`（详见
+[`OBSERVABILITY.zh-CN.md`](OBSERVABILITY.zh-CN.md)）。所有事件使用同一组平面
+JSON 字段（`request_id`、`batch_id`、`assessment_id`、`receipt_id`、`namespace`、身份与
+`source_adapter`、`schema_version`、`storage_revision`），并以空字符串表示不适用的关联 ID。
+检索、写入、恢复、assessment 和 record-use 会发出非阻塞事件；collector 可计算检索 P95、
+Evidence Gate 拒绝率、重复采用率和 fail-open 错误率。WorkBuddy 可通过
+`STRATAGATE_OBSERVABILITY_FILE=/path/observations.jsonl` 开启 JSONL 文件观测，DSH 可通过
+`STRATAGATE_OBSERVABILITY_LOG=1` 输出结构化日志。观测 sink 失败不会阻断主流程。
+
+固定数据集门槛由 `npm run evaluate` 执行，默认校验 `benchmarks/locomo-conv26-r8-final.json`
+的范围、完成数、Judge 次数和未恢复失败数；可用 `--input` 与 `--min-majority` 指定报告和
+最低多数准确率。`npm run verify:production` 先运行 check/test/build、WorkBuddy 清洁安装、
+宿主协议 smoke 和固定评测，再要求部署人员提供
+`STRATAGATE_GPT_DESKTOP_E2E_EVIDENCE` 与 `STRATAGATE_DR_EVIDENCE` 两个证据文件；缺少任一
+文件时退出码为 2，明确表示“尚未具备生产级表述资格”，而不是把静态检查误当成真实宿主或
+灾备证明。
+
 ## 10. 推荐执行顺序
 
 ```text
@@ -254,11 +327,11 @@ storage_revision
         |
 下一步：第三阶段 GPT Desktop 真实 E2E
         |
-随后：第四阶段 发布形态与安装隔离
+已完成：第四阶段 共享构建产物与安装隔离
         |
-随后：第五阶段 安全、隐私、多用户边界
+已完成：第五阶段 安全、隐私、多用户边界（桌面真实 E2E 和灾备演练仍待执行）
         |
-最后：第六阶段 评测、可观测性、生产门禁
+已实现：第六阶段 评测、可观测性、生产门禁（真实宿主和灾备证据仍需部署环境提供）
 ```
 
 短期不建议继续增加新的 Agent 适配器或新的记忆类型。优先把现有四套入口在真实宿主中跑通，并把失败、恢复和权限边界证据固定下来。
@@ -269,8 +342,11 @@ storage_revision
 - [ ] 真实 Hook trust 和六类生命周期事件 payload 记录；
 - [ ] 并发写入、冲突重试、重启恢复的宿主级证据；
 - [ ] 评估是否需要 `memory_space_agents` 等更细粒度的 Agent 注册表；
-- [ ] 决定共享构建产物还是完全自包含发布包；
-- [ ] 固化生产环境备份、迁移和隐私运维流程。
+- [x] 已决定默认使用共享构建产物；完全自包含包仅在离线/独立分发需求出现时再评估；
+- [x] namespace identity 不可变校验、scope/thread 检索隔离、管理入口鉴权和导入/undo 审计；
+- [x] raw/graph/admin 出站数据脱敏与当前用户 namespace 过滤；
+- [x] 固化生产环境备份、迁移和隐私运维流程（见 `docs/OPERATIONS.zh-CN.md`；实际演练待目标环境执行）。
+- [x] 统一观测事件、P95/拒绝率聚合、固定数据集评测和生产门禁命令（`npm run evaluate`、`npm run verify:production`）。
 
 在这些事项完成前，最准确的产品表述是：
 

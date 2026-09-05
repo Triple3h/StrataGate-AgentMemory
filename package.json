@@ -56,7 +56,10 @@
     "test:core": "npm run test --workspace @diqier/stratagate",
     "test:workbuddy": "npm run test --workspace stratagate-workbuddy",
     "verify:dsh": "npm run build:dsh && node scripts/verify-package.mjs",
+    "verify:host": "npm run verify:host --workspace stratagate-workbuddy",
     "verify:workbuddy": "npm run verify:package --workspace stratagate-workbuddy",
+    "evaluate": "node scripts/evaluate-benchmark.mjs",
+    "verify:production": "node scripts/production-gate.mjs",
     "test:watch": "vitest --config vitest.config.ts",
     "prepare": "npm run build:dsh"
   },
