@@ -51,8 +51,8 @@ describe('Console navigation and project scope', () => {
     ],blocks:[]}`)
     expect(h.run('sessions().length')).toBe(1)
     expect(h.run('sessions()[0].messages.length')).toBe(2)
-    expect(h.run('sessionTable(sessions())')).toContain('&lt;img')
-    expect(h.run('sessionTable(sessions())')).not.toContain('<img')
+    expect(h.run('sessionCards(sessions())')).toContain('&lt;img')
+    expect(h.run('sessionCards(sessions())')).not.toContain('<img')
   })
 
   it('does not silently substitute another project for a stale shared link', async () => {

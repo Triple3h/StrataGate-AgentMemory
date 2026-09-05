@@ -1,4 +1,4 @@
-import { Activity, ArrowRight, BookOpen, CheckCheck, Database, Download, LayoutDashboard, Layers, MessageSquare, RotateCcw, Search, Settings, Sparkles, X, type IconNode } from 'lucide'
+import { Activity, ArrowRight, BookOpen, CheckCheck, Compass, Database, Download, LayoutDashboard, Layers, MessageSquare, Moon, RotateCcw, Search, Settings, Sparkles, Sun, User, X, type IconNode } from 'lucide'
 import { CONSOLE_CLIENT } from './console-client.js'
 import { CONSOLE_ROUTES } from './console-routes.js'
 import { CONSOLE_STYLES } from './console-styles.js'
@@ -12,7 +12,7 @@ const icons = Object.fromEntries(Object.entries({
   dashboard: LayoutDashboard, sessions: MessageSquare, blocks: Layers, memory: BookOpen,
   processing: Activity, audit: CheckCheck, import: Download, settings: Settings,
   refresh: RotateCcw, search: Search, close: X, reset: X, arrow: ArrowRight,
-  brand: Sparkles, database: Database,
+  brand: Sparkles, database: Database, sun: Sun, moon: Moon, compass: Compass, user: User,
 }).map(([name, nodes]) => [name, svg(nodes)]))
 
 /** Static UI assets only. All source data is fetched through authenticated Gateway APIs. */
