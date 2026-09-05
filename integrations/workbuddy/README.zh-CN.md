@@ -47,6 +47,11 @@ codebuddy plugin validate ./integrations/workbuddy
 codebuddy --plugin-dir ./integrations/workbuddy
 ```
 
+`npm run build:workbuddy` 会一次性生成 Codex、ZCode 和 WorkBuddy 共用的
+`dist/server.cjs`、`dist/hook.cjs`、`dist/runtime.cjs`，并写入包含引擎/Core 版本及
+SHA-256 的 `dist/manifest.json`。Codex/ZCode 安装器和 `npm run verify:workbuddy`
+都会校验这份清单；升级时先重建共享引擎，再运行对应安装器，避免两个宿主加载不同版本。
+
 修改插件后，在 WorkBuddy 中运行 `/reload-plugins`。
 
 ## 通过市场安装

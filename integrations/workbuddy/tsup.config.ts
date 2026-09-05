@@ -6,6 +6,7 @@ export default defineConfig([
     entry: {
       server: 'src/server.ts',
       hook: 'src/hook.ts',
+      runtime: 'src/runtime.ts',
     },
     format: ['cjs'],
     target: 'node22',

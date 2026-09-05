@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { StrataGate } from '@diqier/stratagate'
+import { ObservabilityCollector, StrataGate } from '@diqier/stratagate'
 import { SqliteStorage } from '@diqier/stratagate/sqlite'
 import { resolveConfig } from '../src/config.js'
 import { WorkBuddyRuntime } from '../src/runtime.js'
@@ -27,6 +27,31 @@ async function runtime(): Promise<WorkBuddyRuntime> {
 }
 
 describe('WorkBuddyRuntime', () => {
+  it('emits correlated retrieval, assessment, and usage observations', async () => {
+    const collector = new ObservabilityCollector()
+    const dataDir = await mkdtemp(join(tmpdir(), 'stratagate-workbuddy-observe-'))
+    temporaryDirectories.push(dataDir)
+    const memory = new WorkBuddyRuntime({
+      ...resolveConfig({
+        STRATAGATE_DATA_DIR: dataDir,
+        STRATAGATE_BLOCK_TURN_SIZE: '1',
+        STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+      }, join(dataDir, 'project')),
+      observability: collector.sink,
+    })
+    await memory.appendTurn({ user: 'Remember canary release.', assistant: 'Noted.', receiptId: 'observe-turn' })
+    const batch = await memory.searchRaw('canary')
+    const assessment = await memory.assess(batch.batchId, {
+      verdict: 'sufficient', evidence_refs: batch.evidenceRefs, fit: 'direct', missing: '', next_strategy: 'answer',
+    })
+    await memory.recordUse(assessment.id)
+    const events = collector.events()
+    expect(events.some((event) => event.operation === 'retrieval' && event.batch_id === batch.batchId)).toBe(true)
+    expect(events.some((event) => event.operation === 'assessment' && event.assessment_id === assessment.id)).toBe(true)
+    expect(events.some((event) => event.operation === 'record_use' && event.receipt_id === `workbuddy:${assessment.id}`)).toBe(true)
+    expect(collector.metrics().evidenceGate.sufficient).toBe(1)
+  })
+
   it('makes block scope and empty reasons explicit', async () => {
     const memory = await runtime()
     await memory.appendTurn({ user: 'thread A marker', assistant: 'saved', threadId: 'thread-a', receiptId: 'turn-a' })

@@ -26,6 +26,7 @@ export interface StoredAssessment {
   createdAt: string
   verdict: 'sufficient' | 'partial' | 'wrong'
   evidenceRefs: string[]
+  rejectedEvidenceRefs?: Array<{ inputIndex: number; ref: string; reason: string; detail: string }>
   fit: string
   missing: string
   nextStrategy: string

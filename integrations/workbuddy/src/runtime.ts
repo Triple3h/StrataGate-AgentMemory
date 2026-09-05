@@ -8,6 +8,12 @@ import {
   normalizeRetrievalAssessment,
   effectiveConfidence,
   searchTokens,
+  redactSensitiveText,
+  canAccessMemoryScope,
+  observe,
+  ObservabilityCollector,
+  type ObservationContext,
+  type ObservabilitySink,
   type BlockLevel,
   type ElementSearchOptions,
   type RetrievalAssessmentInput,
@@ -75,15 +81,8 @@ export interface RecordUseResult {
 
 const STAR_REPOSITORY_URL = 'https://github.com/diqierjia/StrataGate-AgentMemory'
 
-function redact(text: string): string {
-  return text
-    .replace(/\b(?:sk|gh[opasu]|github_pat)_[A-Za-z0-9_-]{12,}\b/gu, '[REDACTED_TOKEN]')
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]{12,}={0,2}\b/giu, '$1[REDACTED]')
-    .replace(/\b(api[_-]?key|token|password|secret)\s*[:=]\s*([^\s,;]+)/giu, '$1=[REDACTED]')
-}
-
 function short(value: string, limit = 1_500): string {
-  return redact(value).replace(/\u0000/gu, '').trim().slice(0, limit)
+  return redactSensitiveText(value).replace(/\u0000/gu, '').trim().slice(0, limit)
 }
 
 function valueText(value: string | string[]): string {
@@ -102,9 +101,25 @@ function belongsToSession(threadId: string | undefined, sessionId: string): bool
 
 export class WorkBuddyRuntime {
   readonly state: WorkBuddyState
+  private readonly observability: ObservabilitySink | undefined
+  private readonly metrics = new ObservabilityCollector()
 
   constructor(readonly config: WorkBuddyConfig) {
     this.state = new WorkBuddyState(config.dataDir)
+    this.observability = (event) => {
+      this.metrics.record(event)
+      config.observability?.(event)
+    }
+  }
+
+  private emit(operation: Parameters<typeof observe>[1], outcome: Parameters<typeof observe>[2], startedAt: number, context: ObservationContext = {}, attributes: Parameters<typeof observe>[5] = {}): void {
+    observe(this.observability, operation, outcome, {
+      namespace: this.config.namespace,
+      userId: this.config.userId,
+      agentId: this.config.agentId,
+      sourceAdapter: 'workbuddy',
+      ...context,
+    }, startedAt, attributes)
   }
 
   async processPending(): Promise<unknown> {
@@ -147,9 +162,9 @@ export class WorkBuddyRuntime {
   ): Promise<BatchResult> {
     const limit = this.config.retrievalLimit
     const items = await this.withMemory(async (memory) => {
-      const events = await memory.searchEvents(query, { ...eventOptions, limit: Math.min(limit, eventOptions.limit ?? 4) })
-      const elements = await memory.searchElements(query, { ...elementOptions, limit: Math.min(limit, elementOptions.limit ?? 4) })
-      const raw = memory.searchRawMemory(query, Math.min(limit, 4))
+      const events = await memory.searchEvents(query, { ...eventOptions, threadId: sessionId, limit: Math.min(limit, eventOptions.limit ?? 4) })
+      const elements = await memory.searchElements(query, { ...elementOptions, threadId: sessionId, limit: Math.min(limit, elementOptions.limit ?? 4) })
+      const raw = memory.searchRawMemory(query, Math.min(limit, 4), { threadId: sessionId, scope: 'namespace' })
       const tokens = searchTokens(query)
       const tail = memory.listOpenTail().filter((message) => {
         if (!belongsToSession(message.threadId, sessionId)) return false
@@ -247,7 +262,7 @@ export class WorkBuddyRuntime {
 
   async searchRaw(query: string, sessionId = sessionIdFallback(), limit?: number, scope: BlockQueryScope = 'namespace'): Promise<BatchResult> {
     const items = await this.withMemory(async (memory) => {
-      const archived: EvidenceItem[] = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER)
+      const archived: EvidenceItem[] = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER, { threadId: sessionId, scope })
         .filter((result) => scope === 'namespace' || belongsToSession(result.message.threadId, sessionId))
         .map((result) => ({
         ref: `raw:${result.blockId}:${result.message.id}`,
@@ -366,7 +381,7 @@ export class WorkBuddyRuntime {
 
   async searchGraph(query: string, sessionId = sessionIdFallback(), limit = 8): Promise<BatchResult> {
     const items = await this.withMemory(async (memory) => {
-      const results = await memory.searchGraphNodes(query, limit)
+      const results = await memory.searchGraphNodes(query, limit, { threadId: sessionId })
       return results.map(({ node, score, matchedFields, matchReason }) => ({
         ref: `graph-node:${node.id}`,
         kind: 'element' as const,
@@ -390,8 +405,17 @@ export class WorkBuddyRuntime {
     const items = await this.withMemory(async (memory) => {
       const node = memory.listGraphNodes().find((candidate) => candidate.id === nodeId)
       if (!node) throw new Error(`Unknown graph node: ${nodeId}`)
+      const visible = (eventId: string): boolean => {
+        const event = memory.listEvents().find(({ id }) => id === eventId)
+        return event ? canAccessMemoryScope(event.scope, {
+          threadId: source.sessionId,
+          sourceThreadId: memory.listBlocks().find(({ id }) => id === event.sourceBlockId)?.threadId,
+        }) : false
+      }
+      if (node.sourceEventIds.length > 0 && !node.sourceEventIds.every(visible)) throw new Error(`Graph node is not visible in conversation ${source.sessionId}`)
       const edges = memory.listGraphEdges()
-        .filter(({ fromNodeId, toNodeId }) => fromNodeId === nodeId || toNodeId === nodeId)
+        .filter(({ fromNodeId, toNodeId, sourceEventIds }) =>
+          (fromNodeId === nodeId || toNodeId === nodeId) && sourceEventIds.every(visible))
         .map(({ fromNodeId, toNodeId, relation }) => ({
           from: fromNodeId === nodeId ? undefined : fromNodeId,
           to: toNodeId === nodeId ? undefined : toNodeId,
@@ -416,6 +440,7 @@ export class WorkBuddyRuntime {
   }
 
   async assess(batchId: string, input: RetrievalAssessmentInput): Promise<StoredAssessment> {
+    const startedAt = Date.now()
     const batch = await this.requireBatch(batchId)
     const normalized = normalizeRetrievalAssessment(input, new Set(Object.keys(batch.refs)))
     const eventIds = new Set<string>()
@@ -436,10 +461,21 @@ export class WorkBuddyRuntime {
       elementIds: [...elementIds],
     }
     await this.state.writeAssessment(assessment)
+    const rejectedEvidenceRefs = assessment.rejectedEvidenceRefs ?? []
+    this.emit('assessment', assessment.verdict === 'sufficient' && rejectedEvidenceRefs.length === 0 ? 'ok' : 'rejected', startedAt, {
+      batchId: assessment.batchId,
+      assessmentId: assessment.id,
+      conversationId: assessment.sessionId,
+    }, {
+      verdict: assessment.verdict,
+      rejected_evidence_count: rejectedEvidenceRefs.length,
+      evidence_count: assessment.evidenceRefs.length,
+    })
     return assessment
   }
 
   async recordUse(assessmentId: string): Promise<RecordUseResult> {
+    const startedAt = Date.now()
     const assessment = await this.state.readAssessment(assessmentId)
     if (!assessment) throw new Error(`Unknown assessment: ${assessmentId}`)
     if (assessment.verdict !== 'sufficient') throw new Error('Only sufficient evidence can be recorded as adopted')
@@ -468,6 +504,12 @@ export class WorkBuddyRuntime {
       return memory.exportSnapshot().usageReceipts.length
     }, false)
     const showStarPrompt = await this.state.claimStarPrompt(usageRecords)
+    this.emit('record_use', 'ok', startedAt, {
+      assessmentId: assessment.id,
+      batchId: assessment.batchId,
+      receiptId: `workbuddy:${assessment.id}`,
+      conversationId: assessment.sessionId,
+    }, { event_count: assessment.eventIds.length, element_count: assessment.elementIds.length })
     return {
       recorded: true,
       eventIds: assessment.eventIds,
@@ -497,10 +539,12 @@ export class WorkBuddyRuntime {
         projectionJobs: snapshot.elementProjectionJobs.length,
         usageReceipts: snapshot.usageReceipts.length,
       },
+      observability: this.metrics.metrics(),
     }
   }
 
   private async createBatch(sessionId: string, items: EvidenceItem[], metadata: Partial<BatchResult> = {}): Promise<BatchResult> {
+    const startedAt = Date.now()
     const id = `batch_${randomUUID()}`
     const batch: StoredBatch = {
       id,
@@ -511,6 +555,10 @@ export class WorkBuddyRuntime {
       refs: Object.fromEntries(items.map((item) => [item.ref, item.target])),
     }
     await this.state.writeBatch(batch)
+    this.emit('retrieval', items.length > 0 ? 'ok' : 'empty', startedAt, {
+      batchId: id,
+      conversationId: sessionId,
+    }, { result_count: items.length })
     return { batchId: id, evidenceRefs: Object.keys(batch.refs), results: items, ...metadata }
   }
 
@@ -543,6 +591,7 @@ export class WorkBuddyRuntime {
         ...(callbacks.summarizer ? { summarizer: callbacks.summarizer } : {}),
         ...(callbacks.extractor ? { extractor: callbacks.extractor } : {}),
         ...(callbacks.elementProjector ? { elementProjector: callbacks.elementProjector } : {}),
+        ...(this.observability ? { observability: this.observability } : {}),
       })
       try {
         return await operation(memory)

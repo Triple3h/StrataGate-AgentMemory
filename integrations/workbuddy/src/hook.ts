@@ -10,6 +10,10 @@ interface HookInput {
   transcript_path?: string
   agent_transcript_path?: string
   cwd?: string
+  conversation_id?: string
+  user_id?: string
+  project_id?: string
+  source_adapter?: string
   hook_event_name?: string
   agent_type?: string
   agent_id?: string
@@ -38,6 +42,36 @@ function stateKey(input: HookInput): string {
   const agent = input.agent_id?.trim() || input.agent_type?.trim() || 'primary'
   const path = transcriptPath(input) || 'no-transcript'
   return `${agent}:${pathKey(path)}`
+}
+
+function hostProvenance(input: HookInput, config: ReturnType<typeof resolveConfig>, sessionId: string) {
+  const agentId = input.agent_id?.trim() || input.agent_type?.trim() || config.agentId
+  const conversationId = input.conversation_id?.trim() || sessionId
+  return {
+    userId: input.user_id?.trim() || config.userId,
+    agentId,
+    conversationId,
+    ...(input.project_id?.trim() ? { projectId: input.project_id.trim() } : {}),
+    ...(input.source_adapter?.trim() ? { sourceAdapter: input.source_adapter.trim() } : {}),
+  }
+}
+
+function turnReceipt(
+  sessionId: string,
+  agentId: string,
+  path: string,
+  turn: { user: string; assistant: string; createdAt?: string; assistantToolCalls?: unknown[] },
+): string {
+  const fingerprint = JSON.stringify({
+    sessionId,
+    agentId,
+    path,
+    user: turn.user,
+    assistant: turn.assistant,
+    createdAt: turn.createdAt ?? null,
+    assistantToolCalls: turn.assistantToolCalls ?? [],
+  })
+  return `codex:${createHash('sha256').update(fingerprint).digest('hex')}`
 }
 
 async function readStdin(): Promise<string> {
@@ -115,7 +149,13 @@ async function stop(input: HookInput): Promise<unknown> {
   await runtime.appendTurn({
     ...turn,
     threadId: `${sessionId}:agent:${identityKey}`,
-    receiptId: `codex:${sessionId}:transcript:${pathKey(path)}:${delta.startOffset}-${delta.endOffset}`,
+    ...hostProvenance(input, config, sessionId),
+    receiptId: turnReceipt(
+      sessionId,
+      input.agent_id?.trim() || input.agent_type?.trim() || config.agentId,
+      path,
+      turn,
+    ),
   })
   await runtime.state.writeCursor(sessionId, {
     transcriptPath: path,

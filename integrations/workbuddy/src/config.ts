@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
-import { memoryNamespace, projectKey as sharedProjectKey } from '@diqier/stratagate'
+import { memoryNamespace, projectKey as sharedProjectKey, type ObservabilitySink } from '@diqier/stratagate'
+import { observabilitySink } from './observability.js'
 
 export interface ModelConfig {
   baseUrl: string
@@ -31,6 +32,8 @@ export interface WorkBuddyConfig {
   workerIntervalMs: number
   workBuddyModel?: WorkBuddyModelConfig
   model?: ModelConfig
+  /** Optional non-blocking structured telemetry sink for host metrics. */
+  observability?: ObservabilitySink
 }
 
 function first(...values: Array<string | undefined>): string | undefined {
@@ -104,6 +107,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string
   if (!['project', 'session', 'global'].includes(memoryScope)) throw new TypeError(`Invalid STRATAGATE_MEMORY_SCOPE: ${memoryScope}`)
   const sessionId = first(env.STRATAGATE_SESSION_ID, env.CODEBUDDY_SESSION_ID, env.CLAUDE_SESSION_ID)
   const globalNamespace = first(env.STRATAGATE_GLOBAL_NAMESPACE)
+  const telemetry = observabilitySink(env)
   return {
     dataDir,
     database: resolve(first(env.STRATAGATE_DATABASE) ?? join(dataDir, 'memory.db')),
@@ -125,5 +129,6 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string
     workerIntervalMs: integer(env.STRATAGATE_WORKER_INTERVAL_MS, 3_000, 1_000, 60_000),
     ...(workBuddyModel ? { workBuddyModel } : {}),
     ...(model ? { model } : {}),
+    ...(telemetry ? { observability: telemetry } : {}),
   }
 }

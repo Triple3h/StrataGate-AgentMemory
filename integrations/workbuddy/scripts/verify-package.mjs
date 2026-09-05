@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyEngineArtifacts } from './engine-artifact.mjs'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -160,6 +161,8 @@ try {
     'LICENSE',
     'dist/server.cjs',
     'dist/hook.cjs',
+    'dist/runtime.cjs',
+    'dist/manifest.json',
     'dist/star-widget-client.global.js',
   ]
   for (const path of required) assert(files.has(path), `Packed artifact is missing ${path}`)
@@ -186,6 +189,9 @@ try {
   run(['install', tarball, '--package-lock=false'], installRoot, { NPM_CONFIG_USERCONFIG: isolatedNpmrc })
   const installed = join(installRoot, 'node_modules', 'stratagate-workbuddy')
   for (const path of required) assert(existsSync(join(installed, path)), `Clean install is missing ${path}`)
+  const installedManifest = verifyEngineArtifacts(join(installed, 'dist'), {
+    expectedVersion: JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).version,
+  })
 
   const dataDir = join(installRoot, 'plugin-data')
   const projectDir = join(installRoot, 'sample-project')
@@ -222,7 +228,7 @@ try {
   assert(existsSync(join(dataDir, 'memory.db')), 'Stop hook did not create the local memory database')
 
   await mcpSmoke(join(installed, 'dist', 'server.cjs'), projectDir, env)
-  console.log(`Verified ${packed.filename}: ${packed.entryCount} files, clean install, hooks, and MCP handshake passed.`)
+  console.log(`Verified ${packed.filename}: ${packed.entryCount} files, engine ${installedManifest.version}, clean install, hooks, and MCP handshake passed.`)
 } finally {
   if (installRoot) rmSync(installRoot, { recursive: true, force: true })
   if (tarball) rmSync(tarball, { force: true })
