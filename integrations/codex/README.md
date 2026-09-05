@@ -39,10 +39,17 @@ node integrations/codex/scripts/install.mjs
 This ensures `~/.codex/config.toml` has:
 
 - a `stratagate` MCP server (stdio, absolute path to the shared engine);
-- `UserPromptSubmit` and `Stop` hooks calling the shared `hook.cjs`.
+- `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, and
+  `Interrupt` hooks calling the shared `hook.cjs`.
 
-It backs up `config.toml` first and never removes unrelated config; an existing
-`stratagate` MCP entry is preserved.
+It backs up `config.toml` first and never removes unrelated config. Existing
+StrataGate entries are migrated away from hard-coded repository directories and
+receive the shared namespace identity variables.
+
+All three adapters default to the same namespace format:
+`shared:user:<user_id>:scope:project:<project_hash>`. Set
+`STRATAGATE_USER_ID` consistently when multiple agents should share a user's
+memory; use `STRATAGATE_NAMESPACE` for an explicit isolated boundary.
 
 **Hook trust:** Codex gates hooks behind per-hook trust. After installing, start
 a Codex session and approve/trust the new hooks when prompted. Until they are

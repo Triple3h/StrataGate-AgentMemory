@@ -45,13 +45,15 @@ node integrations/zcode/scripts/install.mjs
 This ensures `~/.zcode/cli/config.json` has:
 
 - an enabled `stratagate` MCP server (stdio, absolute path to the shared engine);
-- `UserPromptSubmit` and `Stop` hooks calling the ZCode-native `zcode-hook.mjs`,
+- `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, and
+  `Interrupt` hooks calling the ZCode-native `zcode-hook.mjs`,
   each with `matcher: ".*"` — ZCode's `config.json` hook schema **requires** a
   non-empty `matcher` per group (omitting it makes the whole config fail to load);
 - a `memory` skill contribution when the plugin is loaded.
 
-It never removes unrelated config; if an entry already exists it is left
-untouched and reported. Then restart ZCode (or run `/reload-plugins`).
+It never removes unrelated config; an existing StrataGate entry is migrated to
+the shared project namespace (hard-coded project paths are removed). Then
+restart ZCode (or run `/reload-plugins`).
 
 ### Via marketplace (ZCode GUI)
 
@@ -81,11 +83,12 @@ for free. Tool calls/results are captured exactly once at `Stop`.
 
 ## Model for memory processing
 
-Memory processing (L0–L4, events, graph projection) uses the WorkBuddy `lite`
-model by default when available. If you are not running WorkBuddy, set
-`STRATAGATE_DISABLE_WORKBUDDY_MODEL=1` (the installer does this by default) to
-fall back to `layered-raw` mode: L5 raw capture still happens, L0–L4 still seal,
-but events/graph are deferred until a model endpoint is configured.
+All adapters use the same local database and default namespace identity:
+`shared:user:<user_id>:scope:project:<project_hash>`. Set
+`STRATAGATE_USER_ID` to share memory across agents for one user, or set an
+explicit `STRATAGATE_NAMESPACE` when a deployment needs a custom boundary.
+Memory processing uses the WorkBuddy `lite` model when available; otherwise
+configure an OpenAI-compatible endpoint below.
 
 To enable full event/graph extraction with an OpenAI-compatible endpoint, add
 these to the `stratagate` MCP server env in `~/.zcode/cli/config.json`:

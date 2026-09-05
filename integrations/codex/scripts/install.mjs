@@ -30,6 +30,7 @@ const SERVER = join(ENGINE_DIR, 'server.cjs')
 const HOOK = join(ENGINE_DIR, 'hook.cjs')
 const CONFIG_PATH = process.env.CODEX_CONFIG_PATH ?? join(homedir(), '.codex', 'config.toml')
 const DATA_DIR = process.env.STRATAGATE_DATA_DIR ?? join(homedir(), '.stratagate', 'agent-memory')
+const USER_ID = process.env.STRATAGATE_USER_ID ?? process.env.USER ?? process.env.USERNAME ?? 'default'
 
 function log(msg) {
   process.stdout.write(`[stratagate-codex] ${msg}\n`)
@@ -72,8 +73,9 @@ function main() {
       `[mcp_servers.stratagate.env]`,
       `STRATAGATE_DATA_DIR = ${tomlString(DATA_DIR)}`,
       `STRATAGATE_DATABASE = ${tomlString(join(DATA_DIR, 'memory.db'))}`,
-      `STRATAGATE_PROJECT_DIR = ${tomlString(REPO_ROOT)}`,
-      `STRATAGATE_DISABLE_WORKBUDDY_MODEL = "1"`,
+      `STRATAGATE_NAMESPACE_PREFIX = "shared"`,
+      `STRATAGATE_USER_ID = ${tomlString(USER_ID)}`,
+      `STRATAGATE_AGENT_ID = "codex"`,
       '',
     ]
     if (insertAt === -1) {
@@ -83,7 +85,36 @@ function main() {
     }
     changes.push('added [mcp_servers.stratagate]')
   } else {
-    changes.push('[mcp_servers.stratagate] already present (left untouched)')
+    const start = lines.findIndex((l) => l.trim() === mcpHeader)
+    let end = lines.findIndex((l, i) => i > start && /^\s*\[(?!mcp_servers\.stratagate\.env\])/.test(l))
+    if (end === -1) end = lines.length
+    const section = lines.slice(start, end)
+    let changed = false
+    for (let i = section.length - 1; i >= 0; i -= 1) {
+      if (section[i].trim().startsWith('STRATAGATE_PROJECT_DIR')
+        || section[i].trim().startsWith('STRATAGATE_DISABLE_WORKBUDDY_MODEL')) {
+        section.splice(i, 1)
+        changed = true
+      }
+    }
+    const envHeader = '[mcp_servers.stratagate.env]'
+    if (!section.some((line) => line.trim() === envHeader)) {
+      section.push(envHeader)
+      changed = true
+    }
+    for (const line of [
+      'STRATAGATE_NAMESPACE_PREFIX = "shared"',
+      `STRATAGATE_USER_ID = ${tomlString(USER_ID)}`,
+      'STRATAGATE_AGENT_ID = "codex"',
+    ]) {
+      const key = line.split('=')[0].trim()
+      if (!section.some((item) => item.trim().startsWith(`${key} `) || item.trim().startsWith(`${key}=`))) {
+        section.push(line)
+        changed = true
+      }
+    }
+    lines.splice(start, end - start, ...section)
+    changes.push(changed ? '[mcp_servers.stratagate] updated for shared project namespace' : '[mcp_servers.stratagate] already configured')
   }
 
   const hasHooksSection = lines.some((l) => l.trim() === '[hooks]')
@@ -97,13 +128,27 @@ function main() {
       'Stop = [',
       `  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = 30 } ] },`,
       ']',
+      'SubagentStart = [',
+      `  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = 10 } ] },`,
+      ']',
+      'SubagentStop = [',
+      `  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = 30 } ] },`,
+      ']',
+      'PreCompact = [',
+      `  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = 30 } ] },`,
+      ']',
+      'Interrupt = [',
+      `  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = 30 } ] },`,
+      ']',
       '',
     ]
     lines.push(...block)
-    changes.push('added [hooks] with UserPromptSubmit + Stop')
+    changes.push('added [hooks] with prompt, stop, subagent, compaction, and interrupt events')
   } else {
     const joined = lines.join('\n')
-    if (joined.includes('stratagate') && joined.includes('hook.cjs')) {
+    if (joined.includes('stratagate') && joined.includes('hook.cjs')
+      && ['UserPromptSubmit', 'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'Interrupt']
+        .every((event) => joined.includes(`${event} =`))) {
       changes.push('[hooks] already contains stratagate hooks (left untouched)')
     } else {
       // Append stratagate hook lines into the existing [hooks] section.
@@ -123,6 +168,14 @@ function main() {
         lines.push(`  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = 30 } ] },`)
         lines.push(']')
         changes.push('added Stop to existing [hooks]')
+      }
+      for (const [event, timeout] of [['SubagentStart', 10], ['SubagentStop', 30], ['PreCompact', 30], ['Interrupt', 30]]) {
+        const eventLine = lines.findIndex((l, i) => i > idx && l.trim().startsWith(`${event} =`))
+        if (eventLine !== -1) continue
+        lines.push(`${event} = [`)
+        lines.push(`  { hooks = [ { type = "command", command = ${tomlString(hookCmd)}, timeout = ${timeout} } ] },`)
+        lines.push(']')
+        changes.push(`added ${event} to existing [hooks]`)
       }
     }
   }

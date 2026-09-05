@@ -20,7 +20,10 @@ WorkBuddy 回答并通过 MCP 评估、展开证据
 封存 L0–L4 → 延迟提取 Event → 投影 Element
 ```
 
-Hook 与 MCP 共用 `${CODEBUDDY_PLUGIN_DATA}/memory.db`。默认按规范化后的项目路径隔离 namespace，不会把不同项目的记忆混在一起。
+Hook 与 MCP 共用 `~/.stratagate/agent-memory/memory.db`。三个适配器默认使用
+同一套 `shared:user:<user_id>:scope:project:<project_hash>` namespace 规则；设置
+`STRATAGATE_USER_ID` 后，不同 Agent 可以在同一用户/项目内共享记忆，同时仍按
+thread 保留原始对话边界。
 
 ## 功能
 
@@ -67,7 +70,7 @@ codebuddy --plugin-dir ./integrations/workbuddy
 如果需要禁用 WorkBuddy 模型或为企业部署提供备用 OpenAI-compatible 端点，可以在启动 WorkBuddy 前设置：
 
 ```text
-STRATAGATE_DISABLE_WORKBUDDY_MODEL=1
+STRATAGATE_USER_ID=your-user-id
 STRATAGATE_MODEL_BASE_URL
 STRATAGATE_MODEL
 STRATAGATE_MODEL_API_KEY
