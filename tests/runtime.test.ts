@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
 import { createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { StrataGate } from '@diqier/stratagate'
@@ -8,6 +9,8 @@ import { SqliteStorage } from '@diqier/stratagate/sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import type { DshModelBridge } from '../src/llm.js'
 import { StrataGateRuntime } from '../src/runtime.js'
+import { resolveConfig as resolveGatewayConfig } from '../integrations/workbuddy/src/config.js'
+import { createGatewayHandler } from '../integrations/workbuddy/src/gateway-api.js'
 
 const fakeModels = {
   run: async <T>(_session: Session, operation: () => Promise<T>): Promise<T> => operation(),
@@ -46,6 +49,58 @@ function turnEvents(): SessionEvent[] {
 }
 
 describe('DSH runtime ingestion', () => {
+  it('routes DSH ingest, retrieval, assessment, and usage through the Gateway', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'stratagate-dsh-gateway-'))
+    const previousVitest = process.env.VITEST
+    const previousDisable = process.env.STRATAGATE_DISABLE_GATEWAY
+    process.env.VITEST = 'false'
+    delete process.env.STRATAGATE_DISABLE_GATEWAY
+    const gatewayConfig = resolveGatewayConfig({
+      STRATAGATE_DATA_DIR: directory,
+      STRATAGATE_PROJECT_DIR: directory,
+      STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+    }, directory)
+    const { handler } = createGatewayHandler(gatewayConfig)
+    const server = createServer((request, response) => { void handler(request, response) })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Gateway did not bind a TCP port')
+    process.env.STRATAGATE_GATEWAY_URL = `http://127.0.0.1:${address.port}`
+    const runtime = new StrataGateRuntime({
+      database: join(directory, 'unused-local.db'), namespaceMode: 'project', namespacePrefix: 'dsh', globalNamespace: 'global',
+      blockTurnSize: 6, blockDecayLambda: 0.3, ingestSubagents: false, maxOutputTokens: 2048,
+    }, fakeModels)
+    const gatewaySession = {
+      id: 'gateway-dsh-session',
+      header: { id: 'gateway-dsh-session', version: 0, createdAt: 0, cwd: directory },
+      events: [],
+      deriveMessages: () => [],
+    } as unknown as Session
+    try {
+      for (const event of turnEvents()) runtime.acceptEvent(gatewaySession, event)
+      await runtime.flush()
+      const batch = await runtime.searchRaw(gatewaySession, 'remember pnpm') as { batchId: string; evidenceRefs: string[] }
+      expect(batch.batchId).toMatch(/^batch_/u)
+      expect(batch.evidenceRefs.length).toBeGreaterThan(0)
+      const evidenceRef = batch.evidenceRefs[0]!
+      const assessment = await runtime.assess(gatewaySession, {
+        verdict: 'sufficient', evidence_refs: [evidenceRef], fit: 'exact', missing: '', next_strategy: 'answer',
+      }, batch.batchId) as { id: string }
+      expect(assessment.id).toMatch(/^assessment_/u)
+      const recorded = await runtime.recordUse(gatewaySession, 'gateway-dsh-use', [evidenceRef], batch.batchId) as { recorded: boolean }
+      expect(recorded.recorded).toBe(true)
+    } finally {
+      await runtime.close()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(directory, { recursive: true, force: true })
+      if (previousVitest === undefined) delete process.env.VITEST
+      else process.env.VITEST = previousVitest
+      if (previousDisable === undefined) delete process.env.STRATAGATE_DISABLE_GATEWAY
+      else process.env.STRATAGATE_DISABLE_GATEWAY = previousDisable
+      delete process.env.STRATAGATE_GATEWAY_URL
+    }
+  })
+
   it('runs malformed external-memory recovery in a resumable background job', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'stratagate-import-job-'))
     const database = join(directory, 'memory.db')

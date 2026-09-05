@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { nowUtc8 } from '@diqier/stratagate'
 import { resolveConfig } from './config.js'
 import { WorkBuddyRuntime } from './runtime.js'
+import { GatewayClient } from './gateway-client.js'
 import { foldLatestTurn, parseJsonLines } from './transcript.js'
 
 interface HookInput {
@@ -127,7 +128,25 @@ async function userPrompt(input: HookInput): Promise<unknown> {
     projectDir: config.projectDir,
     receivedAt: nowUtc8(),
   }, identityKey)
-  const recalled = await runtime.initialContext(sessionId, prompt)
+  let recalled: { context?: string }
+  if (process.env.STRATAGATE_DISABLE_GATEWAY !== '1') {
+    try {
+      const gateway = GatewayClient.fromEnv()
+      recalled = await gateway.context({
+        q: prompt,
+        userId: input.user_id?.trim() || config.userId,
+        agentId: input.agent_id?.trim() || input.agent_type?.trim() || config.agentId,
+        sourceAdapter: input.source_adapter?.trim() || 'workbuddy',
+        ...(input.project_id?.trim() || config.projectId ? { projectId: input.project_id?.trim() || config.projectId } : {}),
+        projectDir: config.projectDir,
+        namespace: config.namespace,
+        conversationId: input.conversation_id?.trim() || sessionId,
+      }) as { context?: string }
+    } catch (error) {
+      if (!GatewayClient.fromEnv().options.fallback) throw error
+      recalled = await runtime.initialContext(sessionId, prompt)
+    }
+  } else recalled = await runtime.initialContext(sessionId, prompt)
   return success(recalled.context || undefined)
 }
 
@@ -146,17 +165,29 @@ async function stop(input: HookInput): Promise<unknown> {
   const turn = foldLatestTurn(delta.entries, pending?.prompt, input.last_assistant_message)
   if (!turn) return success()
 
-  await runtime.appendTurn({
-    ...turn,
-    threadId: `${sessionId}:agent:${identityKey}`,
-    ...hostProvenance(input, config, sessionId),
-    receiptId: turnReceipt(
-      sessionId,
-      input.agent_id?.trim() || input.agent_type?.trim() || config.agentId,
-      path,
-      turn,
-    ),
-  })
+  const agentId = input.agent_id?.trim() || input.agent_type?.trim() || config.agentId
+  const receiptId = turnReceipt(sessionId, agentId, path, turn)
+  const provenance = hostProvenance(input, config, sessionId)
+  if (process.env.STRATAGATE_DISABLE_GATEWAY !== '1') {
+    const gateway = GatewayClient.fromEnv()
+    try {
+      const request = {
+        ...turn,
+        threadId: `${sessionId}:agent:${identityKey}`,
+        ...provenance,
+        ...(input.project_id?.trim() || config.projectId ? { projectId: input.project_id?.trim() || config.projectId } : {}),
+        projectDir: config.projectDir,
+        namespace: config.namespace,
+        memoryScope: config.memoryScope,
+        receiptId,
+      }
+      if (gateway.options.fallback) await gateway.ingest(request)
+      else await gateway.ingestWithOutbox(request)
+    } catch (error) {
+      if (!gateway.options.fallback) throw error
+      await runtime.appendTurn({ ...turn, threadId: `${sessionId}:agent:${identityKey}`, ...provenance, receiptId })
+    }
+  } else await runtime.appendTurn({ ...turn, threadId: `${sessionId}:agent:${identityKey}`, ...provenance, receiptId })
   await runtime.state.writeCursor(sessionId, {
     transcriptPath: path,
     offset: delta.endOffset,

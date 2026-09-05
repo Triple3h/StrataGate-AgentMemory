@@ -5,6 +5,7 @@ import {
   memoryWeightAt,
   memoryNamespace,
   projectKey,
+  projectNameFromDir,
   effectiveConfidence,
   rrfRank,
   StorageConflictError,
@@ -39,6 +40,7 @@ import type { ResolvedConfig } from './config.js'
 import { TurnFolder } from './fold.js'
 import { DshModelBridge } from './llm.js'
 import { DshMetadataStore } from './metadata.js'
+import { DshGatewayClient, type DshGatewayIdentity } from './gateway-client.js'
 
 interface EvidenceTarget {
   eventIds: string[]
@@ -108,6 +110,9 @@ export class StrataGateRuntime {
   private readonly derivationRuns = new Map<string, Promise<void>>()
   private readonly adminSnapshotCache = new Map<string, AdminSnapshotEntry>()
   private readonly externalImportRuns = new Map<string, Promise<void>>()
+  private readonly gateway = new DshGatewayClient()
+  private readonly gatewayAssessmentIds = new Map<string, string>()
+  private readonly gatewayPendingBatches = new Map<string, Set<string>>()
   private ingestTail: Promise<void> = Promise.resolve()
   private settingsTail: Promise<void> = Promise.resolve()
   private batchSequence = 0
@@ -128,12 +133,61 @@ export class StrataGateRuntime {
     this.observability = config.observability
   }
 
+  private gatewayIdentity(session: Session): DshGatewayIdentity {
+    const projectDir = session.header.cwd ?? process.cwd()
+    return {
+      ...(this.config.userId ? { userId: this.config.userId } : {}),
+      ...(this.config.agentId ? { agentId: this.config.agentId } : {}),
+      sourceAdapter: 'dsh',
+      projectId: projectKey(projectDir),
+      projectName: projectNameFromDir(projectDir),
+      projectDir,
+      namespace: this.namespaceFor(session),
+      memoryScope: this.config.namespaceMode,
+      conversationId: String(session.id),
+    }
+  }
+
+  private trackGatewayBatch(session: Session, value: unknown): unknown {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+    const directBatchId = (value as { batchId?: unknown }).batchId
+    const nestedBatchId = value && typeof (value as { batch?: unknown }).batch === 'object' && (value as { batch: { batchId?: unknown } }).batch
+      ? (value as { batch: { batchId?: unknown } }).batch.batchId
+      : undefined
+    const batchId = directBatchId ?? nestedBatchId
+    if (typeof batchId !== 'string' || !batchId) return value
+    const key = String(session.id)
+    let batches = this.gatewayPendingBatches.get(key)
+    if (!batches) {
+      batches = new Set()
+      this.gatewayPendingBatches.set(key, batches)
+    }
+    batches.add(batchId)
+    this.latestBatchIds.set(key, batchId)
+    return value
+  }
+
   acceptEvent(session: Session, event: SessionEvent): void {
     if (this.closed) return
     if (!this.config.ingestSubagents && session.header.origin === 'subagent') return
     const turn = this.folder.accept(session, event)
     if (!turn) return
     this.ingestTail = this.ingestTail.catch(() => {}).then(async () => {
+      if (this.gateway.enabled) {
+        try {
+          const request = {
+            ...turn,
+            threadId: String(session.id),
+            conversationId: String(session.id),
+            sourceAdapter: 'dsh',
+          }
+          if (this.gateway.fallback) await this.gateway.ingest(this.gatewayIdentity(session), request)
+          else await this.gateway.ingestWithOutbox(this.gatewayIdentity(session), request)
+          return
+        } catch (error) {
+          if (!this.gateway.fallback) throw error
+        }
+      }
       const memory = await this.space(session)
       try {
         const result = await memory.appendTurn({
@@ -141,6 +195,7 @@ export class StrataGateRuntime {
           ...(this.config.userId ? { userId: this.config.userId } : {}),
           ...(this.config.agentId ? { agentId: this.config.agentId } : {}),
           projectId: projectKey(session.header.cwd ?? process.cwd()),
+          projectName: projectNameFromDir(session.header.cwd ?? process.cwd()),
           conversationId: String(session.id),
           sourceAdapter: 'dsh',
         }, { deferDerivation: true })
@@ -155,6 +210,19 @@ export class StrataGateRuntime {
   }
 
   async searchEvents(session: Session, query: string, options: SearchOptions = {}): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        return this.trackGatewayBatch(session, await this.gateway.memory('events', this.gatewayIdentity(session), {
+          q: query,
+          limit: options.limit?.toString(),
+          ...(typeof options.temporalIntent === 'string' ? { temporalIntent: options.temporalIntent } : {}),
+          eventType: options.eventType,
+          participants: options.participants?.join(','),
+        }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const results = await (await this.space(session)).searchEvents(query, { ...options, threadId: String(session.id) })
     return this.batch(session, results.map(({ event }) => ({
@@ -168,6 +236,18 @@ export class StrataGateRuntime {
   }
 
   async searchElements(session: Session, query: string, options: ElementSearchOptions = {}): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        return this.trackGatewayBatch(session, await this.gateway.memory('elements', this.gatewayIdentity(session), {
+          q: query,
+          limit: options.limit?.toString(),
+          name: options.name,
+          elementType: options.type,
+        }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const results = await (await this.space(session)).searchElements(query, { ...options, threadId: String(session.id) })
     return this.batch(session, results.map((result) => ({
@@ -192,6 +272,17 @@ export class StrataGateRuntime {
   }
 
   async searchRaw(session: Session, query: string, limit?: number, scope: BlockQueryScope = 'namespace'): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        return this.trackGatewayBatch(session, await this.gateway.memory('raw', this.gatewayIdentity(session), {
+          q: query,
+          limit: limit?.toString(),
+          scope,
+        }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const memory = await this.space(session)
     const threadId = String(session.id)
@@ -210,6 +301,13 @@ export class StrataGateRuntime {
   }
 
   async blocks(session: Session, scope: BlockQueryScope = 'session'): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        return this.trackGatewayBatch(session, await this.gateway.memory('blocks', this.gatewayIdentity(session), { scope }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const memory = await this.space(session)
     const threadId = String(session.id)
@@ -247,6 +345,14 @@ export class StrataGateRuntime {
   }
 
   async expandBlock(session: Session, id: string, target?: string | number): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        const batchId = this.latestBatchIds.get(String(session.id))
+        if (batchId) return this.trackGatewayBatch(session, await this.gateway.expandBlock(this.gatewayIdentity(session), batchId, id, target))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const memory = await this.space(session)
     const result = await memory.expandBlock(id, target, 'agent')
@@ -262,6 +368,14 @@ export class StrataGateRuntime {
   }
 
   async expandElement(session: Session, id: string, at?: string): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        const batchId = this.latestBatchIds.get(String(session.id))
+        if (batchId) return this.trackGatewayBatch(session, await this.gateway.memory('elements/expand', this.gatewayIdentity(session), { batchId, id, at }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const result = (await this.space(session)).expandElement(id, at)
     return this.batch(session, [{
@@ -275,6 +389,14 @@ export class StrataGateRuntime {
   }
 
   async expandEvent(session: Session, id: string): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        const batchId = this.latestBatchIds.get(String(session.id))
+        if (batchId) return this.trackGatewayBatch(session, await this.gateway.memory('events/expand', this.gatewayIdentity(session), { batchId, id }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const memory = await this.space(session)
     const event = memory.listEvents().find((candidate) => candidate.id === id)
@@ -294,6 +416,18 @@ export class StrataGateRuntime {
   }
 
   async assess(session: Session, input: RetrievalAssessmentInput, batchId?: string): Promise<unknown> {
+    const selectedGatewayBatch = batchId?.trim() || this.latestBatchIds.get(String(session.id))
+    if (selectedGatewayBatch && this.gatewayPendingBatches.get(String(session.id))?.has(selectedGatewayBatch)) {
+      try {
+        const result = await this.gateway.assess(this.gatewayIdentity(session), selectedGatewayBatch, input)
+        if (result && typeof result === 'object' && typeof (result as { id?: unknown }).id === 'string') {
+          this.gatewayAssessmentIds.set(selectedGatewayBatch, (result as { id: string }).id)
+        }
+        return result
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     const startedAt = Date.now()
     const batch = this.requireBatch(session, batchId, 'memory_assess')
     if (batch.status !== 'unresolved') {
@@ -334,6 +468,18 @@ export class StrataGateRuntime {
     evidenceRefs: readonly string[],
     batchId?: string,
   ): Promise<unknown> {
+    const selectedGatewayBatch = batchId?.trim() || this.latestBatchIds.get(String(session.id))
+    const gatewayAssessment = selectedGatewayBatch ? this.gatewayAssessmentIds.get(selectedGatewayBatch) : undefined
+    if (gatewayAssessment && this.gateway.enabled) {
+      try {
+        const result = await this.gateway.recordUse(this.gatewayIdentity(session), gatewayAssessment)
+        this.gatewayPendingBatches.get(String(session.id))?.delete(selectedGatewayBatch!)
+        this.gatewayAssessmentIds.delete(selectedGatewayBatch!)
+        return result
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     const startedAt = Date.now()
     const key = String(session.id)
     const batch = this.requireBatch(session, batchId, 'memory_record_use')
@@ -468,11 +614,11 @@ export class StrataGateRuntime {
   }
 
   needsRecordUse(session: Session): boolean {
-    return this.unresolvedBatchIds(session).length > 0
+    return this.unresolvedBatchIds(session).length > 0 || (this.gatewayPendingBatches.get(String(session.id))?.size ?? 0) > 0
   }
 
   pendingBatchIds(session: Session): string[] {
-    return this.unresolvedBatchIds(session)
+    return [...new Set([...this.unresolvedBatchIds(session), ...(this.gatewayPendingBatches.get(String(session.id)) ?? [])])]
   }
 
   async flush(): Promise<void> {
@@ -481,6 +627,20 @@ export class StrataGateRuntime {
   }
 
   async buildAutoContext(session: Session): Promise<string> {
+    if (this.gateway.enabled) {
+      try {
+        const query = currentUserMessage(session)
+        if (query) {
+          const remote = this.trackGatewayBatch(session, await this.gateway.context(this.gatewayIdentity(session), query))
+          if (remote && typeof remote === 'object' && typeof (remote as { context?: unknown }).context === 'string') {
+            return (remote as { context: string }).context
+          }
+          return ''
+        }
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const memory = await this.space(session)
     const threadId = String(session.id)
@@ -1136,6 +1296,7 @@ export class StrataGateRuntime {
           userId: this.config.userId ?? 'default',
           ...(this.config.agentId ? { agentId: this.config.agentId } : {}),
           projectId: projectKey(session.header.cwd ?? process.cwd()),
+          projectName: projectNameFromDir(session.header.cwd ?? process.cwd()),
           conversationId: String(session.id),
           memoryScope: this.config.namespaceMode,
           namespacePrefix: this.config.namespacePrefix === 'dsh' ? 'shared' : this.config.namespacePrefix,
@@ -1175,6 +1336,13 @@ export class StrataGateRuntime {
   }
 
   async searchGraph(session: Session, query: string, limit = 8): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        return this.trackGatewayBatch(session, await this.gateway.memory('graph', this.gatewayIdentity(session), { q: query, limit: String(limit) }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const results = await (await this.space(session)).searchGraphNodes(query, limit, { threadId: String(session.id) })
     return this.batch(session, results.map(({ node }) => ({
@@ -1188,6 +1356,14 @@ export class StrataGateRuntime {
   }
 
   async expandGraphNode(session: Session, id: string): Promise<unknown> {
+    if (this.gateway.enabled) {
+      try {
+        const batchId = this.latestBatchIds.get(String(session.id))
+        if (batchId) return this.trackGatewayBatch(session, await this.gateway.memory('graph/expand', this.gatewayIdentity(session), { batchId, id }))
+      } catch (error) {
+        if (!this.gateway.fallback) throw error
+      }
+    }
     await this.flush()
     const memory = await this.space(session)
     const node = memory.listGraphNodes().find((candidate) => candidate.id === id)

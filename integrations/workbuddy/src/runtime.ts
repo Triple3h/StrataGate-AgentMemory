@@ -126,12 +126,16 @@ export class WorkBuddyRuntime {
     return this.withMemory(async (memory) => memory.resumePendingWork())
   }
 
+  async snapshot(): Promise<StrataGateSnapshot> {
+    return this.withMemory(async (memory) => memory.exportSnapshot(), false)
+  }
+
   async appendTurn(input: Parameters<StrataGate['appendTurn']>[0]): Promise<unknown> {
     return this.withMemory((memory) => memory.appendTurn({
       ...input,
       userId: input.userId ?? this.config.userId,
       agentId: input.agentId ?? this.config.agentId,
-      projectId: input.projectId ?? projectKey(this.config.projectDir),
+      projectId: input.projectId ?? this.config.projectId ?? projectKey(this.config.projectDir),
       ...((input.conversationId ?? input.threadId) ? { conversationId: input.conversationId ?? input.threadId } : {}),
       sourceAdapter: input.sourceAdapter ?? 'workbuddy',
     }, { deferProcessing: true }), false)
@@ -582,9 +586,10 @@ export class WorkBuddyRuntime {
         identity: {
           userId: this.config.userId,
           agentId: this.config.agentId,
-          projectId: projectKey(this.config.projectDir),
+          projectId: this.config.projectId ?? projectKey(this.config.projectDir),
+          ...(this.config.projectName ? { projectName: this.config.projectName } : {}),
           memoryScope: this.config.memoryScope,
-          namespacePrefix: 'shared',
+          namespacePrefix: this.config.namespacePrefix ?? 'shared',
           sourceAdapter: 'workbuddy',
         },
         blockTurnSize: this.config.blockTurnSize,

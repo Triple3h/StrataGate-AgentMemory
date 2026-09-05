@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
-import { memoryNamespace, projectKey as sharedProjectKey, type ObservabilitySink } from '@diqier/stratagate'
+import { memoryNamespace, projectKey as sharedProjectKey, projectNameFromDir, type ObservabilitySink } from '@diqier/stratagate'
 import { observabilitySink } from './observability.js'
 
 export interface ModelConfig {
@@ -23,6 +23,11 @@ export interface WorkBuddyConfig {
   database: string
   projectDir: string
   namespace: string
+  /** Namespace prefix used when the gateway resolves shared identities. */
+  namespacePrefix?: string
+  /** Stable project identifier persisted independently from the namespace string. */
+  projectId?: string
+  projectName?: string
   userId: string
   agentId: string
   memoryScope: 'project' | 'session' | 'global'
@@ -120,6 +125,9 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string
       ...(sessionId ? { sessionId } : {}),
       ...(globalNamespace ? { globalNamespace } : {}),
     }),
+    namespacePrefix,
+    projectId: projectKey(projectDir),
+    projectName: projectNameFromDir(projectDir),
     userId,
     agentId,
     memoryScope,

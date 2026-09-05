@@ -3,10 +3,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { resolveConfig } from './config.js'
 import { blockTarget, WorkBuddyRuntime } from './runtime.js'
+import { GatewayRuntime } from './gateway-client.js'
 import { loadStarWidgetHtml, STAR_WIDGET_MIME, STAR_WIDGET_URI } from './star-widget.js'
 
 const config = resolveConfig()
-const runtime = new WorkBuddyRuntime(config)
+const gatewayEnabled = process.env.STRATAGATE_DISABLE_GATEWAY !== '1'
+const runtime = !gatewayEnabled || process.env.STRATAGATE_DISABLE_GATEWAY === '1'
+  ? new WorkBuddyRuntime(config)
+  : new GatewayRuntime(config)
 const server = new McpServer({
   name: 'stratagate-workbuddy',
   version: '0.1.0',
