@@ -1,0 +1,27 @@
+{
+  "name": "stratagate-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "StrataGate memory console — Vue 3 + Vite SPA served separately from the memory gateway.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "check": "vue-tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "lucide-vue-next": "^0.577.0",
+    "vue": "^3.5.42",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "typescript": "~5.9.0",
+    "vite": "^7.3.6",
+    "vue-tsc": "^3.3.11"
+  }
+}

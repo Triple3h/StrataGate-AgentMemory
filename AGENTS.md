@@ -9,6 +9,7 @@ Local-first, source-traceable cross-session memory for AI agents, shipped as plu
 - `integrations/workbuddy/` — `stratagate-workbuddy`, builds the shared engine artifacts other adapters reuse: `dist/server.cjs` (MCP server) + `dist/hook.cjs` (generic Codex/Anthropic-style hook). Model your edits here, not by forking logic.
 - `integrations/zcode/` — ZCode-native adapter: `scripts/zcode-hook.mjs` + `lib/zcode-turns.mjs` (rollout parser), hooks.json, skill. See `integrations/zcode/README.md`.
 - `integrations/codex/` — Codex plugin manifest + `scripts/install.mjs` (writes `~/.codex/config.toml`). See `integrations/codex/skills/memory/SKILL.md`.
+- `console/` — standalone Vue 3 + Vite memory console SPA (own lockfile, **not** an npm workspace). `Dockerfile` + `nginx.conf` run it as a separate service proxying `/v1` + `/health` to the gateway. See `console/README.md`. The gateway's inline vanilla console in `packages/gateway/src/gateway-ui.ts` remains the zero-build fallback.
 - `docs/` — `ARCHITECTURE.md` (system boundaries, block sealing, L3 policy, evidence gate), `DSH.md` (plugin dev/verify), `EVALUATION.md`.
 - `.codebuddy-plugin/marketplace.json` — DSH plugin marketplace entry.
 - `.codegraph/` — local codegraph index; fully gitignored, ignore it.
@@ -24,7 +25,7 @@ npm test             # all tests (vitest)
 npm run build        # build all three
 ```
 
-Focused: `npm run check:dsh` / `test:dsh` / `build:dsh` / `verify:dsh` (tarball allowlist check — run before release), and `…:core` / `…:workbuddy` scoped to the workspaces. `verify:dsh` installs the exact tarball in a clean temp project and imports it.
+Focused: `npm run check:dsh` / `test:dsh` / `build:dsh` / `verify:dsh` (tarball allowlist check — run before release), and `…:core` / `…:workbuddy` scoped to the workspaces. `verify:dsh` installs the exact tarball in a clean temp project and imports it. Console SPA: `npm run console` (dev), `check:console` / `build:console` (type-check via vue-tsc, build via Vite).
 
 ## Conventions
 

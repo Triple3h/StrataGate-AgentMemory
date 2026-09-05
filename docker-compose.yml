@@ -28,3 +28,24 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     stop_grace_period: 30s
+
+  # Read-only memory console (Vue 3 SPA). Serves the static build and proxies
+  # /v1 + /health to the gateway, so the browser only needs this one origin.
+  # Gateway-only deployments can skip it: `docker compose up stratagate-memory-gateway`.
+  stratagate-console:
+    build:
+      context: ./console
+      dockerfile: Dockerfile
+    image: stratagate-console:local
+    restart: unless-stopped
+    ports:
+      - "${STRATAGATE_CONSOLE_PORT:-8080}:80"
+    depends_on:
+      - stratagate-memory-gateway
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /var/cache/nginx:rw,noexec,nosuid,size=16m
+      - /var/run:rw,noexec,nosuid,size=16m
