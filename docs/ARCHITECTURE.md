@@ -1,8 +1,16 @@
 # StrataGate architecture
 
+实施路线与阶段验收见：[优化总体计划](OPTIMIZATION_PLAN.zh-CN.md)。
+
 StrataGate separates source preservation, derived memory, retrieval control, and reinforcement. Combining these responsibilities makes it easy for a summary mistake or a ranking feedback loop to become an apparently certain answer.
 
 ## System boundaries
+
+All host adapters use one identity contract. The namespace is derived from
+`user_id + memory_scope + project_id` (with an optional global/session key), not
+from the adapter name. `agent_id`, `conversation_id`, and transcript path stay
+in adapter provenance/state keys so multiple agents can share a project
+namespace without sharing cursors or active-thread raw context.
 
 ```mermaid
 flowchart TB
@@ -122,8 +130,22 @@ interface EventCard {
   };
 
   status: 'active' | 'superseded' | 'forgotten' | 'archived';
+  confidence: number;          // base confidence from evidence
+  updatedAt: string;            // last mutation timestamp
+  lastVerifiedAt?: string;      // last evidence-backed verification timestamp
   weight: MemoryWeight;
 }
+
+Adapters expose a derived `effectiveConfidence` for time-aware consumers. It
+does not overwrite the evidence-backed base confidence:
+
+```text
+effectiveConfidence = baseConfidence * exp(-ln(2) * daysSince(lastVerifiedAt) / halfLifeDays)
+```
+
+The default half-life is 30 days and callers may choose a different policy for
+their deployment. Adoption-based retrieval weight remains a separate signal;
+retrieval and usage receipts do not refresh `lastVerifiedAt`.
 ```
 
 `mentionedAt` answers when the conversation referred to the event. `happenedStart` and `happenedEnd` answer when the event itself occurred. Keeping these axes separate avoids treating the message timestamp as the event date.
@@ -219,6 +241,14 @@ If the retrieval budget ends without sufficient evidence, the caller should pass
 `StrataGate.open({ database, namespace })` is the normal public entrypoint and always hydrates the state machine from transactional SQLite storage. `StrataGate.inMemory()` is an explicit test and ephemeral-use mode. Advanced integrations may supply another durable `StorageAdapter` through `StrataGate.openWithStorage()`. The bundled `SqliteStorage` adapter persists normalized rows for memory spaces, messages, blocks, events, elements, facts, provenance links, extraction/projection jobs, usage receipts, and idempotent external-turn ingestion receipts.
 
 Every namespace has a monotonically increasing revision. A write supplies the revision it loaded; SQLite commits the new revision and all related rows in one immediate transaction. A stale process receives `StorageConflictError` rather than overwriting newer state.
+
+Identity metadata is persisted independently from the namespace routing key. The
+namespace stores the stable user/project/scope contract, while each raw source
+message records `user_id`, `agent_id`, `project_id`, `conversation_id`, and
+`source_adapter`. This keeps multiple agents in one shared project space
+without losing provenance or allowing the latest writer to overwrite the
+identity of earlier turns. SQLite schema v11 migrates older spaces with
+conservative defaults.
 
 External model calls are never made inside a database transaction:
 

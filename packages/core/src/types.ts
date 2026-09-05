@@ -12,6 +12,11 @@ export interface RawMessage {
   content: string;
   createdAt: string;
   threadId?: string;
+  userId?: string;
+  agentId?: string;
+  projectId?: string;
+  conversationId?: string;
+  sourceAdapter?: string;
   toolCalls?: ToolTrace[];
 }
 
@@ -137,6 +142,8 @@ export interface EventCard extends Omit<EventCardInput, 'id'> {
   weight: MemoryWeight;
   createdAt: string;
   updatedAt: string;
+  /** Evidence verification time; unlike updatedAt, usage/ranking mutations do not refresh it. */
+  lastVerifiedAt?: string;
 }
 
 export interface ExtractionContext {

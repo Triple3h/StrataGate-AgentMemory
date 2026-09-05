@@ -102,17 +102,77 @@ describe('SQLite persistence', () => {
     expect(ephemeral.storageRevision).toBe(0);
   });
 
-  it('creates schema version ten and rejects a newer database schema', async () => {
+  it('persists independent identity metadata and raw-turn provenance', async () => {
+    const filename = await databasePath();
+    const identity = {
+      userId: 'alice',
+      agentId: 'codex',
+      projectId: 'project-123',
+      memoryScope: 'project' as const,
+      namespacePrefix: 'shared',
+      sourceAdapter: 'codex',
+    };
+    const memory = await StrataGate.open({
+      database: filename,
+      namespace: 'shared:user:alice:scope:project:project-123',
+      identity,
+      now: fixedNow,
+      idFactory: ids(),
+    });
+    await memory.appendTurn({
+      user: 'identity prompt',
+      assistant: 'identity answer',
+      threadId: 'conversation-1',
+      conversationId: 'conversation-1',
+      userId: 'alice',
+      agentId: 'codex',
+      projectId: 'project-123',
+      sourceAdapter: 'codex',
+    });
+    await memory.close();
+
+    const database = new Database(filename, { readonly: true });
+    expect(database.prepare('SELECT user_id, project_id, memory_scope, namespace_prefix FROM memory_spaces').get())
+      .toMatchObject({ user_id: 'alice', project_id: 'project-123', memory_scope: 'project', namespace_prefix: 'shared' });
+    expect(database.prepare('SELECT user_id, agent_id, project_id, conversation_id, source_adapter FROM messages WHERE role = ?').get('user'))
+      .toMatchObject({ user_id: 'alice', agent_id: 'codex', project_id: 'project-123', conversation_id: 'conversation-1', source_adapter: 'codex' });
+    database.close();
+  });
+
+  it('does not refresh verification time when memory is merely adopted', async () => {
+    const filename = await databasePath();
+    let now = new Date('2026-08-12T00:00:00.000Z');
+    const memory = await StrataGate.open({
+      database: filename,
+      namespace: 'verification-time',
+      blockTurnSize: 1,
+      summarizer,
+      extractor,
+      now: () => now,
+      idFactory: ids(),
+    });
+    const appended = await memory.appendTurn({ user: 'verify this', assistant: 'stored' });
+    const event = appended.extractedEvents[0];
+    expect(event?.lastVerifiedAt).toBe('2026-08-12T08:00:00.000+08:00');
+    now = new Date('2026-08-20T00:00:00.000Z');
+    await memory.recordMemoryUse({ eventIds: [event!.id] }, { receiptId: 'usage:verification-time' });
+    const adopted = memory.listEvents().find(({ id }) => id === event!.id)!;
+    expect(adopted.lastVerifiedAt).toBe('2026-08-12T08:00:00.000+08:00');
+    expect(adopted.weight.mentionCount).toBe(2);
+    await memory.close();
+  });
+
+  it('creates schema version eleven and rejects a newer database schema', async () => {
     const initializedFilename = await databasePath();
     const initialized = new SqliteStorage({ filename: initializedFilename });
     await initialized.close();
     const initializedDatabase = new Database(initializedFilename, { readonly: true });
-    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(10);
+    expect(initializedDatabase.pragma('user_version', { simple: true })).toBe(11);
     initializedDatabase.close();
 
     const newerFilename = await databasePath();
     const newerDatabase = new Database(newerFilename);
-    newerDatabase.pragma('user_version = 11');
+    newerDatabase.pragma('user_version = 12');
     newerDatabase.close();
     expect(() => new SqliteStorage({ filename: newerFilename })).toThrow('newer than supported');
   });
@@ -140,7 +200,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v6');
-    expect(loaded?.snapshot.schemaVersion).toBe(10);
+    expect(loaded?.snapshot.schemaVersion).toBe(11);
     expect(loaded?.snapshot.blocks[0]?.lastLiftedBy).toBeNull();
     await storage.close();
 
@@ -175,7 +235,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v8');
-    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 10, summaryJobs: [], externalMemoryImportJobs: [] });
+    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 11, summaryJobs: [], externalMemoryImportJobs: [] });
     expect(loaded?.snapshot.blocks[0]?.processingStatus).toBe('ready');
     expect(loaded?.snapshot.extractionJobs[0]?.nextRetryAt).toBeNull();
     await storage.close();
@@ -486,7 +546,7 @@ describe('SQLite persistence', () => {
     const loaded = await storage.load('legacy:user');
     expect(loaded?.revision).toBe(7);
     expect(loaded?.snapshot).toMatchObject({
-      schemaVersion: 10,
+      schemaVersion: 11,
       blockDecayLambda: 0.3,
       elements: [],
       elementProjectionJobs: [],
@@ -498,7 +558,7 @@ describe('SQLite persistence', () => {
     await storage.close();
 
     const migrated = new Database(filename, { readonly: true });
-    expect(migrated.pragma('user_version', { simple: true })).toBe(10);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(11);
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
       .map(({ name }) => name)).toContain('element_ids_json');
     expect((migrated.pragma('table_info(usage_receipts)') as Array<{ name: string }>)
@@ -551,7 +611,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v4');
-    expect(loaded?.snapshot.schemaVersion).toBe(10);
+    expect(loaded?.snapshot.schemaVersion).toBe(11);
     expect(loaded?.snapshot.blockDecayLambda).toBe(0.3);
     await storage.close();
 
@@ -598,7 +658,7 @@ describe('SQLite persistence', () => {
 
     const storage = new SqliteStorage({ filename });
     const loaded = await storage.load('legacy:v5');
-    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 10, blockDecayLambda: 0.3 });
+    expect(loaded?.snapshot).toMatchObject({ schemaVersion: 11, blockDecayLambda: 0.3 });
     expect(loaded?.snapshot.blocks.map(({ id, pointerAnchorBlockPosition }) =>
       [id, pointerAnchorBlockPosition])).toEqual([
       ['a1', 1],

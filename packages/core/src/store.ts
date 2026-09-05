@@ -79,8 +79,11 @@ import type {
 } from './types.js';
 import { criticalityFloor, memoryWeightAt } from './weights.js';
 import { toUtc8Iso } from './time.js';
+import type { MemoryIdentity } from './identity.js';
 
 export interface StrataGateOptions {
+  /** Durable identity context for this namespace; agent/conversation also flow into raw provenance. */
+  identity?: MemoryIdentity;
   blockTurnSize?: number;
   blockDecayLambda?: number;
   summarizer?: BlockSummarizer;
@@ -111,6 +114,11 @@ export interface TurnInput {
   assistant: string;
   createdAt?: string;
   threadId?: string;
+  userId?: string;
+  agentId?: string;
+  projectId?: string;
+  conversationId?: string;
+  sourceAdapter?: string;
   userToolCalls?: ToolTrace[];
   assistantToolCalls?: ToolTrace[];
   receiptId?: string;
@@ -222,6 +230,7 @@ export class StrataGate {
   private readonly idFactory: (prefix: 'msg' | 'blk' | 'evt') => string;
   private readonly elementIdFactory: (prefix: 'elem' | 'fact' | 'proj') => string;
   private readonly graphIdFactory: (prefix: 'node' | 'edge' | 'gfact' | 'gproj') => string;
+  private identity: MemoryIdentity | undefined;
   private readonly openTail: RawMessage[] = [];
   private readonly blocks: MemoryBlock[] = [];
   private readonly events: EventCard[] = [];
@@ -261,6 +270,7 @@ export class StrataGate {
     this.idFactory = options.idFactory ?? defaultIdFactory;
     this.elementIdFactory = options.elementIdFactory ?? defaultElementIdFactory;
     this.graphIdFactory = options.graphIdFactory ?? defaultGraphIdFactory;
+    this.identity = options.identity ? structuredClone(options.identity) : undefined;
   }
 
   static inMemory(options: StrataGateOptions = {}): StrataGate {
@@ -278,6 +288,7 @@ export class StrataGate {
       return await StrataGate.openWithStorage({
         storage,
         namespace: options.namespace,
+        ...(options.identity ? { identity: options.identity } : {}),
         ...(options.blockTurnSize !== undefined ? { blockTurnSize: options.blockTurnSize } : {}),
         ...(options.blockDecayLambda !== undefined ? { blockDecayLambda: options.blockDecayLambda } : {}),
         ...(options.summarizer ? { summarizer: options.summarizer } : {}),
@@ -304,6 +315,18 @@ export class StrataGate {
     let loadedRevision = loaded?.revision ?? 0;
     if (loaded && loadedSnapshot) {
       let settingsChanged = false;
+      if (options.identity) {
+        const storedIdentity = loadedSnapshot.identity;
+        const legacyIdentity = !storedIdentity || (storedIdentity.userId === 'default' && !storedIdentity.projectId);
+        if (legacyIdentity) {
+          loadedSnapshot.identity = structuredClone(options.identity);
+          settingsChanged = true;
+        } else if (storedIdentity.userId !== options.identity.userId
+          || (storedIdentity.projectId ?? null) !== (options.identity.projectId ?? null)
+          || (storedIdentity.memoryScope ?? 'project') !== (options.identity.memoryScope ?? 'project')) {
+          throw new Error(`Memory identity does not match namespace ${namespace}`);
+        }
+      }
       if (options.blockTurnSize !== undefined) {
         const requested = Math.max(1, Math.floor(options.blockTurnSize));
         if (requested !== loadedSnapshot.blockTurnSize) {
@@ -324,6 +347,7 @@ export class StrataGate {
       if (settingsChanged) loadedRevision = await options.storage.save(namespace, loadedSnapshot, loadedRevision);
     }
     const memoryOptions: StrataGateOptions = {};
+    if (options.identity) memoryOptions.identity = options.identity;
     if (loadedSnapshot) memoryOptions.blockTurnSize = loadedSnapshot.blockTurnSize;
     else if (options.blockTurnSize !== undefined) memoryOptions.blockTurnSize = options.blockTurnSize;
     if (loadedSnapshot) memoryOptions.blockDecayLambda = loadedSnapshot.blockDecayLambda;
@@ -538,6 +562,7 @@ export class StrataGate {
       currentTurn: this.currentTurn,
       blockTurnSize: this.blockTurnSize,
       blockDecayLambda: this.blockDecayLambda,
+      ...(this.identity ? { identity: this.identity } : {}),
       openTail: this.openTail,
       blocks: this.blocks,
       summaryJobs: [...this.summaryJobs.values()],
@@ -569,12 +594,25 @@ export class StrataGate {
       throw new TypeError('Turn threadId must not be empty');
     }
     const createdAt = toUtc8Iso(input.createdAt ?? this.now());
+    const agentId = input.agentId?.trim() || this.identity?.agentId;
+    const conversationId = input.conversationId?.trim() || this.identity?.conversationId || threadId;
+    const sourceAdapter = input.sourceAdapter?.trim() || this.identity?.sourceAdapter;
+    const userId = input.userId?.trim() || this.identity?.userId;
+    const projectId = input.projectId?.trim() || this.identity?.projectId;
+    const provenance = {
+      ...(userId ? { userId } : {}),
+      ...(agentId ? { agentId } : {}),
+      ...(projectId ? { projectId } : {}),
+      ...(conversationId ? { conversationId } : {}),
+      ...(sourceAdapter ? { sourceAdapter } : {}),
+    };
     const userMessage: RawMessage = {
       id: this.idFactory('msg'),
       role: 'user',
       content: input.user,
       createdAt,
       ...(threadId ? { threadId } : {}),
+      ...provenance,
       ...(input.userToolCalls ? { toolCalls: input.userToolCalls } : {}),
     };
     const assistantMessage: RawMessage = {
@@ -583,6 +621,7 @@ export class StrataGate {
       content: input.assistant,
       createdAt,
       ...(threadId ? { threadId } : {}),
+      ...provenance,
       ...(input.assistantToolCalls ? { toolCalls: input.assistantToolCalls } : {}),
     };
     const appended = await this.commitMutation(() => {
@@ -1499,7 +1538,6 @@ export class StrataGate {
         if (!event || event.status === 'forgotten' || event.status === 'archived') continue;
         event.weight.mentionCount += 1;
         event.weight.lastAdoptedTurn = this.currentTurn;
-        event.updatedAt = now;
       }
       for (const id of requestedElementIds) {
         const element = this.elements.find((candidate) => candidate.id === id);
@@ -1629,6 +1667,7 @@ export class StrataGate {
       },
       createdAt: now,
       updatedAt: now,
+      lastVerifiedAt: now,
     };
     if (this.events.some((candidate) => candidate.id === event.id)) throw new Error(`Duplicate event ID: ${event.id}`);
     this.events.push(event);
@@ -1640,6 +1679,7 @@ export class StrataGate {
       old.supersededBy = event.id;
       old.weight.forcedCap = 0.1;
       old.updatedAt = now;
+      old.lastVerifiedAt = now;
     }
     return event;
   }
@@ -2123,6 +2163,10 @@ export class StrataGate {
       throw new Error(`Snapshot blockTurnSize ${normalized.blockTurnSize} does not match ${this.blockTurnSize}`);
     }
     const copy = cloneSnapshot(normalized);
+    if (copy.identity) this.identity = {
+      ...(this.identity ?? {}),
+      ...structuredClone(copy.identity),
+    };
     this.blockDecayLambdaValue = copy.blockDecayLambda;
     this.currentTurn = copy.currentTurn;
     this.openTail.splice(0, this.openTail.length, ...copy.openTail);

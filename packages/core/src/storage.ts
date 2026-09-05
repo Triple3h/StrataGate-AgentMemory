@@ -1,8 +1,9 @@
 import { BLOCK_DECAY_LAMBDA } from './blocks.js';
 import { normalizeStandardEventType } from './events.js';
 import type { ElementCard, EventCard, ExternalMemoryImportJob, GraphEdge, GraphNode, MemoryBlock, RawMessage } from './types.js';
+import type { MemoryIdentity } from './identity.js';
 
-export const STRATAGATE_STORAGE_SCHEMA_VERSION = 10;
+export const STRATAGATE_STORAGE_SCHEMA_VERSION = 11;
 export const KNOWLEDGE_GRAPH_PROJECTOR_VERSION = 1;
 
 export type ExtractionJobStatus = 'running' | 'succeeded' | 'skipped' | 'failed';
@@ -76,6 +77,11 @@ export interface UsageReceipt {
 }
 
 export interface UsageAudit {
+  userId?: string;
+  agentId?: string;
+  projectId?: string;
+  conversationId?: string;
+  sourceAdapter?: string;
   sessionId?: string;
   turn?: number;
   batchId?: string;
@@ -108,6 +114,8 @@ export interface StrataGateSnapshot {
   currentTurn: number;
   blockTurnSize: number;
   blockDecayLambda: number;
+  /** Identity metadata is persisted separately from the routing namespace. */
+  identity?: MemoryIdentity;
   openTail: RawMessage[];
   blocks: MemoryBlock[];
   summaryJobs: BlockSummaryJob[];
@@ -194,6 +202,10 @@ interface LegacySnapshotV8 extends Omit<StrataGateSnapshot, 'schemaVersion' | 's
 
 interface LegacySnapshotV9 extends Omit<StrataGateSnapshot, 'schemaVersion' | 'externalMemoryImportJobs'> {
   schemaVersion: 9;
+}
+
+interface LegacySnapshotV10 extends Omit<StrataGateSnapshot, 'schemaVersion'> {
+  schemaVersion: 10;
 }
 
 function readyLegacyBlocks<T extends Omit<MemoryBlock, 'processingStatus'>>(blocks: readonly T[]): MemoryBlock[] {
@@ -320,6 +332,12 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
       schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
       externalMemoryImportJobs: [],
     };
+  } else if (schemaVersion === 10) {
+    const legacy = value as LegacySnapshotV10;
+    snapshot = {
+      ...structuredClone(legacy),
+      schemaVersion: STRATAGATE_STORAGE_SCHEMA_VERSION,
+    };
   } else if (schemaVersion === STRATAGATE_STORAGE_SCHEMA_VERSION) {
     snapshot = structuredClone(value) as StrataGateSnapshot;
   } else {
@@ -341,6 +359,7 @@ export function normalizeSnapshot(value: unknown): StrataGateSnapshot {
   if (!Array.isArray(snapshot.successfulModelResponses)) snapshot.successfulModelResponses = [];
   for (const event of snapshot.events) {
     event.temporal = { ...event.temporal, eventType: normalizeStandardEventType(event.temporal.eventType) };
+    event.lastVerifiedAt ??= event.updatedAt;
   }
   for (const block of snapshot.blocks) {
     if (block.processingStatus !== 'pending' && block.processingStatus !== 'ready') {

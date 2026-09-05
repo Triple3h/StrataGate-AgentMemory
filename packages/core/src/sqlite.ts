@@ -55,6 +55,13 @@ interface SpaceRow {
   current_turn: number;
   block_turn_size: number;
   block_decay_lambda: number;
+  user_id: string;
+  agent_id: string | null;
+  project_id: string | null;
+  conversation_id: string | null;
+  source_adapter: string | null;
+  memory_scope: 'project' | 'session' | 'global';
+  namespace_prefix: string;
 }
 
 interface MessageRow {
@@ -66,6 +73,11 @@ interface MessageRow {
   content: string;
   created_at: string;
   tool_calls_json: string | null;
+  user_id: string | null;
+  agent_id: string | null;
+  project_id: string | null;
+  conversation_id: string | null;
+  source_adapter: string | null;
 }
 
 interface BlockRow {
@@ -113,6 +125,7 @@ interface EventRow {
   forced_cap: number | null;
   created_at: string;
   updated_at: string;
+  last_verified_at: string | null;
 }
 
 interface EventSourceRow {
@@ -234,6 +247,13 @@ CREATE TABLE IF NOT EXISTS memory_spaces (
   current_turn INTEGER NOT NULL,
   block_turn_size INTEGER NOT NULL,
   block_decay_lambda REAL NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'default',
+  agent_id TEXT,
+  project_id TEXT,
+  conversation_id TEXT,
+  source_adapter TEXT,
+  memory_scope TEXT NOT NULL DEFAULT 'project',
+  namespace_prefix TEXT NOT NULL DEFAULT 'shared',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
@@ -274,6 +294,11 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   created_at TEXT NOT NULL,
   tool_calls_json TEXT,
+  user_id TEXT,
+  agent_id TEXT,
+  project_id TEXT,
+  conversation_id TEXT,
+  source_adapter TEXT,
   PRIMARY KEY (namespace, id),
   FOREIGN KEY (namespace) REFERENCES memory_spaces(namespace) ON DELETE CASCADE,
   FOREIGN KEY (namespace, block_id) REFERENCES blocks(namespace, id) ON DELETE CASCADE
@@ -305,6 +330,7 @@ CREATE TABLE IF NOT EXISTS events (
   forced_cap REAL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  last_verified_at TEXT,
   PRIMARY KEY (namespace, id),
   FOREIGN KEY (namespace, source_block_id) REFERENCES blocks(namespace, id)
 ) STRICT;
@@ -513,7 +539,8 @@ export class SqliteStorage implements StorageAdapter {
     this.assertOpen();
     const key = nonEmptyNamespace(namespace);
     const space = this.database.prepare(`
-      SELECT schema_version, revision, current_turn, block_turn_size, block_decay_lambda
+      SELECT schema_version, revision, current_turn, block_turn_size, block_decay_lambda,
+             user_id, agent_id, project_id, conversation_id, source_adapter, memory_scope, namespace_prefix
       FROM memory_spaces WHERE namespace = ?
     `).get(key) as SpaceRow | undefined;
     if (!space) return null;
@@ -522,7 +549,8 @@ export class SqliteStorage implements StorageAdapter {
     }
 
     const messageRows = this.database.prepare(`
-      SELECT id, block_id, thread_id, position, role, content, created_at, tool_calls_json
+      SELECT id, block_id, thread_id, position, role, content, created_at, tool_calls_json,
+             user_id, agent_id, project_id, conversation_id, source_adapter
       FROM messages WHERE namespace = ? ORDER BY block_id, position
     `).all(key) as unknown as MessageRow[];
     const openTail: RawMessage[] = [];
@@ -533,7 +561,12 @@ export class SqliteStorage implements StorageAdapter {
         role: row.role,
         content: row.content,
         createdAt: row.created_at,
+        ...(row.user_id ? { userId: row.user_id } : {}),
         ...(row.thread_id ? { threadId: row.thread_id } : {}),
+        ...(row.agent_id ? { agentId: row.agent_id } : {}),
+        ...(row.project_id ? { projectId: row.project_id } : {}),
+        ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
+        ...(row.source_adapter ? { sourceAdapter: row.source_adapter } : {}),
         ...(row.tool_calls_json ? { toolCalls: parseJson<ToolTrace[]>(row.tool_calls_json, 'messages.tool_calls_json') } : {}),
       };
       if (row.block_id === null) openTail.push(message);
@@ -626,6 +659,7 @@ export class SqliteStorage implements StorageAdapter {
       },
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      ...(row.last_verified_at ? { lastVerifiedAt: row.last_verified_at } : {}),
     }));
 
     const elementSourceRows = this.database.prepare(`
@@ -778,6 +812,12 @@ export class SqliteStorage implements StorageAdapter {
       currentTurn: space.current_turn,
       blockTurnSize: space.block_turn_size,
       blockDecayLambda: space.block_decay_lambda,
+      identity: {
+        userId: space.user_id,
+        ...(space.project_id ? { projectId: space.project_id } : {}),
+        memoryScope: space.memory_scope,
+        namespacePrefix: space.namespace_prefix,
+      },
       openTail,
       blocks,
       summaryJobs,
@@ -823,10 +863,17 @@ export class SqliteStorage implements StorageAdapter {
 
     const nextRevision = expectedRevision + 1;
     const updatedAt = nowUtc8();
+    const identity = snapshot.identity;
+    const userId = identity?.userId?.trim() || 'default';
+    const projectId = identity?.projectId?.trim() || null;
+    const memoryScope = identity?.memoryScope ?? 'project';
+    const namespacePrefix = identity?.namespacePrefix?.trim() || 'shared';
     if (current) {
       this.database.prepare(`
         UPDATE memory_spaces
-        SET schema_version = ?, revision = ?, current_turn = ?, block_turn_size = ?, block_decay_lambda = ?, updated_at = ?
+        SET schema_version = ?, revision = ?, current_turn = ?, block_turn_size = ?, block_decay_lambda = ?,
+            user_id = ?, agent_id = ?, project_id = ?, conversation_id = ?, source_adapter = ?,
+            memory_scope = ?, namespace_prefix = ?, updated_at = ?
         WHERE namespace = ?
       `).run(
         snapshot.schemaVersion,
@@ -834,14 +881,23 @@ export class SqliteStorage implements StorageAdapter {
         snapshot.currentTurn,
         snapshot.blockTurnSize,
         snapshot.blockDecayLambda,
+        userId,
+        null,
+        projectId,
+        null,
+        null,
+        memoryScope,
+        namespacePrefix,
         updatedAt,
         namespace,
       );
     } else {
       this.database.prepare(`
         INSERT INTO memory_spaces (
-          namespace, schema_version, revision, current_turn, block_turn_size, block_decay_lambda, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          namespace, schema_version, revision, current_turn, block_turn_size, block_decay_lambda,
+          user_id, agent_id, project_id, conversation_id, source_adapter, memory_scope, namespace_prefix,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         namespace,
         snapshot.schemaVersion,
@@ -849,6 +905,13 @@ export class SqliteStorage implements StorageAdapter {
         snapshot.currentTurn,
         snapshot.blockTurnSize,
         snapshot.blockDecayLambda,
+        userId,
+        null,
+        projectId,
+        null,
+        null,
+        memoryScope,
+        namespacePrefix,
         updatedAt,
         updatedAt,
       );
@@ -908,11 +971,17 @@ export class SqliteStorage implements StorageAdapter {
 
     const insertMessage = this.database.prepare(`
       INSERT INTO messages (
-        namespace, id, block_id, thread_id, position, role, content, created_at, tool_calls_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        namespace, id, block_id, thread_id, position, role, content, created_at, tool_calls_json,
+        user_id, agent_id, project_id, conversation_id, source_adapter
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
         block_id = excluded.block_id,
         thread_id = excluded.thread_id,
+        user_id = excluded.user_id,
+        agent_id = excluded.agent_id,
+        project_id = excluded.project_id,
+        conversation_id = excluded.conversation_id,
+        source_adapter = excluded.source_adapter,
         position = excluded.position,
         role = excluded.role,
         content = excluded.content,
@@ -931,6 +1000,11 @@ export class SqliteStorage implements StorageAdapter {
           message.content,
           message.createdAt,
           message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+          message.userId ?? null,
+          message.agentId ?? null,
+          message.projectId ?? null,
+          message.conversationId ?? null,
+          message.sourceAdapter ?? null,
         );
       }
     };
@@ -942,8 +1016,8 @@ export class SqliteStorage implements StorageAdapter {
         namespace, id, position, title, summary, narrative, tags_json, quotes_json, source_block_id,
         temporal_json, scope, criticality, confidence, status, superseded_by,
         mention_count, last_adopted_turn, last_retrieved_at, pinned, floor_weight, forced_cap,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, updated_at, last_verified_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (namespace, id) DO UPDATE SET
         position = excluded.position,
         title = excluded.title,
@@ -965,7 +1039,8 @@ export class SqliteStorage implements StorageAdapter {
         floor_weight = excluded.floor_weight,
         forced_cap = excluded.forced_cap,
         created_at = excluded.created_at,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        last_verified_at = excluded.last_verified_at
     `);
     const insertEventSource = this.database.prepare(`
       INSERT INTO event_sources (namespace, event_id, message_id, position) VALUES (?, ?, ?, ?)
@@ -996,6 +1071,7 @@ export class SqliteStorage implements StorageAdapter {
         event.weight.forcedCap,
         event.createdAt,
         event.updatedAt,
+        event.lastVerifiedAt ?? event.updatedAt,
       );
       for (const [position, messageId] of event.sourceMessageIds.entries()) {
         insertEventSource.run(namespace, event.id, messageId, position);
@@ -1239,6 +1315,24 @@ export class SqliteStorage implements StorageAdapter {
         if (!spaceColumns.some(({ name }) => name === 'block_decay_lambda')) {
           this.database.exec('ALTER TABLE memory_spaces ADD COLUMN block_decay_lambda REAL NOT NULL DEFAULT 0.3');
         }
+        for (const [name, definition] of [
+          ['user_id', "TEXT NOT NULL DEFAULT 'default'"],
+          ['agent_id', 'TEXT'],
+          ['project_id', 'TEXT'],
+          ['conversation_id', 'TEXT'],
+          ['source_adapter', 'TEXT'],
+          ['memory_scope', "TEXT NOT NULL DEFAULT 'project'"],
+          ['namespace_prefix', "TEXT NOT NULL DEFAULT 'shared'"],
+        ] as const) {
+          if (!spaceColumns.some((column) => column.name === name)) {
+            this.database.exec(`ALTER TABLE memory_spaces ADD COLUMN ${name} ${definition}`);
+          }
+        }
+        const eventColumns = this.database.prepare("PRAGMA table_info('events')").all() as unknown as Array<{ name: string }>;
+        if (!eventColumns.some(({ name }) => name === 'last_verified_at')) {
+          this.database.exec('ALTER TABLE events ADD COLUMN last_verified_at TEXT');
+          this.database.exec('UPDATE events SET last_verified_at = updated_at WHERE last_verified_at IS NULL');
+        }
         const blockColumns = this.database.prepare("PRAGMA table_info('blocks')").all() as unknown as Array<{ name: string }>;
         if (!blockColumns.some(({ name }) => name === 'thread_id')) {
           this.database.exec('ALTER TABLE blocks ADD COLUMN thread_id TEXT');
@@ -1268,6 +1362,17 @@ export class SqliteStorage implements StorageAdapter {
         const messageColumns = this.database.prepare("PRAGMA table_info('messages')").all() as unknown as Array<{ name: string }>;
         if (!messageColumns.some(({ name }) => name === 'thread_id')) {
           this.database.exec('ALTER TABLE messages ADD COLUMN thread_id TEXT');
+        }
+        for (const [name, definition] of [
+          ['user_id', 'TEXT'],
+          ['agent_id', 'TEXT'],
+          ['project_id', 'TEXT'],
+          ['conversation_id', 'TEXT'],
+          ['source_adapter', 'TEXT'],
+        ] as const) {
+          if (!messageColumns.some((column) => column.name === name)) {
+            this.database.exec(`ALTER TABLE messages ADD COLUMN ${name} ${definition}`);
+          }
         }
         this.database.exec(THREAD_INDEXES);
         this.database.prepare('UPDATE memory_spaces SET schema_version = ? WHERE schema_version < ?')
