@@ -36,6 +36,11 @@ function renderError(error: unknown): string {
 
 export async function apply(ctx: Context, config: StrataGateConfig): Promise<() => Promise<void>> {
   const resolved = resolveConfig(config)
+  if (process.env.STRATAGATE_OBSERVABILITY_LOG === '1') {
+    resolved.observability = (event) => {
+      ctx.logger.info(`[stratagate-observe] ${JSON.stringify(event)}`)
+    }
+  }
   await mkdir(dirname(resolved.database), { recursive: true })
   const models = new DshModelBridge(ctx, resolved)
   const runtime = new StrataGateRuntime(resolved, models, (error) => {

@@ -1,5 +1,6 @@
 import z from '@deepseek-ai/schemastery'
 import { homedir } from 'node:os'
+import type { ObservabilitySink } from '@diqier/stratagate'
 
 export type NamespaceMode = 'project' | 'session' | 'global'
 
@@ -17,6 +18,8 @@ export interface Config {
   model?: string
   maxOutputTokens?: number
   structuredTaskTimeoutMs?: number
+  adminToken?: string
+  observability?: ObservabilitySink
 }
 
 export interface ResolvedConfig {
@@ -33,6 +36,8 @@ export interface ResolvedConfig {
   model?: string
   maxOutputTokens: number
   structuredTaskTimeoutMs?: number
+  adminToken?: string
+  observability?: ObservabilitySink
 }
 
 export const Config: z<Config> = z.object({
@@ -51,6 +56,7 @@ export const Config: z<Config> = z.object({
   model: z.string(),
   maxOutputTokens: z.natural().min(256).default(2_048),
   structuredTaskTimeoutMs: z.natural().min(1_000).default(45_000),
+  adminToken: z.string(),
 })
 
 export function resolveConfig(config: Config): ResolvedConfig {
@@ -63,6 +69,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
   const agentId = config.agentId?.trim() || 'dsh'
   const provider = config.provider?.trim()
   const model = config.model?.trim()
+  const adminToken = config.adminToken?.trim() || process.env.STRATAGATE_ADMIN_TOKEN?.trim()
   if (!database) throw new TypeError('StrataGate database path must not be empty')
   if (Boolean(provider) !== Boolean(model)) {
     throw new TypeError('StrataGate provider and model must be configured together')
@@ -78,6 +85,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     ...(provider && model ? { provider, model } : {}),
     maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 2_048)),
     structuredTaskTimeoutMs: Math.max(1_000, Math.floor(config.structuredTaskTimeoutMs ?? 45_000)),
+    ...(adminToken ? { adminToken } : {}),
   }
   Object.defineProperties(resolved, {
     userId: { value: userId, enumerable: false },

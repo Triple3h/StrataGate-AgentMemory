@@ -29,6 +29,10 @@ import {
   type SearchOptions,
   type SuccessfulModelResponse,
   type StrataGateSnapshot,
+  redactSensitiveText,
+  canAccessMemoryScope,
+  observe,
+  type ObservabilitySink,
 } from '@diqier/stratagate'
 import { SqliteStorage } from '@diqier/stratagate/sqlite'
 import type { ResolvedConfig } from './config.js'
@@ -111,15 +115,17 @@ export class StrataGateRuntime {
   private ingestError: unknown
   private blockTurnSize: number
   private blockDecayLambda: number
+  private readonly observability: ObservabilitySink | undefined
 
   constructor(
-    private readonly config: ResolvedConfig,
+    readonly config: ResolvedConfig,
     private readonly models: DshModelBridge,
     private readonly onIngestError: (error: unknown) => void = () => {},
     private readonly flushNativeSession: (session: Session) => Promise<void> = async () => {},
   ) {
     this.blockTurnSize = config.blockTurnSize
     this.blockDecayLambda = config.blockDecayLambda
+    this.observability = config.observability
   }
 
   acceptEvent(session: Session, event: SessionEvent): void {
@@ -150,7 +156,7 @@ export class StrataGateRuntime {
 
   async searchEvents(session: Session, query: string, options: SearchOptions = {}): Promise<unknown> {
     await this.flush()
-    const results = await (await this.space(session)).searchEvents(query, options)
+    const results = await (await this.space(session)).searchEvents(query, { ...options, threadId: String(session.id) })
     return this.batch(session, results.map(({ event }) => ({
       ref: `event:${event.id}`,
       target: {
@@ -163,7 +169,7 @@ export class StrataGateRuntime {
 
   async searchElements(session: Session, query: string, options: ElementSearchOptions = {}): Promise<unknown> {
     await this.flush()
-    const results = await (await this.space(session)).searchElements(query, options)
+    const results = await (await this.space(session)).searchElements(query, { ...options, threadId: String(session.id) })
     return this.batch(session, results.map((result) => ({
       ref: `element:${result.elementId}:fact:${result.id}`,
       target: {
@@ -189,7 +195,7 @@ export class StrataGateRuntime {
     await this.flush()
     const memory = await this.space(session)
     const threadId = String(session.id)
-    const results = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER)
+    const results = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER, { threadId, scope })
       .filter((result) => scope === 'namespace' || result.message.threadId === threadId || result.message.threadId === undefined)
       .slice(0, limit)
     const blockTitles = new Map(memory.listBlocks().map((block) => [block.id, blockCitationTitle(block)]))
@@ -270,8 +276,13 @@ export class StrataGateRuntime {
 
   async expandEvent(session: Session, id: string): Promise<unknown> {
     await this.flush()
-    const event = (await this.space(session)).listEvents().find((candidate) => candidate.id === id)
+    const memory = await this.space(session)
+    const event = memory.listEvents().find((candidate) => candidate.id === id)
     if (!event) throw new Error(`Unknown event: ${id}`)
+    if (!canAccessMemoryScope(event.scope, {
+      threadId: String(session.id),
+      sourceThreadId: memory.listBlocks().find(({ id: blockId }) => blockId === event.sourceBlockId)?.threadId,
+    })) throw new Error(`Event is not visible in conversation ${session.id}`)
     return this.batch(session, [{
       ref: `event:${event.id}`,
       target: {
@@ -283,6 +294,7 @@ export class StrataGateRuntime {
   }
 
   async assess(session: Session, input: RetrievalAssessmentInput, batchId?: string): Promise<unknown> {
+    const startedAt = Date.now()
     const batch = this.requireBatch(session, batchId, 'memory_assess')
     if (batch.status !== 'unresolved') {
       throw new Error(this.batchError(
@@ -294,6 +306,20 @@ export class StrataGateRuntime {
     const memory = await this.space(session)
     const assessment = memory.assessRetrieval(input, new Set(batch.refs.keys()))
     batch.assessment = assessment
+    observe(this.observability, 'assessment', assessment.verdict === 'sufficient' && assessment.rejectedEvidenceRefs.length === 0 ? 'ok' : 'rejected', {
+      batchId: batch.id,
+      assessmentId: `assessment:${batch.id}`,
+      namespace: this.namespaceFor(session),
+      userId: this.config.userId,
+      agentId: this.config.agentId,
+      conversationId: String(session.id),
+      sourceAdapter: 'dsh',
+      storageRevision: memory.storageRevision,
+    }, startedAt, {
+      verdict: assessment.verdict,
+      rejected_evidence_count: assessment.rejectedEvidenceRefs.length,
+      evidence_count: assessment.evidenceRefs.length,
+    })
     return {
       batchId: batch.id,
       batchStatus: batch.status,
@@ -308,6 +334,7 @@ export class StrataGateRuntime {
     evidenceRefs: readonly string[],
     batchId?: string,
   ): Promise<unknown> {
+    const startedAt = Date.now()
     const key = String(session.id)
     const batch = this.requireBatch(session, batchId, 'memory_record_use')
     if (batch.status !== 'unresolved') {
@@ -412,6 +439,16 @@ export class StrataGateRuntime {
       },
     })
     batch.status = 'recorded'
+    observe(this.observability, 'record_use', 'ok', {
+      receiptId,
+      batchId: batch.id,
+      namespace,
+      userId: this.config.userId,
+      agentId: this.config.agentId,
+      conversationId: key,
+      sourceAdapter: 'dsh',
+      storageRevision: (await this.space(session)).storageRevision,
+    }, startedAt, { event_count: eventIds.size, element_count: elementIds.size })
     return {
       batchId: batch.id,
       batchStatus: batch.status,
@@ -455,10 +492,10 @@ export class StrataGateRuntime {
     const activationQuery = [currentUserMessage(session), renderMessages(recentTurns(openTail, 2))]
       .filter(Boolean)
       .join('\n\n')
-    const eventHits = activationQuery ? await memory.searchEvents(activationQuery, { limit: 20 }) : []
+    const eventHits = activationQuery ? await memory.searchEvents(activationQuery, { limit: 20, threadId }) : []
     let graphNodes: GraphNode[] = []
     if (activationQuery && typeof memory.searchGraphNodes === 'function') {
-      graphNodes = (await memory.searchGraphNodes(activationQuery, 12)).map(({ node }) => node)
+      graphNodes = (await memory.searchGraphNodes(activationQuery, 12, { threadId })).map(({ node }) => node)
     } else if (activationQuery) {
       // Compatibility for an in-flight older core instance; new persistent
       // spaces always use Graph nodes and never create new Element cards.
@@ -578,7 +615,12 @@ export class StrataGateRuntime {
     if (this.config.database === ':memory:' || !existsSync(this.config.database)) return []
     const storage = new SqliteStorage({ filename: this.config.database, readonly: true })
     try {
-      return storage.listNamespaces()
+      const namespaces: string[] = []
+      for (const namespace of storage.listNamespaces()) {
+        const loaded = await storage.load(namespace)
+        if (loaded && this.adminNamespaceVisible(loaded.snapshot)) namespaces.push(namespace)
+      }
+      return namespaces
     } finally {
       await storage.close()
     }
@@ -599,19 +641,19 @@ export class StrataGateRuntime {
             ? cached
             : { namespace, revision: currentRevision, snapshot: memory.exportSnapshot() }
           this.adminSnapshotCache.set(namespace, entry)
-          entries.push(entry)
+          if (this.adminNamespaceVisible(entry.snapshot)) entries.push(entry)
           continue
         }
         const cached = this.adminSnapshotCache.get(namespace)
         if (cached?.revision === revision) {
-          entries.push(cached)
+          if (this.adminNamespaceVisible(cached.snapshot)) entries.push(cached)
           continue
         }
         const loaded = await storage.load(namespace)
         if (!loaded) continue
         const entry = { namespace, revision: loaded.revision, snapshot: loaded.snapshot }
         this.adminSnapshotCache.set(namespace, entry)
-        entries.push(entry)
+        if (this.adminNamespaceVisible(entry.snapshot)) entries.push(entry)
       }
       const activeNamespaces = new Set(entries.map(({ namespace }) => namespace))
       for (const namespace of this.adminSnapshotCache.keys()) {
@@ -656,8 +698,9 @@ export class StrataGateRuntime {
     if (!key) throw new TypeError('StrataGate admin namespace must not be empty')
     if (this.config.database === ':memory:' || !existsSync(this.config.database)) return null
     const opening = this.spaces.get(key)
-    if (opening) {
-      const memory = await opening
+      if (opening) {
+        const memory = await opening
+        if (!this.adminNamespaceVisible(memory.exportSnapshot())) return null
       const revision = memory.storageRevision
       const cached = this.adminSnapshotCache.get(key)
       if (cached?.revision === revision) return cached.snapshot
@@ -670,15 +713,23 @@ export class StrataGateRuntime {
       const head = storage.listNamespaceRevisions().find(({ namespace }) => namespace === key)
       if (!head) return null
       const cached = this.adminSnapshotCache.get(key)
-      if (cached?.revision === head.revision) return cached.snapshot
+      if (cached?.revision === head.revision) return this.adminNamespaceVisible(cached.snapshot) ? cached.snapshot : null
       const loaded = await storage.load(key)
       if (!loaded) return null
+      if (!this.adminNamespaceVisible(loaded.snapshot)) return null
       const entry = { namespace: key, revision: loaded.revision, snapshot: loaded.snapshot }
       this.adminSnapshotCache.set(key, entry)
       return entry.snapshot
     } finally {
       await storage.close()
     }
+  }
+
+  private adminNamespaceVisible(snapshot: StrataGateSnapshot): boolean {
+    const configuredUser = this.config.userId?.trim()
+    if (!configuredUser) return true
+    const owner = snapshot.identity?.userId?.trim()
+    return !owner || owner === configuredUser
   }
 
   private externalImportView(job: ExternalMemoryImportJob): Record<string, unknown> {
@@ -995,6 +1046,7 @@ export class StrataGateRuntime {
         extractor: this.models.extractor,
         graphProjector: this.models.graphProjector,
         disableElementProjection: true,
+        ...(this.config.observability ? { observability: this.config.observability } : {}),
       })
       try {
         return await memory.expandBlock(id, target, 'user')
@@ -1087,6 +1139,7 @@ export class StrataGateRuntime {
           conversationId: String(session.id),
           memoryScope: this.config.namespaceMode,
           namespacePrefix: this.config.namespacePrefix === 'dsh' ? 'shared' : this.config.namespacePrefix,
+          sessionId: String(session.id),
           sourceAdapter: 'dsh',
         },
         blockTurnSize: this.blockTurnSize,
@@ -1095,6 +1148,7 @@ export class StrataGateRuntime {
         extractor: this.models.extractor,
         graphProjector: this.models.graphProjector,
         disableElementProjection: true,
+        ...(this.config.observability ? { observability: this.config.observability } : {}),
       }).then(async (memory) => {
         try {
           try {
@@ -1122,7 +1176,7 @@ export class StrataGateRuntime {
 
   async searchGraph(session: Session, query: string, limit = 8): Promise<unknown> {
     await this.flush()
-    const results = await (await this.space(session)).searchGraphNodes(query, limit)
+    const results = await (await this.space(session)).searchGraphNodes(query, limit, { threadId: String(session.id) })
     return this.batch(session, results.map(({ node }) => ({
       ref: `graph-node:${node.id}`,
       target: {
@@ -1138,7 +1192,16 @@ export class StrataGateRuntime {
     const memory = await this.space(session)
     const node = memory.listGraphNodes().find((candidate) => candidate.id === id)
     if (!node) throw new Error(`Unknown graph node: ${id}`)
-    const edges = memory.listGraphEdges().filter(({ fromNodeId, toNodeId }) => fromNodeId === id || toNodeId === id)
+    const visible = (eventId: string): boolean => {
+      const event = memory.listEvents().find(({ id: candidateId }) => candidateId === eventId)
+      return event ? canAccessMemoryScope(event.scope, {
+        threadId: String(session.id),
+        sourceThreadId: memory.listBlocks().find(({ id: blockId }) => blockId === event.sourceBlockId)?.threadId,
+      }) : false
+    }
+    if (node.sourceEventIds.length > 0 && !node.sourceEventIds.every(visible)) throw new Error(`Graph node is not visible in conversation ${session.id}`)
+    const edges = memory.listGraphEdges().filter(({ fromNodeId, toNodeId, sourceEventIds }) =>
+      (fromNodeId === id || toNodeId === id) && sourceEventIds.every(visible))
     return this.batch(session, [{
       ref: `graph-node:${node.id}:expanded`,
       target: {
@@ -1233,6 +1296,7 @@ export class StrataGateRuntime {
         blockDecayLambda: this.blockDecayLambda,
         graphProjector: this.models.graphProjector,
         disableElementProjection: true,
+        ...(this.config.observability ? { observability: this.config.observability } : {}),
       }),
       owned: true,
     }
@@ -1266,6 +1330,7 @@ export class StrataGateRuntime {
     results: unknown,
     metadata: Record<string, unknown> = {},
   ): unknown {
+    const startedAt = Date.now()
     const sequence = ++this.batchSequence
     const id = `batch_${sequence}`
     const refs = new Map(evidence.map(({ ref, target }) => [ref, target]))
@@ -1277,6 +1342,14 @@ export class StrataGateRuntime {
     }
     sessionBatches.set(id, { id, sequence, refs, status: 'unresolved' })
     this.latestBatchIds.set(key, id)
+    observe(this.observability, 'retrieval', refs.size > 0 ? 'ok' : 'empty', {
+      batchId: id,
+      namespace: this.namespaceFor(session),
+      userId: this.config.userId,
+      agentId: this.config.agentId,
+      conversationId: key,
+      sourceAdapter: 'dsh',
+    }, startedAt, { result_count: refs.size })
     return { batchId: id, evidenceRefs: [...refs.keys()], results, ...metadata }
   }
 
@@ -1449,7 +1522,7 @@ function compactTemporal(event: EventCard): Record<string, unknown> {
 }
 
 function compactText(value: string, limit = 800): string {
-  return value.replace(/\s+/gu, ' ').trim().slice(0, limit)
+  return redactSensitiveText(value).replace(/\s+/gu, ' ').trim().slice(0, limit)
 }
 
 function citation(

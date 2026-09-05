@@ -162,6 +162,14 @@ async function request(url: string, method = 'GET', targetRuntime = runtime, bod
 }
 
 describe('StrataGate admin routes', () => {
+  it('requires the configured admin token before exposing memory data', async () => {
+    const protectedRuntime = { ...runtime, config: { adminToken: 'local-secret' } } as unknown as StrataGateRuntime
+    const denied = await request('/api/stratagate/overview', 'GET', protectedRuntime)
+    expect(denied.status).toBe(401)
+    const allowed = await request('/api/stratagate/overview', 'GET', protectedRuntime, undefined, { authorization: 'Bearer local-secret' })
+    expect(allowed.status).toBe(200)
+  })
+
   it('supports preview, commit, and undo through the import route', async () => {
     const received: unknown[] = []
     const importRuntime = {

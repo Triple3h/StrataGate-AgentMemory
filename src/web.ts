@@ -16,6 +16,7 @@ import {
 } from '@diqier/stratagate'
 import type { AdminSnapshotEntry, StrataGateRuntime } from './runtime.js'
 import { clusterKnowledgeGraph } from './graph-clustering.js'
+import { constantTimeTokenEqual } from '@diqier/stratagate'
 
 const STRATAGATE_DSH_VERSION = '0.2.36'
 const LEGACY_THREAD_ID = '__legacy__'
@@ -845,8 +846,19 @@ function sendDashboard(res: WebResponse, result: DashboardResult): void {
   res.end(JSON.stringify(redactValue(result.body)))
 }
 
+function assertAdminAccess(runtime: StrataGateRuntime, req: WebRequest): void {
+  const expected = runtime.config?.adminToken?.trim()
+  if (!expected) return
+  const authorization = requestHeader(req, 'authorization').trim()
+  const supplied = authorization.toLowerCase().startsWith('bearer ')
+    ? authorization.slice(7).trim()
+    : requestHeader(req, 'x-stratagate-admin-token').trim()
+  if (!supplied || !constantTimeTokenEqual(expected, supplied)) throw new AdminHttpError(401, 'StrataGate admin authorization required')
+}
+
 export async function handleAdminRequest(runtime: StrataGateRuntime, req: WebRequest, res: WebResponse): Promise<void> {
   try {
+    assertAdminAccess(runtime, req)
     const url = new URL(req.url ?? '/', 'http://localhost')
     const path = url.pathname.replace(/\/$/, '')
     if (path === '/api/stratagate/settings') {
