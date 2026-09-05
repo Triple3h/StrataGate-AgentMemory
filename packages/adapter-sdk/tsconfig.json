@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@diqier/stratagate": [
+        "../../packages/core/src/index.ts"
+      ],
+      "@diqier/stratagate/sqlite": [
+        "../../packages/core/src/sqlite.ts"
+      ]
+    },
+    "rootDir": "../..",
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

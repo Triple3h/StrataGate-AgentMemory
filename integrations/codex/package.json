@@ -1,0 +1,19 @@
+{
+  "name": "stratagate-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup && node scripts/manifest.mjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "doctor": "node dist/cli.cjs doctor",
+    "backfill": "node dist/cli.cjs backfill",
+    "replay": "node dist/cli.cjs replay"
+  },
+  "dependencies": {
+    "@diqier/stratagate-adapter-sdk": "0.1.0",
+    "@diqier/stratagate-gateway": "0.1.0",
+    "smol-toml": "^1.4.2"
+  }
+}

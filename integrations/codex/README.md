@@ -1,109 +1,108 @@
 # StrataGate for Codex
 
-Local-first, source-traceable cross-session memory for Codex, backed by the same
-StrataGate engine as the WorkBuddy plugin.
+Codex has its own hook, rollout capture, installer, MCP entrypoint, and diagnostics.
+It shares the memory engine and Gateway with other agents. No Codex entrypoint
+loads a build artifact from `integrations/workbuddy/dist`.
 
-- **Auto-recall on prompt** — a `UserPromptSubmit` hook searches saved memory and
-  injects relevant evidence into the turn via `additionalContext`.
-- **Auto-capture on stop** — a `Stop` hook incrementally reads the transcript and
-  saves the completed turn to local SQLite (L5 source), with a stable receipt so
-  replays never duplicate.
-- **Evidence-gated MCP tools** — search events / elements / raw memory, expand
-  cards and blocks, assess evidence sufficiency, and record adopted evidence.
+## Responsibilities
 
-## Layout
+- `packages/core`: storage, blocks, derivation, retrieval, evidence gates.
+- `packages/gateway`: authenticated ingestion, processing, MCP tool registration,
+  and the Memory Console. WorkBuddy's old entrypoints are compatibility exports.
+- `packages/adapter-sdk`: connection configuration, Gateway transport, evidence
+  contracts, state helpers, and the source-preserving delivery journal.
+- `integrations/codex/src`: Codex lifecycle and native turn parsing. Identity is
+  always `sourceAdapter=codex`; project namespaces remain shared with other hosts.
 
-```text
-.codex-plugin/plugin.json   Codex plugin manifest (name: stratagate-memory)
-.mcp.json                   MCP server declaration (uses the shared engine)
-hooks/hooks.json            UserPromptSubmit + Stop hooks (shared engine)
-skills/memory/SKILL.md      Agent skill describing the memory protocol
-scripts/install.mjs         Idempotent installer that writes ~/.codex/config.toml
-```
+## Build and Install
 
-This is a thin adapter: the MCP server and hooks are the shared engine built in
-`../workbuddy/dist` (`server.cjs` / `hook.cjs`; `runtime.cjs` is part of the same
-versioned artifact). Build it once with:
+Requires Node `^22.19 || >=24`.
 
 ```bash
-npm run build:workbuddy
+npm install
+npm run build
+node integrations/codex/scripts/install.mjs --connection-env /path/to/gateway.env
 ```
 
-The build also writes `dist/manifest.json`, containing the engine/Core versions and
-SHA-256 hashes. The installer verifies this manifest before touching Codex config
-and migrates stale StrataGate paths to the verified shared artifact.
+`--connection-env` is optional when a shared connection already exists. The
+installer copies connection settings, never prints tokens, backs up existing
+configuration, and verifies the hashes of Codex's own build artifacts. Unrelated
+Codex settings and hook commands are preserved. Hook entries are inserted in
+their own TOML tables, including when `[hooks.state]` already exists.
 
-## Install
+Hook and MCP use the same owner-readable `~/.stratagate/connection.json`:
 
-### Via the installer (recommended)
+```json
+{
+  "STRATAGATE_GATEWAY_URL": "http://127.0.0.1:43731",
+  "STRATAGATE_GATEWAY_TOKEN": "your-existing-gateway-token",
+  "STRATAGATE_USER_ID": "your-user-id",
+  "STRATAGATE_DATA_DIR": "/absolute/path/to/agent-memory"
+}
+```
+
+Override its path with `--connection-config` during installation. Explicit process
+environment values override saved connection values. Codex host identity is set
+by the adapter; a project directory is resolved from each rollout/hook, not from
+the installation directory. Run MCP from the active project directory.
+
+After installation, restart Codex and trust the changed hook commands when
+prompted. Installation does not prove a hook executed. Headless clients that do
+not emit hooks require explicit capture/backfill.
+
+## Capture and Recovery
+
+`UserPromptSubmit` recalls evidence. `Stop` and `SubagentStop` capture completed
+turns. `PreCompact` and `Interrupt` capture already completed turns while leaving
+unfinished work in the source rollout. `SubagentStart` records lifecycle telemetry.
+
+The parser groups messages and tools by the native Codex turn ID. Upstream
+generation IDs are not turn boundaries. Actual UserMessage events take precedence
+over injected AGENTS/environment records. Repeated text in different turns is
+retained. Partial JSON at the end of a growing rollout is retried later.
+
+Each turn is journaled with owner-only permissions before the capture offset
+advances. A native session/turn receipt is shared by live capture and backfill,
+independent of the hook's transient agent label. The Gateway acknowledges or
+deduplicates it before the journal marks delivery complete. Source text and tool
+results are preserved without redaction in this local journal. Do not publish it.
+
+Authentication, network, and ingestion errors leave a pending journal entry.
+The MCP process retries every 30 seconds; hooks and `replay` also retry. Large
+turns may require increasing `STRATAGATE_GATEWAY_MAX_BODY_BYTES` on the Gateway
+(up to 16 MiB). A pending status of 413 identifies that condition. Failed delivery
+does not block the conversation itself.
 
 ```bash
-node integrations/codex/scripts/install.mjs
+node integrations/codex/dist/cli.cjs doctor
+node integrations/codex/dist/cli.cjs replay
+node integrations/codex/dist/cli.cjs backfill --project /absolute/project --report /tmp/backfill.json
+node integrations/codex/dist/cli.cjs backfill --project /absolute/project --apply
 ```
 
-This ensures `~/.codex/config.toml` has:
+Backfill requires a project or `--transcript FILE`. Without `--apply` it is a
+preview. Incomplete turns are omitted. The receipt journal prevents live/backfill
+overlap from appending the same native turn again. Exact legacy matches can adopt
+the new receipt while retaining their original raw messages; a more complete
+source capture may be retained alongside an older partial legacy capture.
 
-- a `stratagate` MCP server (stdio, absolute path to the shared engine);
-- `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, and
-  `Interrupt` hooks calling the shared `hook.cjs`.
-
-It backs up `config.toml` first and never removes unrelated config. Existing
-StrataGate entries are migrated away from hard-coded repository directories and
-receive the shared namespace identity variables.
-
-All three adapters default to the same namespace format:
-`shared:user:<user_id>:scope:project:<project_hash>`. Set
-`STRATAGATE_USER_ID` consistently when multiple agents should share a user's
-memory; use `STRATAGATE_NAMESPACE` for an explicit isolated boundary.
-
-When the standalone Gateway is running, set `STRATAGATE_GATEWAY_URL` (or
-`STRATAGATE_GATEWAY_SOCKET`) and `STRATAGATE_GATEWAY_TOKEN` in the hook/MCP
-environment. Hooks then use the Gateway for context and ingest; set
-`STRATAGATE_GATEWAY_FALLBACK=1` only during migration to permit local fallback.
-If the Gateway is down, completed turns are retained in the shared local outbox and
-replayed automatically after recovery (`stratagate-memory-outbox status|replay`).
-
-**Hook trust:** Codex gates hooks behind per-hook trust. After installing, start
-a Codex session and approve/trust the new hooks when prompted. Until they are
-trusted they will not run. (Headless `codex exec` sessions do not run
-UserPromptSubmit/Stop hooks at all — use the desktop interactive session.)
-
-### Via marketplace
+## Correct Legacy Source Labels
 
 ```bash
-codex plugin marketplace add <this-repo> --sparse integrations/codex
-codex plugin add stratagate-memory
+node integrations/codex/dist/cli.cjs repair-sources --project /absolute/project --report /tmp/sources.json
+node integrations/codex/dist/cli.cjs repair-sources --project /absolute/project --apply
 ```
 
-Note: on Codex 0.139 the plugin-declared MCP server and hooks may not auto-connect
-(they require trust / a newer build). The installer above is the reliable path.
+The repair requires matching conversation identity and verbatim role-specific
+text in a local Codex rollout. It only changes legacy `workbuddy` agent records
+whose source is `workbuddy` or `gateway`. The Gateway checks the expected content
+hash and revision, records the old provenance in an audit file, and preserves
+message IDs and raw content. Regenerate the report on a conflict.
 
-## Model for memory processing
+`doctor` separates installation, authenticated connectivity, actual hook
+timestamps, pending delivery, and the last successful delivery. A healthy
+Gateway is not evidence of successful Codex capture.
 
-Memory processing (L0–L4, events, graph projection) uses an OpenAI-compatible
-endpoint when configured; otherwise it falls back to `layered-raw` mode (L5 raw
-capture + L0–L4 sealing, no event/graph extraction).
-
-Set these in the `stratagate` MCP server env (or export them) to enable full
-event/graph extraction:
-
-```bash
-export STRATAGATE_MODEL_BASE_URL="https://.../v1"
-export STRATAGATE_MODEL="your-model"
-export STRATAGATE_MODEL_API_KEY="your-key"
-```
-
-## Tools
-
-All tools are exposed as `mcp__stratagate__*` in Codex:
-
-```text
-memory_search_events   memory_expand_event
-memory_search_elements memory_expand_element
-memory_search_graph    memory_expand_graph_node
-memory_search_raw      memory_get_blocks
-memory_expand_block    memory_assess
-memory_record_use      memory_status
-```
-
-See `skills/memory/SKILL.md` for the usage protocol.
+The evidence protocol and MCP tool names are unchanged; see
+`skills/memory/SKILL.md`. Model credentials and background derivation belong to
+the Gateway deployment. Codex never launches WorkBuddy to derive memory.

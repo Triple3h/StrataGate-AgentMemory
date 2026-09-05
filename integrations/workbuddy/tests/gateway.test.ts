@@ -32,6 +32,20 @@ async function gateway() {
 }
 
 describe('Memory Gateway API', () => {
+  it('serves console deep links without swallowing unknown API routes', async () => {
+    const base = await gateway()
+    for (const path of ['/dashboard', '/sessions?project=fixture&source=codex', '/sessions/', '/blocks', '/memory', '/processing', '/audit', '/import', '/settings', '/console', '/v1/console']) {
+      const response = await fetch(base + path)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toContain('text/html')
+    }
+    for (const path of ['/unknown', '/v1/unknown', '/sessions/unknown']) {
+      const response = await fetch(base + path)
+      expect(response.status).toBe(404)
+      expect(response.headers.get('content-type')).toContain('application/json')
+    }
+  })
+
   it('ingests idempotently and exposes read-only dashboard data', async () => {
     const base = await gateway()
     const health = await fetch(`${base}/health`)
@@ -117,6 +131,9 @@ describe('Memory Gateway API', () => {
     const consolePage = await fetch(`${base}/console`)
     expect(consolePage.status).toBe(200)
     expect(await consolePage.text()).toContain('使用 Token 登录')
+    expect((await fetch(`${base}/sessions?project=private`)).status).toBe(200)
+    expect((await fetch(`${base}/v1/dashboard`)).status).toBe(401)
+    expect((await fetch(`${base}/v1/console/snapshot?namespace=private`)).status).toBe(401)
     expect((await fetch(`${base}/health`)).status).toBe(401)
     expect((await fetch(`${base}/health`, { headers: { authorization: 'Bearer secret-token' } })).status).toBe(200)
     const forbidden = await fetch(`${base}/v1/context?namespace=shared%3Auser%3Aother%3Ascope%3Aproject%3Aforeign&q=test`, { headers: { authorization: 'Bearer secret-token' } })

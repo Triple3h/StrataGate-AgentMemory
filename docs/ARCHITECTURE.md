@@ -6,6 +6,13 @@ StrataGate separates source preservation, derived memory, retrieval control, and
 
 ## System boundaries
 
+Host transport and engine ownership are separate. `packages/adapter-sdk` owns
+shared connection configuration and delivery; `packages/gateway` owns the common
+runtime, HTTP API, processing and console. Codex owns its native capture lifecycle
+under `integrations/codex`, with independent build artifacts. WorkBuddy's previous
+runtime paths remain compatibility exports during migration. See the Codex
+adapter README for delivery receipts, diagnostics and provenance repair.
+
 All host adapters use one identity contract. The namespace is derived from
 `user_id + memory_scope + project_id` (with an optional global/session key), not
 from the adapter name. `agent_id`, `conversation_id`, and transcript path stay

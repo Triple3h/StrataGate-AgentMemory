@@ -1,0 +1,16 @@
+{
+  "name": "@diqier/stratagate-adapter-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@diqier/stratagate": "0.1.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@diqier/stratagate-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/gateway.cjs"
+  },
+  "dependencies": {
+    "@diqier/stratagate": "0.1.0",
+    "@diqier/stratagate-adapter-sdk": "0.1.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^12.11.1",
+    "lucide": "^1.41.0",
+    "zod": "^4.4.3"
+  }
+}

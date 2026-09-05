@@ -2,12 +2,7 @@
   "mcpServers": {
     "stratagate": {
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/../workbuddy/dist/server.cjs"],
-      "env": {
-        "STRATAGATE_DATA_DIR": "${STRATAGATE_DATA_DIR}",
-        "STRATAGATE_DATABASE": "${STRATAGATE_DATABASE}",
-        "STRATAGATE_NAMESPACE_PREFIX": "shared"
-      }
+      "args": ["${PLUGIN_ROOT}/dist/server.cjs"]
     }
   }
 }
