@@ -20,6 +20,11 @@ services:
       STRATAGATE_GATEWAY_REQUEST_TIMEOUT_MS: ${STRATAGATE_GATEWAY_REQUEST_TIMEOUT_MS:-30000}
       STRATAGATE_GATEWAY_RATE_LIMIT_PER_MINUTE: ${STRATAGATE_GATEWAY_RATE_LIMIT_PER_MINUTE:-600}
       STRATAGATE_OBSERVABILITY_FILE: /var/lib/stratagate/observability.jsonl
+      # Background memory derivation (block sealing + event/element extraction).
+      # Unset by default keeps layered-raw mode; see .env.example.
+      STRATAGATE_MODEL_BASE_URL: ${STRATAGATE_MODEL_BASE_URL:-}
+      STRATAGATE_MODEL: ${STRATAGATE_MODEL:-}
+      STRATAGATE_MODEL_API_KEY: ${STRATAGATE_MODEL_API_KEY:-}
     volumes:
       - ${STRATAGATE_DATA_DIR:-~/.stratagate/agent-memory}:/var/lib/stratagate
     security_opt:

@@ -356,3 +356,42 @@ export function modelCallbacks(workBuddy?: WorkBuddyModelConfig, external?: Mode
     elementProjector: (context) => attempt((bridge) => bridge.projector(context)),
   }
 }
+
+export interface ModelTestResult {
+  ok: boolean
+  latencyMs: number
+  detail: string
+}
+
+/**
+ * Cheap reachability probe for the provider settings console: one tiny chat
+ * completion validates endpoint, key, and model id in a single round trip.
+ * Errors are redacted with the same pattern as real completions.
+ */
+export async function testModelConfig(config: ModelConfig): Promise<ModelTestResult> {
+  const startedAt = Date.now()
+  try {
+    const response = await fetch(completionUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
+        temperature: 0,
+        max_tokens: 8,
+      }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    const latencyMs = Date.now() - startedAt
+    if (!response.ok) {
+      const detail = (await response.text()).replace(/(?:sk-|Bearer\s+)[A-Za-z0-9._-]{8,}/gu, '[REDACTED]').slice(0, 300)
+      return { ok: false, latencyMs, detail: `HTTP ${response.status}: ${detail || response.statusText}` }
+    }
+    return { ok: true, latencyMs, detail: '模型连接成功' }
+  } catch (error) {
+    return { ok: false, latencyMs: Date.now() - startedAt, detail: error instanceof Error ? error.message : String(error) }
+  }
+}

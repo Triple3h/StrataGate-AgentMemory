@@ -67,6 +67,11 @@ export class MemoryRuntime {
     }
   }
 
+  /** Hot-swaps the derivation model; takes effect on the next memory operation. */
+  setModelProvider(model: WorkBuddyConfig['model']): void {
+    this.config.model = model
+  }
+
   private emit(operation: Parameters<typeof observe>[1], outcome: Parameters<typeof observe>[2], startedAt: number, context: ObservationContext = {}, attributes: Parameters<typeof observe>[5] = {}): void {
     observe(this.observability, operation, outcome, {
       namespace: this.config.namespace,

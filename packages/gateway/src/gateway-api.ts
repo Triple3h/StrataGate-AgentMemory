@@ -7,8 +7,20 @@ import { atomicJson } from '../../adapter-sdk/src/delivery.js'
 import { SqliteStorage } from '@diqier/stratagate/sqlite'
 import { resolveConfig, type WorkBuddyConfig } from '../../adapter-sdk/src/config.js'
 import { MemoryRuntime as WorkBuddyRuntime } from './runtime.js'
+import { testModelConfig } from './model.js'
 import { MEMORY_CONSOLE_HTML } from './gateway-ui.js'
 import { isConsolePath } from './console-routes.js'
+import {
+  ProviderConfigError,
+  clearStoredModelProvider,
+  loadStoredModelProvider,
+  maskApiKey,
+  parseProviderInput,
+  providerFilePath,
+  saveModelProvider,
+  toModelConfig,
+  type StoredModelProvider,
+} from './provider-config.js'
 
 const DEFAULT_PORT = 43_731
 
@@ -199,8 +211,15 @@ export class MemoryGateway {
   private totalErrors = 0
   private totalRejected = 0
   private readonly rateWindows = new Map<string, { startedAt: number; count: number }>()
+  private readonly envModel: WorkBuddyConfig['model']
 
-  constructor(readonly baseConfig: WorkBuddyConfig = resolveConfig(), readonly token = process.env.STRATAGATE_GATEWAY_TOKEN?.trim()) {}
+  constructor(readonly baseConfig: WorkBuddyConfig = resolveConfig(), readonly token = process.env.STRATAGATE_GATEWAY_TOKEN?.trim()) {
+    this.envModel = baseConfig.model ? { ...baseConfig.model } : undefined
+    // A runtime override saved through /v1/settings/model-provider wins over
+    // the boot environment so provider changes survive container recreation.
+    const stored = loadStoredModelProvider(baseConfig.dataDir)
+    if (stored) this.applyModelProvider(toModelConfig(stored))
+  }
 
   private runtimeFor(identity: GatewayIdentity): WorkBuddyRuntime {
     const current = this.runtimes.get(identity.namespace)
@@ -214,6 +233,72 @@ export class MemoryGateway {
     if (this.processing.has(namespace)) return
     const task = runtime.processPending().catch(() => undefined).finally(() => this.processing.delete(namespace))
     this.processing.set(namespace, task)
+  }
+
+  async modelProviderView(): Promise<unknown> {
+    const stored = loadStoredModelProvider(this.baseConfig.dataDir)
+    const current = this.baseConfig.model
+    return {
+      mode: this.baseConfig.workBuddyModel || current ? 'full' : 'layered-raw',
+      source: stored ? 'runtime' : current ? 'env' : 'none',
+      baseUrl: current?.baseUrl ?? null,
+      model: current?.model ?? null,
+      apiKeySet: Boolean(current?.apiKey),
+      apiKeyMasked: maskApiKey(current?.apiKey),
+      maxOutputTokens: current?.maxOutputTokens ?? null,
+      updatedAt: stored?.updatedAt ?? null,
+      configFile: providerFilePath(this.baseConfig.dataDir),
+      envProvider: this.envModel ? { baseUrl: this.envModel.baseUrl, model: this.envModel.model } : null,
+    }
+  }
+
+  async updateModelProvider(body: Record<string, unknown>): Promise<unknown> {
+    const input = this.parseProviderBody(body)
+    const stored = loadStoredModelProvider(this.baseConfig.dataDir)
+    // An omitted/blank apiKey means "keep the current one" — the console never
+    // round-trips the secret back to the browser.
+    const apiKey = input.apiKey ?? stored?.apiKey ?? this.baseConfig.model?.apiKey
+    const provider: StoredModelProvider = {
+      baseUrl: input.baseUrl,
+      model: input.model,
+      ...(apiKey ? { apiKey } : {}),
+      ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
+      updatedAt: new Date().toISOString(),
+    }
+    await saveModelProvider(this.baseConfig.dataDir, provider)
+    this.applyModelProvider(toModelConfig(provider))
+    return this.modelProviderView()
+  }
+
+  async clearModelProvider(): Promise<unknown> {
+    clearStoredModelProvider(this.baseConfig.dataDir)
+    this.applyModelProvider(this.envModel ? { ...this.envModel } : undefined)
+    return this.modelProviderView()
+  }
+
+  async testModelProvider(body: Record<string, unknown>): Promise<unknown> {
+    const input = this.parseProviderBody(body)
+    const apiKey = input.apiKey ?? this.baseConfig.model?.apiKey
+    return testModelConfig({
+      baseUrl: input.baseUrl,
+      model: input.model,
+      ...(apiKey ? { apiKey } : {}),
+      maxOutputTokens: input.maxOutputTokens ?? this.baseConfig.model?.maxOutputTokens ?? 10_000,
+    })
+  }
+
+  private parseProviderBody(body: Record<string, unknown>) {
+    try {
+      return parseProviderInput(body)
+    } catch (error) {
+      if (error instanceof ProviderConfigError) throw new GatewayHttpError(400, error.message)
+      throw error
+    }
+  }
+
+  private applyModelProvider(model: WorkBuddyConfig['model']): void {
+    this.baseConfig.model = model
+    for (const runtime of this.runtimes.values()) runtime.setModelProvider(model)
   }
 
   async ingest(input: GatewayTurnInput): Promise<unknown> {
@@ -542,6 +627,10 @@ export class MemoryGateway {
       if (req.method === 'POST' && url.pathname === '/v1/memory/assess') return json(res, 200, await this.memoryMutation(url, 'assess', await readJson(req, this.limits.maxBodyBytes)))
       if (req.method === 'POST' && url.pathname === '/v1/memory/record-use') return json(res, 200, await this.memoryMutation(url, 'record-use', await readJson(req, this.limits.maxBodyBytes)))
       if (req.method === 'GET' && url.pathname.startsWith('/v1/memory/')) return json(res, 200, await this.memory(url, url.pathname.slice('/v1/memory/'.length)))
+      if (req.method === 'GET' && url.pathname === '/v1/settings/model-provider') return json(res, 200, await this.modelProviderView())
+      if (req.method === 'PUT' && url.pathname === '/v1/settings/model-provider') return json(res, 200, await this.updateModelProvider(await readJson(req, this.limits.maxBodyBytes)))
+      if (req.method === 'DELETE' && url.pathname === '/v1/settings/model-provider') return json(res, 200, await this.clearModelProvider())
+      if (req.method === 'POST' && url.pathname === '/v1/settings/model-provider/test') return json(res, 200, await this.testModelProvider(await readJson(req, this.limits.maxBodyBytes)))
       if (req.method === 'POST' && url.pathname === '/v1/ingest/turn') {
         if (this.processing.size + this.ingestLocks.size >= this.limits.maxQueueLength) throw new GatewayHttpError(429, 'Gateway 后台队列已满')
         return json(res, 202, await this.ingest(normalizeTurnBody(await readJson(req, this.limits.maxBodyBytes))))

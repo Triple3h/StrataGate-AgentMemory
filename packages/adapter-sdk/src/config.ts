@@ -38,7 +38,8 @@ export interface AdapterConfig {
   maxContextChars: number
   workerIntervalMs: number
   workBuddyModel?: WorkBuddyModelConfig
-  model?: ModelConfig
+  // Explicitly undefined-able: the gateway can clear a runtime provider override.
+  model?: ModelConfig | undefined
   /** Optional non-blocking structured telemetry sink for host metrics. */
   observability?: ObservabilitySink
 }
