@@ -32,3 +32,16 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 system-ui,-app
 @media(max-width:1050px){.layout{grid-template-columns:176px minmax(0,1fr)}.main{padding:22px}.sidebar{padding:14px 8px 24px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.session-split{grid-template-columns:minmax(240px,300px) minmax(0,1fr)}.grid{grid-template-columns:1fr}}
 @media(max-width:700px){.top{height:52px;padding:0 14px;gap:14px}.top-status .chip:last-of-type{display:none}.layout{display:block;min-height:calc(100dvh - 52px)}.sidebar{padding:8px 10px;border-right:0;border-bottom:1px solid var(--line)}.sidebar nav{display:flex;overflow:auto;gap:4px;position:static;padding:2px}.nav-group{margin:0;display:flex;gap:4px;align-items:center}.nav-label{display:none}.nav-link{padding:8px 10px;font-size:12px;gap:6px}.main{padding:18px 14px 36px}.scope-bar{gap:10px;margin-bottom:18px}.path-field{flex-basis:100%;max-width:none}.scope-meta{font-size:11px}.page-heading{margin-bottom:16px}h1{font-size:17px}.toolbar{gap:10px}.search{flex-basis:100%;min-width:0}.filters{width:100%}.filter{flex:1;display:grid;gap:4px}.filter select{max-width:100%;width:100%;min-width:0}.stat{padding:14px 16px}.stat strong{font-size:22px}.summary-strip{gap:8px 14px}.session-split{display:block;height:auto;min-height:0}.session-split.has-thread .session-list{display:none}.session-split:not(.has-thread) .thread-pane{display:none}.session-split.has-thread .thread-pane{height:calc(100dvh - 330px);min-height:400px}.thread-scroll{padding:16px 14px}.msg-body{max-width:86%}.thread-meta .chip{display:none}.thread-head{padding:10px 14px}.dialog{padding:16px}.facts{grid-template-columns:100px minmax(0,1fr)}.tabs{max-width:100%;overflow:auto}.item-heading{flex-wrap:wrap}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}.spin svg,.icon-button:disabled svg{animation:none}}
+
+/* Settings — model provider */
+.provider-box{padding:18px 20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.provider-facts{margin-top:14px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.provider-form{display:grid;gap:14px;margin-top:18px;max-width:620px}
+.field{display:grid;gap:5px}
+.field label{font-size:12px;color:var(--muted)}
+.field input{height:38px;padding:0 12px;border-radius:8px}
+.field input:focus-visible{outline-offset:0}
+.field .hint{color:var(--muted);font-size:11.5px}
+.form-actions{margin-top:2px}
+@media(max-width:700px){.provider-box{padding:14px}.provider-form{max-width:none}}

@@ -154,3 +154,23 @@ export interface Dashboard {
 
 export type DetailKind = 'events' | 'elements' | 'graph'
 export type DetailRow = MemoryEvent | MemoryElement | GraphNodeRow
+
+export interface ModelProviderView {
+  mode: 'full' | 'layered-raw'
+  source: 'runtime' | 'env' | 'none'
+  baseUrl: string | null
+  model: string | null
+  apiKeySet: boolean
+  apiKeyMasked: string
+  maxOutputTokens: number | null
+  updatedAt: string | null
+  configFile: string
+  envProvider: { baseUrl: string; model: string } | null
+  [key: string]: unknown
+}
+
+export interface ModelProviderTestResult {
+  ok: boolean
+  latencyMs: number
+  detail: string
+}
