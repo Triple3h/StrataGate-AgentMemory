@@ -54,6 +54,31 @@ describe('external AI memory import', () => {
     expect(recovered.decisions[0]?.requiresConfirmation).toBe(true);
   });
 
+  it('records actor audit entries for import lifecycle operations', async () => {
+    let sequence = 0;
+    const memory = StrataGate.inMemory({
+      idFactory: (prefix) => `${prefix}_${++sequence}`,
+      identity: { userId: 'alice', agentId: 'codex', projectId: 'p1', sourceAdapter: 'codex' },
+    });
+    const job = await memory.createExternalMemoryImportJob(JSON.stringify({
+      schemaVersion: 'stratagate.external-memory.v2', sourceType: 'external_ai_memory_export',
+      candidates: [{ title: '偏好', summary: '使用 pnpm。' }],
+    }));
+    const analyzed = await memory.processNextExternalMemoryImport(job.id, async () => ({ action: 'ADD', confidence: 0.9 }));
+    const committed = await memory.commitExternalMemoryImport({
+      text: job.text, importedAt: job.importedAt, baseRevision: memory.storageRevision,
+      candidates: analyzed.candidates, decisions: analyzed.decisions,
+    });
+    await memory.completeExternalMemoryImportJob(job.id, committed);
+    const undone = await memory.undoExternalMemoryImport(committed.sourceBlockId);
+    expect(undone.sourceBlockId).toBe(committed.sourceBlockId);
+    const final = await memory.markExternalMemoryImportUndone(job.id);
+    expect(final.audit?.map(({ action }) => action)).toEqual([
+      'external_import_created', 'external_import_committed', 'external_import_undone',
+    ]);
+    expect(final.audit?.every(({ userId, agentId, sourceAdapter }) => userId === 'alice' && agentId === 'codex' && sourceAdapter === 'codex')).toBe(true);
+  });
+
   it('previews without writes, skips exact duplicates deterministically, and can undo a committed batch', async () => {
     let sequence = 0;
     let deciderCalls = 0;

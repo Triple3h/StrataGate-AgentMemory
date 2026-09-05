@@ -267,6 +267,25 @@ export interface ExternalMemoryImportJob {
   importedCount: number;
   createdAt: string;
   updatedAt: string;
+  /** Append-only actor trail for import, confirmation, and undo operations. */
+  audit?: MemoryAuditEntry[];
+}
+
+export type MemoryAuditAction =
+  | 'external_import_created'
+  | 'external_import_committed'
+  | 'external_import_undone'
+
+export interface MemoryAuditEntry {
+  action: MemoryAuditAction;
+  at: string;
+  userId?: string;
+  agentId?: string;
+  projectId?: string;
+  conversationId?: string;
+  sourceAdapter?: string;
+  targetId?: string;
+  details?: string;
 }
 
 /** Read-only work prepared before a model call; it holds no storage revision. */
@@ -460,6 +479,10 @@ export interface SearchOptions {
   happenedTo?: string;
   /** Disable retrieval bookkeeping for read-only previews. */
   trackRetrieval?: boolean;
+  /** Restrict results to one or more event visibility scopes. */
+  scope?: MemoryScope | readonly MemoryScope[];
+  /** Active conversation used to isolate session-scoped events. */
+  threadId?: string;
 }
 
 export interface EventSearchResult {
@@ -472,6 +495,8 @@ export interface ElementSearchOptions {
   limit?: number;
   name?: string;
   type?: MemoryElementType;
+  scope?: MemoryScope | readonly MemoryScope[];
+  threadId?: string;
 }
 
 export interface ElementSearchResult {

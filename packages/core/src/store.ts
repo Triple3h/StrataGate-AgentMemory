@@ -72,6 +72,7 @@ import type {
   GraphProjectionResult,
   GraphProjector,
   MemoryBlock,
+  MemoryAuditEntry,
   RawMessage,
   RawSearchHit,
   SearchOptions,
@@ -80,6 +81,8 @@ import type {
 import { criticalityFloor, memoryWeightAt } from './weights.js';
 import { toUtc8Iso } from './time.js';
 import type { MemoryIdentity } from './identity.js';
+import { canAccessMemoryScope, canAccessRawMessage, identityConflicts, namespaceMatchesIdentity } from './security.js';
+import { observe, type ObservationContext, type ObservabilitySink } from './observability.js';
 
 export interface StrataGateOptions {
   /** Durable identity context for this namespace; agent/conversation also flow into raw provenance. */
@@ -96,6 +99,8 @@ export interface StrataGateOptions {
   idFactory?: (prefix: 'msg' | 'blk' | 'evt') => string;
   elementIdFactory?: (prefix: 'elem' | 'fact' | 'proj') => string;
   graphIdFactory?: (prefix: 'node' | 'edge' | 'gfact' | 'gproj') => string;
+  /** Non-blocking structured sink for host metrics and audit telemetry. */
+  observability?: ObservabilitySink;
 }
 
 export interface PersistentStrataGateOptions extends StrataGateOptions {
@@ -230,6 +235,7 @@ export class StrataGate {
   private readonly idFactory: (prefix: 'msg' | 'blk' | 'evt') => string;
   private readonly elementIdFactory: (prefix: 'elem' | 'fact' | 'proj') => string;
   private readonly graphIdFactory: (prefix: 'node' | 'edge' | 'gfact' | 'gproj') => string;
+  private readonly observability: ObservabilitySink | undefined;
   private identity: MemoryIdentity | undefined;
   private readonly openTail: RawMessage[] = [];
   private readonly blocks: MemoryBlock[] = [];
@@ -270,6 +276,7 @@ export class StrataGate {
     this.idFactory = options.idFactory ?? defaultIdFactory;
     this.elementIdFactory = options.elementIdFactory ?? defaultElementIdFactory;
     this.graphIdFactory = options.graphIdFactory ?? defaultGraphIdFactory;
+    this.observability = options.observability;
     this.identity = options.identity ? structuredClone(options.identity) : undefined;
   }
 
@@ -300,6 +307,7 @@ export class StrataGate {
         ...(options.idFactory ? { idFactory: options.idFactory } : {}),
         ...(options.elementIdFactory ? { elementIdFactory: options.elementIdFactory } : {}),
         ...(options.graphIdFactory ? { graphIdFactory: options.graphIdFactory } : {}),
+        ...(options.observability ? { observability: options.observability } : {}),
       });
     } catch (error) {
       await storage.close();
@@ -310,6 +318,10 @@ export class StrataGate {
   static async openWithStorage(options: PersistentStrataGateOptions): Promise<StrataGate> {
     const namespace = options.namespace.trim();
     if (!namespace) throw new TypeError('Storage namespace must not be empty');
+    if (options.identity && !namespaceMatchesIdentity(namespace, options.identity)) {
+      process.emitWarning(`Namespace routing key does not match supplied identity for ${namespace}`, { code: 'STRATAGATE_IDENTITY_CONFLICT' });
+      throw new Error(`Namespace routing key does not match supplied identity: ${namespace}`);
+    }
     const loaded = await options.storage.load(namespace);
     const loadedSnapshot = loaded ? normalizeSnapshot(loaded.snapshot) : null;
     let loadedRevision = loaded?.revision ?? 0;
@@ -321,10 +333,13 @@ export class StrataGate {
         if (legacyIdentity) {
           loadedSnapshot.identity = structuredClone(options.identity);
           settingsChanged = true;
-        } else if (storedIdentity.userId !== options.identity.userId
-          || (storedIdentity.projectId ?? null) !== (options.identity.projectId ?? null)
-          || (storedIdentity.memoryScope ?? 'project') !== (options.identity.memoryScope ?? 'project')) {
-          throw new Error(`Memory identity does not match namespace ${namespace}`);
+        } else {
+          const conflicts = identityConflicts(storedIdentity, options.identity);
+          if (conflicts.length > 0) {
+            const detail = conflicts.map(({ field, expected, actual }) => `${field}: ${expected ?? 'null'} != ${actual ?? 'null'}`).join(', ');
+            process.emitWarning(`Namespace identity conflict for ${namespace} (${detail})`, { code: 'STRATAGATE_IDENTITY_CONFLICT' });
+            throw new Error(`Memory identity does not match namespace ${namespace}: ${detail}`);
+          }
         }
       }
       if (options.blockTurnSize !== undefined) {
@@ -361,6 +376,7 @@ export class StrataGate {
     if (options.idFactory) memoryOptions.idFactory = options.idFactory;
     if (options.elementIdFactory) memoryOptions.elementIdFactory = options.elementIdFactory;
     if (options.graphIdFactory) memoryOptions.graphIdFactory = options.graphIdFactory;
+    if (options.observability) memoryOptions.observability = options.observability;
     const memory = new StrataGate(memoryOptions, STRATAGATE_CONSTRUCTOR_TOKEN);
     memory.storage = options.storage;
     memory.namespace = namespace;
@@ -440,6 +456,28 @@ export class StrataGate {
 
   get storageRevision(): number {
     return this.revision;
+  }
+
+  private observationContext(extra: ObservationContext = {}): ObservationContext {
+    return {
+      ...extra,
+      namespace: this.namespace ?? '',
+      userId: this.identity?.userId,
+      agentId: this.identity?.agentId,
+      conversationId: extra.conversationId ?? this.identity?.conversationId,
+      sourceAdapter: this.identity?.sourceAdapter,
+      storageRevision: this.revision,
+    };
+  }
+
+  private emitObservation(
+    operation: Parameters<typeof observe>[1],
+    outcome: Parameters<typeof observe>[2],
+    startedAt: number,
+    extra: ObservationContext = {},
+    attributes: Parameters<typeof observe>[5] = {},
+  ): void {
+    observe(this.observability, operation, outcome, this.observationContext(extra), startedAt, attributes);
   }
 
   /** Replace an out-of-date in-memory view with the latest durable namespace snapshot. */
@@ -585,6 +623,7 @@ export class StrataGate {
   }
 
   async appendTurn(input: TurnInput, options: AppendTurnOptions = {}): Promise<AppendTurnResult> {
+    const startedAt = Date.now();
     const receiptId = input.receiptId?.trim();
     if (input.receiptId !== undefined && !receiptId) {
       throw new TypeError('Turn receiptId must not be empty');
@@ -631,19 +670,25 @@ export class StrataGate {
       if (receiptId) this.ingestionReceipts.set(receiptId, { id: receiptId, createdAt });
       return true;
     });
-    if (!appended) return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] };
+    if (!appended) {
+      this.emitObservation('append_turn', 'duplicate', startedAt, { receiptId, conversationId }, { deferred: options.deferProcessing === true });
+      return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] };
+    }
     if (options.deferProcessing === true) {
+      this.emitObservation('append_turn', 'ok', startedAt, { receiptId, conversationId }, { deferred: true });
       return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements: [] };
     }
 
     if (this.threadOpenTail(threadId).filter((message) => message.role === 'user').length < this.blockTurnSize) {
       const projectedElements = await this.projectEligibleElements() ?? [];
       await this.projectEligibleGraph();
+      this.emitObservation('append_turn', 'ok', startedAt, { receiptId, conversationId }, { deferred: false, sealed: false });
       return { sealedBlock: null, readyBlocks: [], extractedEvents: [], projectedElements };
     }
 
     const sealedBlock = await this.sealOpenTail(threadId);
     if (options.deferDerivation === true) {
+      this.emitObservation('append_turn', 'ok', startedAt, { receiptId, conversationId }, { deferred: true, sealed: true });
       return { sealedBlock, readyBlocks: [], extractedEvents: [], projectedElements: [] };
     }
     const beforeReady = sealedBlock.processingStatus === 'ready';
@@ -651,10 +696,16 @@ export class StrataGate {
     const readyBlocks = !beforeReady && sealedBlock.processingStatus === 'ready' ? [sealedBlock] : [];
     const projectedElements = await this.projectEligibleElements() ?? [];
     await this.projectEligibleGraph();
+    this.emitObservation('append_turn', 'ok', startedAt, { receiptId, conversationId }, {
+      deferred: false,
+      sealed: true,
+      extracted_events: extractedEvents.length,
+    });
     return { sealedBlock, readyBlocks, extractedEvents, projectedElements };
   }
 
   async resumePendingWork(options: ResumePendingOptions = {}): Promise<ResumePendingResult> {
+    const startedAt = Date.now();
     const sealedBlocks: MemoryBlock[] = [];
     const readyBlocks: MemoryBlock[] = [];
     const extractedEvents: EventCard[] = [];
@@ -665,6 +716,7 @@ export class StrataGate {
       sealedBlocks.push(await this.sealOpenTail(sealable.threadId));
     }
     if (options.deferDerivation === true) {
+      this.emitObservation('resume_pending', 'ok', startedAt, { conversationId: options.threadId }, { deferred: true, sealed_blocks: sealedBlocks.length });
       return { sealedBlocks, readyBlocks, extractedEvents, projectedElements };
     }
     for (const block of this.blocks) {
@@ -684,6 +736,12 @@ export class StrataGate {
     // Historical graph rebuild is deliberately bounded: one persisted batch per
     // worker pass keeps startup responsive and avoids burst token consumption.
     await this.projectEligibleGraph();
+    this.emitObservation('resume_pending', 'ok', startedAt, { conversationId: options.threadId }, {
+      deferred: false,
+      sealed_blocks: sealedBlocks.length,
+      extracted_events: extractedEvents.length,
+      projected_elements: projectedElements.length,
+    });
     return { sealedBlocks, readyBlocks, extractedEvents, projectedElements };
   }
 
@@ -806,6 +864,7 @@ export class StrataGate {
     } catch (error) {
       parseError = errorMessage(error).slice(0, 2_000);
     }
+    const audit = this.auditEntry('external_import_created', now)
     const job: ExternalMemoryImportJob = {
       id: `import_${crypto.randomUUID()}`,
       text: normalized,
@@ -822,6 +881,7 @@ export class StrataGate {
       importedCount: 0,
       createdAt: now,
       updatedAt: now,
+      audit: [audit],
     };
     await this.commitMutation(() => this.externalMemoryImportJobs.set(job.id, structuredClone(job)));
     return structuredClone(job);
@@ -968,10 +1028,12 @@ export class StrataGate {
   ): Promise<ExternalMemoryImportJob> {
     return this.commitMutation(() => {
       const job = this.requireExternalMemoryImportJob(jobId);
+      const now = toUtc8Iso(this.now());
       job.status = 'committed';
       job.sourceBlockId = result.sourceBlockId;
       job.importedCount = result.addedEvents.length;
-      job.updatedAt = toUtc8Iso(this.now());
+      job.audit = [...(job.audit ?? []), this.auditEntry('external_import_committed', now, job.sourceBlockId ?? result.sourceBlockId)];
+      job.updatedAt = now;
       return structuredClone(job);
     });
   }
@@ -979,8 +1041,10 @@ export class StrataGate {
   async markExternalMemoryImportUndone(jobId: string): Promise<ExternalMemoryImportJob> {
     return this.commitMutation(() => {
       const job = this.requireExternalMemoryImportJob(jobId);
+      const now = toUtc8Iso(this.now());
       job.status = 'undone';
-      job.updatedAt = toUtc8Iso(this.now());
+      job.audit = [...(job.audit ?? []), this.auditEntry('external_import_undone', now, job.sourceBlockId ?? undefined)];
+      job.updatedAt = now;
       return structuredClone(job);
     });
   }
@@ -1155,13 +1219,19 @@ export class StrataGate {
   }
 
   async searchEvents(query: string, options: SearchOptions = {}): Promise<EventSearchResult[]> {
+    const startedAt = Date.now();
     const limit = Math.max(1, Math.min(20, options.limit ?? 6));
     const participants = (options.participants ?? []).map(normalizeSearchText).filter(Boolean);
     const eventType = normalizeSearchText(options.eventType ?? '');
     const from = options.happenedFrom ? Date.parse(options.happenedFrom) : Number.NEGATIVE_INFINITY;
     const to = options.happenedTo ? Date.parse(options.happenedTo) : Number.POSITIVE_INFINITY;
     const hasTimeFilter = Boolean(options.happenedFrom || options.happenedTo);
-    const candidates = this.events.filter((event) => event.status === 'active' || event.status === 'superseded');
+    const candidates = this.events.filter((event) => (event.status === 'active' || event.status === 'superseded')
+      && canAccessMemoryScope(event.scope, {
+        requestedScope: options.scope,
+        threadId: options.threadId,
+        sourceThreadId: this.blocks.find((block) => block.id === event.sourceBlockId)?.threadId,
+      }));
     const participantMatches = candidates.filter((event) => participants.length > 0 && participants.every((person) =>
       (event.temporal.participants ?? []).some((candidate) => fuzzySearchMatch(candidate, person))));
     const typeMatches = eventType ? candidates.filter((event) =>
@@ -1211,9 +1281,15 @@ export class StrataGate {
       if (typeMatches.length > 0) rankings.push(structured(typeMatches));
       if (timeMatches.length > 0) rankings.push(structured(timeMatches));
     }
-    if (searchTokens(query).length > 0 && bm25.length === 0 && !hasStructuredFilter) return [];
+    if (searchTokens(query).length > 0 && bm25.length === 0 && !hasStructuredFilter) {
+      this.emitObservation('retrieval', 'empty', startedAt, { conversationId: options.threadId }, { kind: 'events', result_count: 0 });
+      return [];
+    }
     if (!rankings.some((ranking) => ranking.length > 0)) {
-      if (searchTokens(query).length > 0) return [];
+      if (searchTokens(query).length > 0) {
+        this.emitObservation('retrieval', 'empty', startedAt, { conversationId: options.threadId }, { kind: 'events', result_count: 0 });
+        return [];
+      }
       rankings.push(structured(candidates));
     }
     const ranked = rrfRank(rankings).slice(0, limit).map(({ item: event, score }) => ({ event, score }));
@@ -1223,6 +1299,10 @@ export class StrataGate {
         for (const { event } of ranked) event.weight.lastRetrievedAt = now;
       });
     }
+    this.emitObservation('retrieval', ranked.length > 0 ? 'ok' : 'empty', startedAt, { conversationId: options.threadId }, {
+      kind: 'events',
+      result_count: ranked.length,
+    });
     return ranked;
   }
 
@@ -1353,6 +1433,7 @@ export class StrataGate {
   }
 
   async searchElements(query: string, options: ElementSearchOptions = {}): Promise<ElementSearchResult[]> {
+    const startedAt = Date.now();
     const normalizedName = normalizeSearchText(options.name ?? '');
     const candidates = this.elements.flatMap((element) => element.facts.map((fact) => ({
       id: fact.id,
@@ -1362,7 +1443,14 @@ export class StrataGate {
       type: element.type,
       fact,
       updatedAt: element.updatedAt,
-    })));
+    }))).filter((hit) => options.scope === undefined && !options.threadId || hit.fact.sourceEventIds.some((eventId) => {
+      const event = this.events.find(({ id }) => id === eventId)
+      return event ? canAccessMemoryScope(event.scope, {
+        requestedScope: options.scope,
+        threadId: options.threadId,
+        sourceThreadId: this.blocks.find((block) => block.id === event.sourceBlockId)?.threadId,
+      }) : false
+    }));
     const bm25 = bm25Rank(candidates, query, (hit) => weightedSearchTokens([
       [hit.name, 5],
       [hit.aliases.join(' '), 4],
@@ -1390,9 +1478,15 @@ export class StrataGate {
       if (nameMatches.length > 0) rankings.push(recent(nameMatches));
       if (typeMatches.length > 0) rankings.push(recent(typeMatches));
     }
-    if (searchTokens(query).length > 0 && bm25.length === 0 && !hasStructuredFilter) return [];
+    if (searchTokens(query).length > 0 && bm25.length === 0 && !hasStructuredFilter) {
+      this.emitObservation('retrieval', 'empty', startedAt, { conversationId: options.threadId }, { kind: 'elements', result_count: 0 });
+      return [];
+    }
     if (!rankings.some((ranking) => ranking.length > 0)) {
-      if (searchTokens(query).length > 0) return [];
+      if (searchTokens(query).length > 0) {
+        this.emitObservation('retrieval', 'empty', startedAt, { conversationId: options.threadId }, { kind: 'elements', result_count: 0 });
+        return [];
+      }
       rankings.push(recent(candidates));
     }
     const ranked = rrfRank(rankings).slice(0, Math.max(1, Math.min(12, options.limit ?? 8)));
@@ -1405,7 +1499,7 @@ export class StrataGate {
         }
       });
     }
-    return ranked.map(({ item, score }) => ({
+    const output = ranked.map(({ item, score }) => ({
       id: item.id,
       elementId: item.elementId,
       name: item.name,
@@ -1413,6 +1507,11 @@ export class StrataGate {
       fact: item.fact,
       score,
     }));
+    this.emitObservation('retrieval', output.length > 0 ? 'ok' : 'empty', startedAt, { conversationId: options.threadId }, {
+      kind: 'elements',
+      result_count: output.length,
+    });
+    return output;
   }
 
   expandElement(id: string, at?: string): ElementCard {
@@ -1421,23 +1520,31 @@ export class StrataGate {
     return elementViewAt(element, at);
   }
 
-  searchRawMemory(query: string, limit = 6): RawSearchHit[] {
+  searchRawMemory(query: string, limit = 6, options: { threadId?: string; scope?: 'session' | 'namespace' } = {}): RawSearchHit[] {
+    const startedAt = Date.now();
     const tokens = searchTokens(query);
-    if (tokens.length === 0) return [];
+    if (tokens.length === 0) {
+      this.emitObservation('retrieval', 'empty', startedAt, { conversationId: options.threadId }, { kind: 'raw', result_count: 0 });
+      return [];
+    }
     const hits: RawSearchHit[] = [];
     for (const block of this.blocks) {
       for (const [index, message] of block.l5Raw.entries()) {
         const messageTokens = new Set(searchTokens(message.content));
-        if (!tokens.some((token) => messageTokens.has(token))) continue;
+        if (!tokens.some((token) => messageTokens.has(token)) || !canAccessRawMessage(message, options)) continue;
         hits.push({
           blockId: block.id,
           turnRange: [block.startTurn, block.endTurn],
           message,
           nearby: block.l5Raw.slice(Math.max(0, index - 1), index + 2),
         });
-        if (hits.length >= limit) return hits;
+        if (hits.length >= limit) {
+          this.emitObservation('retrieval', 'ok', startedAt, { conversationId: options.threadId }, { kind: 'raw', result_count: hits.length });
+          return hits;
+        }
       }
     }
+    this.emitObservation('retrieval', hits.length > 0 ? 'ok' : 'empty', startedAt, { conversationId: options.threadId }, { kind: 'raw', result_count: hits.length });
     return hits;
   }
 
@@ -1511,6 +1618,7 @@ export class StrataGate {
   }
 
   async recordMemoryUse(refs: readonly string[] | MemoryUseRefs, options: RecordMemoryUseOptions = {}): Promise<void> {
+    const startedAt = Date.now();
     const receiptId = options.receiptId?.trim();
     if (this.storage && !receiptId) throw new TypeError('Persistent recordMemoryUse requires a non-empty receiptId');
     const normalizedRefs: MemoryUseRefs = Array.isArray(refs)
@@ -1527,6 +1635,10 @@ export class StrataGate {
           || JSON.stringify(existing.audit ?? null) !== JSON.stringify(audit ?? null)) {
           throw new Error(`Usage receipt ${receiptId} was already recorded with different memory IDs or audit metadata`);
         }
+        this.emitObservation('record_use', 'duplicate', startedAt, { receiptId }, {
+          event_count: requestedEventIds.length,
+          element_count: requestedElementIds.length,
+        });
         return;
       }
     }
@@ -1553,6 +1665,10 @@ export class StrataGate {
         ...(audit === undefined ? {} : { audit }),
         createdAt: now,
       });
+    });
+    this.emitObservation('record_use', 'ok', startedAt, { receiptId }, {
+      event_count: requestedEventIds.length,
+      element_count: requestedElementIds.length,
     });
   }
 
@@ -1605,6 +1721,11 @@ export class StrataGate {
       content: text,
       createdAt: importedAt,
       threadId,
+      ...(this.identity?.userId ? { userId: this.identity.userId } : {}),
+      ...(this.identity?.agentId ? { agentId: this.identity.agentId } : {}),
+      ...(this.identity?.projectId ? { projectId: this.identity.projectId } : {}),
+      ...(this.identity?.conversationId ? { conversationId: this.identity.conversationId } : {}),
+      ...(this.identity?.sourceAdapter ? { sourceAdapter: this.identity.sourceAdapter } : {}),
     };
     const firstLine = text.split(/\r?\n/u).map((line) => line.trim()).find(Boolean) ?? 'External AI memory import';
     const block: MemoryBlock = {
@@ -1629,6 +1750,19 @@ export class StrataGate {
     };
     this.blocks.push(block);
     return block;
+  }
+
+  private auditEntry(action: MemoryAuditEntry['action'], at: string, targetId?: string): MemoryAuditEntry {
+    return {
+      action,
+      at,
+      ...(this.identity?.userId ? { userId: this.identity.userId } : {}),
+      ...(this.identity?.agentId ? { agentId: this.identity.agentId } : {}),
+      ...(this.identity?.projectId ? { projectId: this.identity.projectId } : {}),
+      ...(this.identity?.conversationId ? { conversationId: this.identity.conversationId } : {}),
+      ...(this.identity?.sourceAdapter ? { sourceAdapter: this.identity.sourceAdapter } : {}),
+      ...(targetId ? { targetId } : {}),
+    };
   }
 
   private addEventInMemory(input: EventCardInput): EventCard {
@@ -1696,8 +1830,16 @@ export class StrataGate {
     return job;
   }
 
-  async searchGraphNodes(query: string, limit = 8): Promise<GraphNodeSearchResult[]> {
-    const candidates = this.graphNodes.filter((node) => node.status === 'active' || node.status === 'disputed');
+  async searchGraphNodes(query: string, limit = 8, options: SearchOptions = {}): Promise<GraphNodeSearchResult[]> {
+    const visibleEventIds = options.scope === undefined && !options.threadId ? null : new Set(this.events
+      .filter((event) => canAccessMemoryScope(event.scope, {
+        requestedScope: options.scope,
+        threadId: options.threadId,
+        sourceThreadId: this.blocks.find((block) => block.id === event.sourceBlockId)?.threadId,
+      }))
+      .map(({ id }) => id));
+    const candidates = this.graphNodes.filter((node) => (node.status === 'active' || node.status === 'disputed')
+      && (visibleEventIds === null || (node.sourceEventIds.length > 0 && node.sourceEventIds.every((id) => visibleEventIds.has(id)))));
     const queryTokens = [...new Set(searchTokens(query))];
     const fieldValues = (node: GraphNode): Array<readonly [string, string]> => [
       ['name', node.name],

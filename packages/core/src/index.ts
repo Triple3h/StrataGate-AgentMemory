@@ -10,3 +10,5 @@ export * from './types.js';
 export * from './weights.js';
 export * from './time.js';
 export * from './identity.js';
+export * from './security.js';
+export * from './observability.js';
