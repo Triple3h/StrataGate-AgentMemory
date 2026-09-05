@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   memoryWeightAt,
+  memoryNamespace,
+  projectKey,
+  effectiveConfidence,
   rrfRank,
   StorageConflictError,
   StrataGate,
@@ -87,11 +88,6 @@ interface RankedElementFact extends ElementSearchResult {
   weight: number
 }
 
-function projectKey(cwd: string | undefined): string {
-  const canonical = resolve(cwd ?? process.cwd()).replaceAll('\\', '/').toLowerCase()
-  return createHash('sha256').update(canonical).digest('hex').slice(0, 20)
-}
-
 function workspaceDisplayName(cwd: string | undefined): string {
   const canonical = (cwd ?? process.cwd()).replace(/[\\/]+$/, '')
   return canonical.split(/[\\/]/).at(-1) || '当前工作区'
@@ -134,7 +130,14 @@ export class StrataGateRuntime {
     this.ingestTail = this.ingestTail.catch(() => {}).then(async () => {
       const memory = await this.space(session)
       try {
-        const result = await memory.appendTurn(turn, { deferDerivation: true })
+        const result = await memory.appendTurn({
+          ...turn,
+          ...(this.config.userId ? { userId: this.config.userId } : {}),
+          ...(this.config.agentId ? { agentId: this.config.agentId } : {}),
+          projectId: projectKey(session.header.cwd ?? process.cwd()),
+          conversationId: String(session.id),
+          sourceAdapter: 'dsh',
+        }, { deferDerivation: true })
         if (result.sealedBlock) this.scheduleBlockDerivation(session, memory)
       } finally {
         await this.persistSuccessfulResponses(memory)
@@ -390,6 +393,11 @@ export class StrataGateRuntime {
     }, {
       receiptId: `dsh:${key}:tool:${receiptId}`,
       audit: {
+        ...(this.config.userId ? { userId: this.config.userId } : {}),
+        ...(this.config.agentId ? { agentId: this.config.agentId } : {}),
+        projectId: projectKey(session.header.cwd ?? process.cwd()),
+        conversationId: key,
+        sourceAdapter: 'dsh',
         sessionId: key,
         ...(turn === undefined ? {} : { turn }),
         batchId: batch.id,
@@ -556,10 +564,14 @@ export class StrataGateRuntime {
   }
 
   namespaceFor(session: Session): string {
-    const prefix = this.config.namespacePrefix
-    if (this.config.namespaceMode === 'global') return `${prefix}:global:${this.config.globalNamespace}`
-    if (this.config.namespaceMode === 'session') return `${prefix}:session:${String(session.id)}`
-    return `${prefix}:project:${projectKey(session.header.cwd)}`
+    return memoryNamespace({
+      userId: this.config.userId ?? 'default',
+      namespacePrefix: this.config.namespacePrefix === 'dsh' ? 'shared' : this.config.namespacePrefix,
+      memoryScope: this.config.namespaceMode,
+      globalNamespace: this.config.globalNamespace,
+      ...(session.header.cwd ? { projectDir: session.header.cwd } : {}),
+      sessionId: String(session.id),
+    })
   }
 
   async adminNamespaces(): Promise<string[]> {
@@ -1068,6 +1080,15 @@ export class StrataGateRuntime {
       opening = StrataGate.open({
         database: this.config.database,
         namespace,
+        identity: {
+          userId: this.config.userId ?? 'default',
+          ...(this.config.agentId ? { agentId: this.config.agentId } : {}),
+          projectId: projectKey(session.header.cwd ?? process.cwd()),
+          conversationId: String(session.id),
+          memoryScope: this.config.namespaceMode,
+          namespacePrefix: this.config.namespacePrefix === 'dsh' ? 'shared' : this.config.namespacePrefix,
+          sourceAdapter: 'dsh',
+        },
         blockTurnSize: this.blockTurnSize,
         blockDecayLambda: this.blockDecayLambda,
         summarizer: this.models.summarizer,
@@ -1466,6 +1487,8 @@ function compactEvent(event: EventCard, score: number): Record<string, unknown> 
     status: event.status,
     scope: event.scope,
     criticality: event.criticality,
+    confidence: event.confidence,
+    effectiveConfidence: effectiveConfidence(event.confidence, event.lastVerifiedAt ?? event.updatedAt),
     rankScore: score,
     scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
   }

@@ -271,8 +271,8 @@ export function buildZcodeTurns(input = {}, state = {}) {
     state.pendingPrompt?.prompt ||
     '',
   )
-  const turns = []
-  if (user) turns.push({ role: 'user', content: user })
-  if (assistant) turns.push({ role: 'assistant', content: assistant })
+  const turns = user && assistant
+    ? [{ user, assistant }]
+    : []
   return { available: false, turns, lastTurnId: null }
 }

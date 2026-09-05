@@ -1,4 +1,5 @@
 import z from '@deepseek-ai/schemastery'
+import { homedir } from 'node:os'
 
 export type NamespaceMode = 'project' | 'session' | 'global'
 
@@ -7,6 +8,8 @@ export interface Config {
   namespaceMode?: NamespaceMode
   namespacePrefix?: string
   globalNamespace?: string
+  userId?: string
+  agentId?: string
   blockTurnSize?: number
   blockDecayLambda?: number
   ingestSubagents?: boolean
@@ -21,6 +24,8 @@ export interface ResolvedConfig {
   namespaceMode: NamespaceMode
   namespacePrefix: string
   globalNamespace: string
+  userId?: string
+  agentId?: string
   blockTurnSize: number
   blockDecayLambda: number
   ingestSubagents: boolean
@@ -35,6 +40,8 @@ export const Config: z<Config> = z.object({
   namespaceMode: z.union(['project', 'session', 'global'] as const).default('project'),
   namespacePrefix: z.string().default('dsh'),
   globalNamespace: z.string().default('global'),
+  userId: z.string(),
+  agentId: z.string().default('dsh'),
   blockTurnSize: z.natural().min(1).default(6),
   blockDecayLambda: z.number().step(0.05).min(0).default(0.3)
     .description('Block 衰减系数 λ')
@@ -48,15 +55,19 @@ export const Config: z<Config> = z.object({
 
 export function resolveConfig(config: Config): ResolvedConfig {
   const database = config.database?.trim() ?? ''
+  // Keep the historical public default for config compatibility; the runtime
+  // maps this legacy prefix to the shared cross-agent namespace.
   const namespacePrefix = config.namespacePrefix?.trim() || 'dsh'
   const globalNamespace = config.globalNamespace?.trim() || 'global'
+  const userId = config.userId?.trim() || process.env.STRATAGATE_USER_ID?.trim() || process.env.USER?.trim() || homedir().split('/').at(-1) || 'default'
+  const agentId = config.agentId?.trim() || 'dsh'
   const provider = config.provider?.trim()
   const model = config.model?.trim()
   if (!database) throw new TypeError('StrataGate database path must not be empty')
   if (Boolean(provider) !== Boolean(model)) {
     throw new TypeError('StrataGate provider and model must be configured together')
   }
-  return {
+  const resolved: ResolvedConfig = {
     database,
     namespaceMode: config.namespaceMode ?? 'project',
     namespacePrefix,
@@ -68,4 +79,9 @@ export function resolveConfig(config: Config): ResolvedConfig {
     maxOutputTokens: Math.max(256, Math.floor(config.maxOutputTokens ?? 2_048)),
     structuredTaskTimeoutMs: Math.max(1_000, Math.floor(config.structuredTaskTimeoutMs ?? 45_000)),
   }
+  Object.defineProperties(resolved, {
+    userId: { value: userId, enumerable: false },
+    agentId: { value: agentId, enumerable: false },
+  })
+  return resolved
 }

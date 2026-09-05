@@ -30,4 +30,19 @@ describe('WorkBuddy transcript folding', () => {
     expect(parsed.entries).toHaveLength(1)
     expect(parsed.consumedBytes).toBe(Buffer.byteLength(complete))
   })
+
+  it('merges Codex event_msg and response_item tool records', () => {
+    const entries = [
+      { timestamp: '2026-08-19T02:00:00.000Z', payload: { type: 'item_completed', item: { type: 'userMessage', content: 'inspect project' } } },
+      { timestamp: '2026-08-19T02:00:01.000Z', payload: { type: 'item_completed', item: { type: 'agentMessage', content: 'I will inspect it.' } } },
+      { timestamp: '2026-08-19T02:00:02.000Z', payload: { type: 'custom_tool_call', call_id: 'c1', name: 'Bash', arguments: '{"command":"pwd"}' } },
+      { timestamp: '2026-08-19T02:00:03.000Z', payload: { type: 'custom_tool_call_output', call_id: 'c1', output: '/tmp/demo' } },
+      { timestamp: '2026-08-19T02:00:04.000Z', payload: { type: 'item_completed', item: { type: 'agentMessage', content: 'Done.' } } },
+    ]
+    expect(foldLatestTurn(entries, 'inspect project')).toMatchObject({
+      user: 'inspect project',
+      assistant: 'I will inspect it.\n\nDone.',
+      assistantToolCalls: [{ name: 'Bash', arguments: { command: 'pwd' }, result: '/tmp/demo' }],
+    })
+  })
 })

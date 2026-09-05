@@ -21,7 +21,7 @@ import { dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { StrataGate, nowUtc8 } from '@diqier/stratagate'
+import { StrataGate, memoryNamespace, projectKey, nowUtc8 } from '@diqier/stratagate'
 import { buildZcodeTurns } from '../lib/zcode-turns.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -37,20 +37,31 @@ function resolveConfig(env = process.env) {
   const projectDir = resolve(
     env.STRATAGATE_PROJECT_DIR || env.ZCODE_PROJECT_DIR || process.cwd(),
   )
-  const namespace = env.STRATAGATE_NAMESPACE || `zcode:project:${projectKey(projectDir)}`
+  const userId = env.STRATAGATE_USER_ID || env.USER || env.USERNAME || 'default'
+  const agentId = env.STRATAGATE_AGENT_ID || env.ZCODE_AGENT_ID || 'zcode'
+  const memoryScope = env.STRATAGATE_MEMORY_SCOPE || 'project'
+  if (!['project', 'session', 'global'].includes(memoryScope)) throw new TypeError(`Invalid STRATAGATE_MEMORY_SCOPE: ${memoryScope}`)
+  const namespace = env.STRATAGATE_NAMESPACE || memoryNamespace({
+    userId,
+    agentId,
+    namespacePrefix: env.STRATAGATE_NAMESPACE_PREFIX || 'shared',
+    memoryScope,
+    projectDir,
+    sessionId: env.STRATAGATE_SESSION_ID,
+    globalNamespace: env.STRATAGATE_GLOBAL_NAMESPACE,
+  })
   return {
     dataDir,
     database,
     projectDir,
     namespace,
+    userId,
+    agentId,
+    memoryScope,
     blockTurnSize: int(env.STRATAGATE_BLOCK_TURN_SIZE, 4),
     retrievalLimit: int(env.STRATAGATE_RETRIEVAL_LIMIT, 8),
     maxContextChars: int(env.STRATAGATE_MAX_CONTEXT_CHARS, 12000),
   }
-}
-
-function projectKey(cwd) {
-  return createHash('sha256').update(resolve(cwd).replaceAll('\\', '/').toLowerCase()).digest('hex').slice(0, 20)
 }
 
 function int(value, fallback) {
@@ -92,6 +103,14 @@ class ZCodeHook {
     const memory = await StrataGate.open({
       database: this.config.database,
       namespace: this.config.namespace,
+      identity: {
+        userId: this.config.userId,
+        agentId: this.config.agentId,
+        projectId: projectKey(this.config.projectDir),
+        memoryScope: this.config.memoryScope,
+        namespacePrefix: 'shared',
+        sourceAdapter: 'zcode',
+      },
       blockTurnSize: this.config.blockTurnSize,
     })
     try {
@@ -142,7 +161,9 @@ class ZCodeHook {
 
   async onStop(sessionId, input) {
     if (!sessionId) return {}
-    const statePath = join(this.config.dataDir, 'state', 'zcode', `${safeKey(sessionId)}.json`)
+    const agentId = input.agent_id || input.agent_type || this.config.agentId
+    const transcriptKey = input.agent_transcript_path || input.transcript_path || input.rollout_path || `${sessionId}:${agentId}`
+    const statePath = join(this.config.dataDir, 'state', 'zcode', `${safeKey(`${sessionId}:${transcriptKey}`)}.json`)
     const state = (await readJson(statePath)) || { lastTurnId: null }
     const result = buildZcodeTurns(input, state)
     if (result.turns.length === 0) return {}
@@ -159,8 +180,13 @@ class ZCodeHook {
         user: turn.user,
         assistant: turn.assistant || '',
         ...(toolCalls.length > 0 ? { assistantToolCalls: toolCalls } : {}),
-        threadId: sessionId,
-        receiptId: `zcode:${sessionId}:turn:${result.lastTurnId || cryptoRandom()}`,
+        threadId: `${sessionId}:agent:${safeKey(`${agentId}:${transcriptKey}`).slice(0, 16)}`,
+        userId: this.config.userId,
+        agentId,
+        projectId: projectKey(this.config.projectDir),
+        conversationId: sessionId,
+        sourceAdapter: 'zcode',
+        receiptId: `zcode:${sessionId}:${agentId}:turn:${turn.turnId || result.lastTurnId || safeKey(`${turn.user}:${turn.assistant}`)}`,
       }, { deferProcessing: true }))
       appended += 1
     }
@@ -193,7 +219,7 @@ async function main() {
     const sessionId = (input.session_id || input.sessionId || '').trim()
     if (event === 'UserPromptSubmit') {
       output = await hook.onUserPrompt(sessionId, (input.prompt || '').trim())
-    } else if (event === 'Stop') {
+    } else if (event === 'Stop' || event === 'SubagentStop' || event === 'PreCompact' || event === 'Interrupt') {
       output = await hook.onStop(sessionId, input)
     }
   } catch (error) {

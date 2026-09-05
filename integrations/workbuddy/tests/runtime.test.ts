@@ -64,6 +64,37 @@ describe('WorkBuddyRuntime', () => {
     })
   })
 
+  it('shares a project namespace while preserving per-agent raw provenance', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'stratagate-workbuddy-agents-'))
+    temporaryDirectories.push(dataDir)
+    const projectDir = join(dataDir, 'project')
+    const first = new WorkBuddyRuntime(resolveConfig({
+      STRATAGATE_DATA_DIR: dataDir,
+      STRATAGATE_BLOCK_TURN_SIZE: '1',
+      STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+      STRATAGATE_USER_ID: 'alice',
+      STRATAGATE_AGENT_ID: 'codex',
+    }, projectDir))
+    const second = new WorkBuddyRuntime(resolveConfig({
+      STRATAGATE_DATA_DIR: dataDir,
+      STRATAGATE_BLOCK_TURN_SIZE: '1',
+      STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+      STRATAGATE_USER_ID: 'alice',
+      STRATAGATE_AGENT_ID: 'zcode',
+    }, projectDir))
+    expect(first.config.namespace).toBe(second.config.namespace)
+    await first.appendTurn({ user: 'from codex', assistant: 'codex answer', threadId: 'codex-session', receiptId: 'codex-turn' })
+    await second.appendTurn({ user: 'from zcode', assistant: 'zcode answer', threadId: 'zcode-session', receiptId: 'zcode-turn' })
+
+    const storage = new SqliteStorage({ filename: first.config.database, readonly: true })
+    const loaded = await storage.load(first.config.namespace)
+    expect(loaded?.snapshot.openTail.map((message) => message.agentId)).toEqual(['codex', 'codex', 'zcode', 'zcode'])
+    expect(loaded?.snapshot.openTail.map((message) => message.conversationId)).toEqual([
+      'codex-session', 'codex-session', 'zcode-session', 'zcode-session',
+    ])
+    await storage.close()
+  })
+
   it('creates an evidence batch, applies the gate, and records adoption idempotently', async () => {
     const memory = await runtime()
     await memory.appendTurn({

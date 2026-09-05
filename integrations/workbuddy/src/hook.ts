@@ -1,4 +1,5 @@
 import { open, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { nowUtc8 } from '@diqier/stratagate'
 import { resolveConfig } from './config.js'
 import { WorkBuddyRuntime } from './runtime.js'
@@ -7,8 +8,11 @@ import { foldLatestTurn, parseJsonLines } from './transcript.js'
 interface HookInput {
   session_id?: string
   transcript_path?: string
+  agent_transcript_path?: string
   cwd?: string
   hook_event_name?: string
+  agent_type?: string
+  agent_id?: string
   prompt?: string
   stop_hook_active?: boolean
   last_assistant_message?: string
@@ -21,6 +25,20 @@ interface Delta {
 }
 
 const MAX_DELTA_BYTES = 4 * 1024 * 1024
+
+function transcriptPath(input: HookInput): string | undefined {
+  return input.agent_transcript_path?.trim() || input.transcript_path?.trim()
+}
+
+function pathKey(path: string): string {
+  return createHash('sha256').update(path).digest('hex').slice(0, 16)
+}
+
+function stateKey(input: HookInput): string {
+  const agent = input.agent_id?.trim() || input.agent_type?.trim() || 'primary'
+  const path = transcriptPath(input) || 'no-transcript'
+  return `${agent}:${pathKey(path)}`
+}
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = []
@@ -66,42 +84,44 @@ async function userPrompt(input: HookInput): Promise<unknown> {
   const sessionId = input.session_id?.trim()
   const prompt = input.prompt?.trim()
   if (!sessionId || !prompt) return success()
+  const identityKey = stateKey(input)
   const config = resolveConfig(process.env, input.cwd)
   const runtime = new WorkBuddyRuntime(config)
   await runtime.state.writePending(sessionId, {
     prompt,
-    transcriptPath: input.transcript_path?.trim() ?? '',
+    transcriptPath: transcriptPath(input) ?? '',
     projectDir: config.projectDir,
     receivedAt: nowUtc8(),
-  })
+  }, identityKey)
   const recalled = await runtime.initialContext(sessionId, prompt)
   return success(recalled.context || undefined)
 }
 
 async function stop(input: HookInput): Promise<unknown> {
   const sessionId = input.session_id?.trim()
-  const transcriptPath = input.transcript_path?.trim()
-  if (!sessionId || !transcriptPath) return success()
+  const path = transcriptPath(input)
+  if (!sessionId || !path) return success()
+  const identityKey = stateKey(input)
   const config = resolveConfig(process.env, input.cwd)
   const runtime = new WorkBuddyRuntime(config)
-  const cursor = await runtime.state.readCursor(sessionId)
-  const requestedOffset = cursor?.transcriptPath === transcriptPath ? cursor.offset : 0
-  const delta = await transcriptDelta(transcriptPath, requestedOffset)
+  const cursor = await runtime.state.readCursor(sessionId, identityKey)
+  const requestedOffset = cursor?.transcriptPath === path ? cursor.offset : 0
+  const delta = await transcriptDelta(path, requestedOffset)
   if (delta.endOffset <= requestedOffset) return success()
-  const pending = await runtime.state.readPending(sessionId)
+  const pending = await runtime.state.readPending(sessionId, identityKey)
   const turn = foldLatestTurn(delta.entries, pending?.prompt, input.last_assistant_message)
   if (!turn) return success()
 
   await runtime.appendTurn({
     ...turn,
-    threadId: sessionId,
-    receiptId: `workbuddy:${sessionId}:transcript:${delta.startOffset}-${delta.endOffset}`,
+    threadId: `${sessionId}:agent:${identityKey}`,
+    receiptId: `codex:${sessionId}:transcript:${pathKey(path)}:${delta.startOffset}-${delta.endOffset}`,
   })
   await runtime.state.writeCursor(sessionId, {
-    transcriptPath,
+    transcriptPath: path,
     offset: delta.endOffset,
     updatedAt: nowUtc8(),
-  })
+  }, identityKey)
   return success()
 }
 
@@ -114,7 +134,8 @@ async function main(): Promise<void> {
     }
     const input = JSON.parse(await readStdin()) as HookInput
     if (input.hook_event_name === 'UserPromptSubmit') output = await userPrompt(input)
-    if (input.hook_event_name === 'Stop') output = await stop(input)
+    if (input.hook_event_name === 'Stop' || input.hook_event_name === 'SubagentStop'
+      || input.hook_event_name === 'PreCompact' || input.hook_event_name === 'Interrupt') output = await stop(input)
   } catch (error) {
     process.stderr.write(`[stratagate-workbuddy] hook failed open: ${error instanceof Error ? error.message : String(error)}\n`)
   }

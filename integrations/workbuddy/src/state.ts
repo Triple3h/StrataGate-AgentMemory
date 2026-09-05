@@ -74,24 +74,25 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 export class WorkBuddyState {
   constructor(private readonly dataDir: string) {}
 
-  private sessionPath(kind: 'cursors' | 'pending', sessionId: string): string {
-    return join(this.dataDir, 'state', kind, `${safeKey(sessionId)}.json`)
+  private sessionPath(kind: 'cursors' | 'pending', sessionId: string, identityKey?: string): string {
+    const key = identityKey?.trim() ? `${sessionId}:${identityKey.trim()}` : sessionId
+    return join(this.dataDir, 'state', kind, `${safeKey(key)}.json`)
   }
 
-  async readCursor(sessionId: string): Promise<TranscriptCursor | null> {
-    return readJson(this.sessionPath('cursors', sessionId))
+  async readCursor(sessionId: string, identityKey?: string): Promise<TranscriptCursor | null> {
+    return readJson(this.sessionPath('cursors', sessionId, identityKey))
   }
 
-  async writeCursor(sessionId: string, cursor: TranscriptCursor): Promise<void> {
-    await writeJson(this.sessionPath('cursors', sessionId), cursor)
+  async writeCursor(sessionId: string, cursor: TranscriptCursor, identityKey?: string): Promise<void> {
+    await writeJson(this.sessionPath('cursors', sessionId, identityKey), cursor)
   }
 
-  async readPending(sessionId: string): Promise<PendingPrompt | null> {
-    return readJson(this.sessionPath('pending', sessionId))
+  async readPending(sessionId: string, identityKey?: string): Promise<PendingPrompt | null> {
+    return readJson(this.sessionPath('pending', sessionId, identityKey))
   }
 
-  async writePending(sessionId: string, prompt: PendingPrompt): Promise<void> {
-    await writeJson(this.sessionPath('pending', sessionId), prompt)
+  async writePending(sessionId: string, prompt: PendingPrompt, identityKey?: string): Promise<void> {
+    await writeJson(this.sessionPath('pending', sessionId, identityKey), prompt)
   }
 
   async writeBatch(batch: StoredBatch): Promise<void> {

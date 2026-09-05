@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
+import { memoryNamespace, projectKey as sharedProjectKey } from '@diqier/stratagate'
 
 export interface ModelConfig {
   baseUrl: string
@@ -22,6 +22,9 @@ export interface WorkBuddyConfig {
   database: string
   projectDir: string
   namespace: string
+  userId: string
+  agentId: string
+  memoryScope: 'project' | 'session' | 'global'
   blockTurnSize: number
   retrievalLimit: number
   maxContextChars: number
@@ -56,13 +59,14 @@ function workBuddyCommand(env: NodeJS.ProcessEnv): Pick<WorkBuddyModelConfig, 'c
 }
 
 export function projectKey(cwd: string): string {
-  const canonical = resolve(cwd).replaceAll('\\', '/').toLowerCase()
-  return createHash('sha256').update(canonical).digest('hex').slice(0, 20)
+  return sharedProjectKey(resolve(cwd))
 }
 
 export function resolveConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): WorkBuddyConfig {
   const dataDir = resolve(first(env.STRATAGATE_DATA_DIR, env.CODEBUDDY_PLUGIN_DATA, env.CLAUDE_PLUGIN_DATA)
-    ?? join(homedir(), '.stratagate', 'workbuddy'))
+    // Keep the shared engine's fallback identical for WorkBuddy, Codex, and
+    // ZCode. Host-specific plugin variables still take precedence above.
+    ?? join(homedir(), '.stratagate', 'agent-memory'))
   const projectDir = resolve(cwd ?? first(env.STRATAGATE_PROJECT_DIR, env.CODEBUDDY_PROJECT_DIR, env.CLAUDE_PROJECT_DIR)
     ?? process.cwd())
   const baseUrl = first(
@@ -92,11 +96,29 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string
     timeoutMs: integer(env.STRATAGATE_WORKBUDDY_TIMEOUT_MS, 90_000, 5_000, 300_000),
   }
 
+  const explicitNamespace = first(env.STRATAGATE_NAMESPACE)
+  const namespacePrefix = first(env.STRATAGATE_NAMESPACE_PREFIX) ?? 'shared'
+  const userId = first(env.STRATAGATE_USER_ID, env.USER, env.USERNAME) ?? 'default'
+  const agentId = first(env.STRATAGATE_AGENT_ID, env.CODEBUDDY_AGENT_ID, env.CLAUDE_AGENT_ID) ?? 'workbuddy'
+  const memoryScope = (first(env.STRATAGATE_MEMORY_SCOPE) ?? 'project') as WorkBuddyConfig['memoryScope']
+  if (!['project', 'session', 'global'].includes(memoryScope)) throw new TypeError(`Invalid STRATAGATE_MEMORY_SCOPE: ${memoryScope}`)
+  const sessionId = first(env.STRATAGATE_SESSION_ID, env.CODEBUDDY_SESSION_ID, env.CLAUDE_SESSION_ID)
+  const globalNamespace = first(env.STRATAGATE_GLOBAL_NAMESPACE)
   return {
     dataDir,
     database: resolve(first(env.STRATAGATE_DATABASE) ?? join(dataDir, 'memory.db')),
     projectDir,
-    namespace: `workbuddy:project:${projectKey(projectDir)}`,
+    namespace: explicitNamespace ?? memoryNamespace({
+      userId,
+      namespacePrefix,
+      memoryScope,
+      projectDir,
+      ...(sessionId ? { sessionId } : {}),
+      ...(globalNamespace ? { globalNamespace } : {}),
+    }),
+    userId,
+    agentId,
+    memoryScope,
     blockTurnSize: integer(env.STRATAGATE_BLOCK_TURN_SIZE, 4, 1, 100),
     retrievalLimit: integer(env.STRATAGATE_RETRIEVAL_LIMIT, 8, 1, 20),
     maxContextChars: integer(env.STRATAGATE_MAX_CONTEXT_CHARS, 12_000, 1_000, 50_000),

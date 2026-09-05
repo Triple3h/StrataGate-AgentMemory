@@ -6,6 +6,7 @@ import {
   nowUtc8,
   StorageConflictError,
   normalizeRetrievalAssessment,
+  effectiveConfidence,
   searchTokens,
   type BlockLevel,
   type ElementSearchOptions,
@@ -13,7 +14,7 @@ import {
   type SearchOptions,
   type StrataGateSnapshot,
 } from '@diqier/stratagate'
-import type { WorkBuddyConfig } from './config.js'
+import { projectKey, type WorkBuddyConfig } from './config.js'
 import { modelCallbacks } from './model.js'
 import {
   WorkBuddyState,
@@ -34,6 +35,8 @@ export interface EvidenceItem {
   summary?: string
   currentState?: string
   rankScore?: number
+  confidence?: number
+  effectiveConfidence?: number
   scoreMeaning?: string
   matchedFields?: string[]
   matchReason?: string
@@ -93,6 +96,10 @@ function sessionIdFallback(): string {
     || 'workbuddy-session'
 }
 
+function belongsToSession(threadId: string | undefined, sessionId: string): boolean {
+  return threadId === undefined || threadId === sessionId || threadId.startsWith(`${sessionId}:agent:`)
+}
+
 export class WorkBuddyRuntime {
   readonly state: WorkBuddyState
 
@@ -105,7 +112,14 @@ export class WorkBuddyRuntime {
   }
 
   async appendTurn(input: Parameters<StrataGate['appendTurn']>[0]): Promise<unknown> {
-    return this.withMemory((memory) => memory.appendTurn(input, { deferProcessing: true }), false)
+    return this.withMemory((memory) => memory.appendTurn({
+      ...input,
+      userId: input.userId ?? this.config.userId,
+      agentId: input.agentId ?? this.config.agentId,
+      projectId: input.projectId ?? projectKey(this.config.projectDir),
+      ...((input.conversationId ?? input.threadId) ? { conversationId: input.conversationId ?? input.threadId } : {}),
+      sourceAdapter: input.sourceAdapter ?? 'workbuddy',
+    }, { deferProcessing: true }), false)
   }
 
   async initialContext(sessionId: string, query: string): Promise<{ batch: BatchResult | null; context: string }> {
@@ -138,6 +152,7 @@ export class WorkBuddyRuntime {
       const raw = memory.searchRawMemory(query, Math.min(limit, 4))
       const tokens = searchTokens(query)
       const tail = memory.listOpenTail().filter((message) => {
+        if (!belongsToSession(message.threadId, sessionId)) return false
         const haystack = new Set(searchTokens(message.content))
         return tokens.some((token) => haystack.has(token))
       }).slice(-4)
@@ -152,6 +167,8 @@ export class WorkBuddyRuntime {
         summary: short(event.summary),
         rankScore: score,
         scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
+        confidence: event.confidence,
+        effectiveConfidence: effectiveConfidence(event.confidence, event.lastVerifiedAt ?? event.updatedAt),
         sourceTime: event.temporal.happenedStart ?? event.temporal.mentionedAt ?? event.createdAt,
         target: { eventIds: [event.id], elementIds: [] },
       })
@@ -202,6 +219,8 @@ export class WorkBuddyRuntime {
       content: short(event.summary),
       summary: short(event.summary),
       rankScore: score,
+      confidence: event.confidence,
+      effectiveConfidence: effectiveConfidence(event.confidence, event.lastVerifiedAt ?? event.updatedAt),
       scoreMeaning: 'Ranking-only BM25/RRF score; not confidence, probability, or factual accuracy.',
       sourceTime: event.temporal.happenedStart ?? event.temporal.mentionedAt ?? event.createdAt,
       target: { eventIds: [event.id], elementIds: [] },
@@ -229,7 +248,7 @@ export class WorkBuddyRuntime {
   async searchRaw(query: string, sessionId = sessionIdFallback(), limit?: number, scope: BlockQueryScope = 'namespace'): Promise<BatchResult> {
     const items = await this.withMemory(async (memory) => {
       const archived: EvidenceItem[] = memory.searchRawMemory(query, scope === 'namespace' ? limit : Number.MAX_SAFE_INTEGER)
-        .filter((result) => scope === 'namespace' || result.message.threadId === sessionId)
+        .filter((result) => scope === 'namespace' || belongsToSession(result.message.threadId, sessionId))
         .map((result) => ({
         ref: `raw:${result.blockId}:${result.message.id}`,
         kind: 'raw',
@@ -245,7 +264,7 @@ export class WorkBuddyRuntime {
       }))
       const tokens = searchTokens(query)
       const recent: EvidenceItem[] = memory.listOpenTail().filter((message) => {
-        if (scope === 'session' && message.threadId !== undefined && message.threadId !== sessionId) return false
+        if (scope === 'session' && !belongsToSession(message.threadId, sessionId)) return false
         const haystack = new Set(searchTokens(message.content))
         return tokens.some((token) => haystack.has(token))
       }).slice(0, limit ?? 6).map((message) => ({
@@ -268,7 +287,7 @@ export class WorkBuddyRuntime {
     const outcome = await this.withMemory(async (memory) => {
       const snapshot = memory.exportSnapshot()
       const all = memory.getBlockContext()
-      const items = (scope === 'namespace' ? all : all.filter((block) => block.threadId === sessionId || block.threadId === undefined)).map((block) => ({
+      const items = (scope === 'namespace' ? all : all.filter((block) => belongsToSession(block.threadId, sessionId))).map((block) => ({
       ref: `block:${block.id}:level:${block.level}`,
       kind: 'block' as const,
       title: `Block ${block.turnRange[0]}–${block.turnRange[1]} · ${block.label}`,
@@ -278,7 +297,7 @@ export class WorkBuddyRuntime {
       }))
       const namespaceBlockCount = snapshot.blocks.length
       const namespaceThreadIds = [...new Set(snapshot.blocks.map((block) => block.threadId).filter((value): value is string => Boolean(value)))]
-      const openTailCount = snapshot.openTail.filter((message) => scope === 'namespace' || message.threadId === undefined || message.threadId === sessionId).length
+      const openTailCount = snapshot.openTail.filter((message) => scope === 'namespace' || belongsToSession(message.threadId, sessionId)).length
       const emptyReason: BlockEmptyReason | null = items.length > 0
         ? null
         : namespaceBlockCount === 0
@@ -432,6 +451,11 @@ export class WorkBuddyRuntime {
       }, {
         receiptId: `workbuddy:${assessment.id}`,
         audit: {
+          userId: this.config.userId,
+          agentId: this.config.agentId,
+          projectId: projectKey(this.config.projectDir),
+          conversationId: assessment.sessionId,
+          sourceAdapter: 'workbuddy',
           sessionId: assessment.sessionId,
           batchId: assessment.batchId,
           evidenceRefs: assessment.evidenceRefs,
@@ -507,6 +531,14 @@ export class WorkBuddyRuntime {
       const memory = await StrataGate.open({
         database: this.config.database,
         namespace: this.config.namespace,
+        identity: {
+          userId: this.config.userId,
+          agentId: this.config.agentId,
+          projectId: projectKey(this.config.projectDir),
+          memoryScope: this.config.memoryScope,
+          namespacePrefix: 'shared',
+          sourceAdapter: 'workbuddy',
+        },
         blockTurnSize: this.config.blockTurnSize,
         ...(callbacks.summarizer ? { summarizer: callbacks.summarizer } : {}),
         ...(callbacks.extractor ? { extractor: callbacks.extractor } : {}),

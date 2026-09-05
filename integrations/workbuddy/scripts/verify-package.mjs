@@ -15,9 +15,16 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const npmCli = process.env.npm_execpath
 
-function run(args, cwd) {
+function run(args, cwd, extraEnv = {}) {
+  const childEnv = { ...process.env, ...extraEnv }
+  // npm run may forward its own CLI allow-scripts policy, which npm 11
+  // rejects for the isolated project install below. The verifier supplies a
+  // project-scoped policy explicitly instead.
+  delete childEnv.npm_config_allow_scripts
+  delete childEnv.NPM_CONFIG_ALLOW_SCRIPTS
   const result = spawnSync(npmCli ? process.execPath : npm, npmCli ? [npmCli, ...args] : args, {
     cwd,
+    env: childEnv,
     encoding: 'utf8',
     shell: process.platform === 'win32' && !npmCli,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -128,9 +135,17 @@ let tarball
 let installRoot
 try {
   const packOutput = run(['pack', '--json', '--ignore-scripts'], packageRoot)
-  const jsonStart = Math.max(packOutput.lastIndexOf('\n['), packOutput.startsWith('[') ? 0 : -1)
-  assert(jsonStart >= 0, `npm pack did not return JSON:\n${packOutput}`)
-  const packed = JSON.parse(packOutput.slice(jsonStart).trim())[0]
+  let packMetadata
+  try {
+    packMetadata = JSON.parse(packOutput.trim())
+  } catch {
+    const jsonStart = Math.max(packOutput.lastIndexOf('\n['), packOutput.lastIndexOf('\n{'), packOutput.startsWith('[') ? 0 : -1)
+    assert(jsonStart >= 0, `npm pack did not return JSON:\n${packOutput}`)
+    packMetadata = JSON.parse(packOutput.slice(jsonStart).trim())
+  }
+  const packed = Array.isArray(packMetadata)
+    ? packMetadata[0]
+    : packMetadata?.['stratagate-workbuddy'] ?? packMetadata
   tarball = join(packageRoot, packed.filename)
   const files = new Set(packed.files.map(({ path }) => path.replaceAll('\\', '/')))
   const required = [
@@ -160,7 +175,15 @@ try {
 
   installRoot = mkdtempSync(join(tmpdir(), 'stratagate-workbuddy-pack-'))
   run(['init', '--yes'], installRoot)
-  run(['install', tarball, '--package-lock=false'], installRoot)
+  const installPackageJson = join(installRoot, 'package.json')
+  const installPackage = JSON.parse(readFileSync(installPackageJson, 'utf8'))
+  // npm 11 blocks lifecycle scripts by default; better-sqlite3 needs its
+  // native build step for the clean-install smoke test.
+  installPackage.allowScripts = { 'better-sqlite3': true }
+  writeFileSync(installPackageJson, `${JSON.stringify(installPackage, null, 2)}\n`)
+  const isolatedNpmrc = join(installRoot, '.npmrc')
+  writeFileSync(isolatedNpmrc, 'allow-scripts=better-sqlite3\n')
+  run(['install', tarball, '--package-lock=false'], installRoot, { NPM_CONFIG_USERCONFIG: isolatedNpmrc })
   const installed = join(installRoot, 'node_modules', 'stratagate-workbuddy')
   for (const path of required) assert(existsSync(join(installed, path)), `Clean install is missing ${path}`)
 
