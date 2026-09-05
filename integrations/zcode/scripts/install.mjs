@@ -7,19 +7,22 @@
  * WorkBuddy engine in this repository (integrations/workbuddy/dist).
  *
  * It never removes or rewrites unrelated config; it only ensures the stratagate
- * entries exist and point at this repo's engine. If an entry already exists with
- * a different path it is left untouched and reported.
+ * entries exist and point at this repo's verified shared engine. Existing stale
+ * StrataGate paths are migrated in place.
  */
 
 import { homedir } from 'node:os'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyEngineArtifacts } from '../../workbuddy/scripts/engine-artifact.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..', '..', '..')
 const ENGINE_DIR = join(REPO_ROOT, 'integrations', 'workbuddy', 'dist')
 const SERVER = join(ENGINE_DIR, 'server.cjs')
+const WORKBUDDY_PACKAGE = join(REPO_ROOT, 'integrations', 'workbuddy', 'package.json')
+const CORE_PACKAGE = join(REPO_ROOT, 'packages', 'core', 'package.json')
 const ZCODE_HOOK = join(REPO_ROOT, 'integrations', 'zcode', 'scripts', 'zcode-hook.mjs')
 const CONFIG_PATH = process.env.ZCODE_CONFIG_PATH ?? join(homedir(), '.zcode', 'cli', 'config.json')
 const DATA_DIR = process.env.STRATAGATE_DATA_DIR ?? join(homedir(), '.stratagate', 'agent-memory')
@@ -30,11 +33,17 @@ function log(msg) {
 }
 
 function ensureEngine() {
-  if (!existsSync(SERVER) || !existsSync(ZCODE_HOOK)) {
-    throw new Error(
-      `Engine files not found (server at ${SERVER}, hook at ${ZCODE_HOOK}). Run "npm run build:workbuddy" in the repo root first.`,
-    )
+  if (!existsSync(ZCODE_HOOK) || !existsSync(WORKBUDDY_PACKAGE)) {
+    throw new Error(`Engine files not found (server at ${SERVER}, hook at ${ZCODE_HOOK}). Run "npm run build:workbuddy" in the repo root first.`)
   }
+  const packageJson = JSON.parse(readFileSync(WORKBUDDY_PACKAGE, 'utf8'))
+  const corePackage = JSON.parse(readFileSync(CORE_PACKAGE, 'utf8'))
+  const manifest = verifyEngineArtifacts(ENGINE_DIR, {
+    expectedVersion: packageJson.version,
+    expectedCoreVersion: corePackage.version,
+    files: ['server.cjs', 'hook.cjs', 'runtime.cjs'],
+  })
+  log(`verified shared engine ${manifest.version} (core ${manifest.coreVersion ?? 'unknown'})`)
 }
 
 function readJson(path) {
@@ -75,6 +84,11 @@ function main() {
     }
     changes.push('added mcp.servers.stratagate')
   } else {
+    if (mcp.command !== process.execPath || !Array.isArray(mcp.args) || mcp.args[0] !== SERVER) {
+      mcp.command = process.execPath
+      mcp.args = [SERVER]
+      changes.push('mcp.servers.stratagate migrated to the verified shared engine path')
+    }
     mcp.env ??= {}
     if (Object.hasOwn(mcp.env, 'STRATAGATE_PROJECT_DIR')) {
       delete mcp.env.STRATAGATE_PROJECT_DIR
@@ -98,7 +112,7 @@ function main() {
   ]) {
     const list = cfg.hooks.events[event] ?? []
     const exists = list.some(
-      (group) => group?.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(ZCODE_HOOK)),
+      (group) => group?.hooks?.some((h) => typeof h.command === 'string' && h.command.includes('zcode-hook.mjs')),
     )
     if (!exists) {
       // ZCode's config.json schema requires a non-empty matcher on each group.
@@ -106,7 +120,21 @@ function main() {
       cfg.hooks.events[event] = list
       changes.push(`added hooks.events.${event}`)
     } else {
-      changes.push(`hooks.events.${event} already present (left untouched)`)
+      let migrated = false
+      for (const group of list) {
+        for (const hook of group?.hooks ?? []) {
+          if (typeof hook.command === 'string' && hook.command.includes('zcode-hook.mjs')) {
+            const expected = `${JSON.stringify(process.execPath)} "${ZCODE_HOOK}"`
+            if (hook.command !== expected) {
+              hook.command = expected
+              migrated = true
+            }
+          }
+        }
+      }
+      changes.push(migrated
+        ? `hooks.events.${event} migrated to the verified shared engine path`
+        : `hooks.events.${event} already present (left untouched)`)
     }
   }
 

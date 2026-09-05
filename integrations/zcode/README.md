@@ -24,8 +24,10 @@ scripts/zcode-hook.mjs      ZCode-native hook: recall on prompt, capture on stop
 scripts/install.mjs         Idempotent installer that writes ~/.zcode/cli/config.json
 ```
 
-The MCP server is the shared engine built in `../workbuddy/dist/server.cjs`. The
-hook is **ZCode-native** (`scripts/zcode-hook.mjs`) — the generic
+The MCP server is the shared engine built in `../workbuddy/dist/server.cjs`; the
+ZCode hook also consumes the sibling `dist/runtime.cjs` bridge for shared batch
+state. `dist/manifest.json` pins the engine/Core versions and hashes for all shared
+runtime files. The hook is **ZCode-native** (`scripts/zcode-hook.mjs`) — the generic
 `../workbuddy/dist/hook.cjs` reads Codex/Anthropic-style transcripts and cannot
 parse ZCode's `model_io` rollout, so it would silently write nothing. Build the
 engine once with:
@@ -33,6 +35,9 @@ engine once with:
 ```bash
 npm run build:workbuddy
 ```
+
+The installer verifies this manifest before changing ZCode config and migrates a
+stale StrataGate MCP or hook path to the verified shared artifact.
 
 ## Install
 

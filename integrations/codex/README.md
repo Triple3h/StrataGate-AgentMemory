@@ -22,11 +22,16 @@ scripts/install.mjs         Idempotent installer that writes ~/.codex/config.tom
 ```
 
 This is a thin adapter: the MCP server and hooks are the shared engine built in
-`../workbuddy/dist` (`server.cjs` / `hook.cjs`). Build it once with:
+`../workbuddy/dist` (`server.cjs` / `hook.cjs`; `runtime.cjs` is part of the same
+versioned artifact). Build it once with:
 
 ```bash
 npm run build:workbuddy
 ```
+
+The build also writes `dist/manifest.json`, containing the engine/Core versions and
+SHA-256 hashes. The installer verifies this manifest before touching Codex config
+and migrates stale StrataGate paths to the verified shared artifact.
 
 ## Install
 

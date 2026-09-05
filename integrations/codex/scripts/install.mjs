@@ -7,8 +7,8 @@
  * engine in this repository (integrations/workbuddy/dist).
  *
  * Behavior:
- *  - Keeps an existing [mcp_servers.stratagate] entry if present (points at the
- *    shared engine and already works); otherwise writes it.
+ *  - Keeps an existing [mcp_servers.stratagate] entry if present, migrating its
+ *    command/args to the verified shared engine; otherwise writes it.
  *  - Adds a [hooks] section with UserPromptSubmit + Stop only if they are not
  *    already present. Existing hooks for other tools are preserved.
  *  - Never rewrites unrelated config. Backs up config.toml before writing.
@@ -19,15 +19,18 @@
  */
 
 import { homedir } from 'node:os'
-import { existsSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyEngineArtifacts } from '../../workbuddy/scripts/engine-artifact.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..', '..', '..')
 const ENGINE_DIR = join(REPO_ROOT, 'integrations', 'workbuddy', 'dist')
 const SERVER = join(ENGINE_DIR, 'server.cjs')
 const HOOK = join(ENGINE_DIR, 'hook.cjs')
+const WORKBUDDY_PACKAGE = join(REPO_ROOT, 'integrations', 'workbuddy', 'package.json')
+const CORE_PACKAGE = join(REPO_ROOT, 'packages', 'core', 'package.json')
 const CONFIG_PATH = process.env.CODEX_CONFIG_PATH ?? join(homedir(), '.codex', 'config.toml')
 const DATA_DIR = process.env.STRATAGATE_DATA_DIR ?? join(homedir(), '.stratagate', 'agent-memory')
 const USER_ID = process.env.STRATAGATE_USER_ID ?? process.env.USER ?? process.env.USERNAME ?? 'default'
@@ -37,11 +40,15 @@ function log(msg) {
 }
 
 function ensureEngine() {
-  if (!existsSync(SERVER) || !existsSync(HOOK)) {
-    throw new Error(
-      `Shared engine not found at ${ENGINE_DIR}. Run "npm run build:workbuddy" in the repo root first.`,
-    )
-  }
+  if (!existsSync(WORKBUDDY_PACKAGE)) throw new Error(`Shared engine package metadata not found at ${WORKBUDDY_PACKAGE}`)
+  const packageJson = JSON.parse(readFileSync(WORKBUDDY_PACKAGE, 'utf8'))
+  const corePackage = JSON.parse(readFileSync(CORE_PACKAGE, 'utf8'))
+  const manifest = verifyEngineArtifacts(ENGINE_DIR, {
+    expectedVersion: packageJson.version,
+    expectedCoreVersion: corePackage.version,
+    files: ['server.cjs', 'hook.cjs', 'runtime.cjs'],
+  })
+  log(`verified shared engine ${manifest.version} (core ${manifest.coreVersion ?? 'unknown'})`)
 }
 
 function tomlString(value) {
@@ -90,6 +97,24 @@ function main() {
     if (end === -1) end = lines.length
     const section = lines.slice(start, end)
     let changed = false
+    const commandLine = `command = ${tomlString(process.execPath)}`
+    const argsLine = `args = [${tomlString(SERVER)}]`
+    const commandIndex = section.findIndex((line) => /^\s*command\s*=/.test(line))
+    if (commandIndex === -1) {
+      section.push(commandLine)
+      changed = true
+    } else if (section[commandIndex].trim() !== commandLine) {
+      section[commandIndex] = commandLine
+      changed = true
+    }
+    const argsIndex = section.findIndex((line) => /^\s*args\s*=/.test(line))
+    if (argsIndex === -1) {
+      section.push(argsLine)
+      changed = true
+    } else if (section[argsIndex].trim() !== argsLine) {
+      section[argsIndex] = argsLine
+      changed = true
+    }
     for (let i = section.length - 1; i >= 0; i -= 1) {
       if (section[i].trim().startsWith('STRATAGATE_PROJECT_DIR')
         || section[i].trim().startsWith('STRATAGATE_DISABLE_WORKBUDDY_MODEL')) {
@@ -146,13 +171,22 @@ function main() {
     changes.push('added [hooks] with prompt, stop, subagent, compaction, and interrupt events')
   } else {
     const joined = lines.join('\n')
-    if (joined.includes('stratagate') && joined.includes('hook.cjs')
+    if (joined.includes('stratagate') && joined.includes(HOOK)
       && ['UserPromptSubmit', 'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'Interrupt']
         .every((event) => joined.includes(`${event} =`))) {
       changes.push('[hooks] already contains stratagate hooks (left untouched)')
     } else {
-      // Append stratagate hook lines into the existing [hooks] section.
+      // Migrate existing StrataGate hook commands to the verified shared path.
       const idx = lines.findIndex((l) => l.trim() === '[hooks]')
+      let migrated = false
+      for (let i = idx + 1; i < lines.length; i += 1) {
+        if (/^\s*\[/.test(lines[i]) && !/^\s*\[hooks\./.test(lines[i])) break
+        if (/command\s*=/.test(lines[i]) && (lines[i].includes('workbuddy/dist/hook.cjs') || lines[i].includes('${PLUGIN_ROOT}'))) {
+          lines[i] = lines[i].replace(/command\s*=\s*"[^"]*"/u, `command = ${tomlString(hookCmd)}`)
+          migrated = true
+        }
+      }
+      if (migrated) changes.push('[hooks] migrated existing StrataGate hook path to verified shared engine')
       const userPromptLine = lines.findIndex(
         (l, i) => i > idx && l.trim().startsWith('UserPromptSubmit'),
       )
