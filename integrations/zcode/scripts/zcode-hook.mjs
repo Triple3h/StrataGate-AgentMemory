@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { StrataGate, memoryNamespace, projectKey, nowUtc8 } from '@diqier/stratagate'
 import { WorkBuddyRuntime } from '../../workbuddy/dist/runtime.cjs'
+import { GatewayClient } from '../../workbuddy/dist/gateway-client.cjs'
 import { buildZcodeTurns } from '../lib/zcode-turns.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -130,7 +131,25 @@ class ZCodeHook {
 
   async onUserPrompt(sessionId, prompt) {
     if (!sessionId || !prompt) return {}
-    const context = (await this.gatewayRuntime().initialContext(sessionId, prompt)).context
+    let context
+    if (process.env.STRATAGATE_DISABLE_GATEWAY !== '1') {
+      try {
+        const result = await GatewayClient.fromEnv().context({
+          q: prompt,
+          userId: this.config.userId,
+          agentId: this.config.agentId,
+          sourceAdapter: 'zcode',
+          projectId: projectKey(this.config.projectDir),
+          projectDir: this.config.projectDir,
+          namespace: this.config.namespace,
+          conversationId: sessionId,
+        })
+        context = result?.context
+      } catch (error) {
+        if (!GatewayClient.fromEnv().options.fallback) throw error
+        context = (await this.gatewayRuntime().initialContext(sessionId, prompt)).context
+      }
+    } else context = (await this.gatewayRuntime().initialContext(sessionId, prompt)).context
     if (!context) return {}
     return {
       hookSpecificOutput: {
@@ -157,7 +176,7 @@ class ZCodeHook {
       const toolCalls = Array.isArray(turn.assistantToolCalls)
         ? turn.assistantToolCalls
         : []
-      await this.withMemory((memory) => memory.appendTurn({
+      const request = {
         user: turn.user,
         assistant: turn.assistant || '',
         ...(toolCalls.length > 0 ? { assistantToolCalls: toolCalls } : {}),
@@ -168,7 +187,18 @@ class ZCodeHook {
         conversationId: sessionId,
         sourceAdapter: 'zcode',
         receiptId: `zcode:${sessionId}:${agentId}:turn:${turn.turnId || result.lastTurnId || safeKey(`${turn.user}:${turn.assistant}`)}`,
-      }, { deferProcessing: true }))
+      }
+      if (process.env.STRATAGATE_DISABLE_GATEWAY !== '1') {
+        const gateway = GatewayClient.fromEnv()
+        try {
+          const gatewayRequest = { ...request, projectDir: this.config.projectDir, namespace: this.config.namespace, memoryScope: this.config.memoryScope }
+          if (gateway.options.fallback) await gateway.ingest(gatewayRequest)
+          else await gateway.ingestWithOutbox(gatewayRequest)
+        } catch (error) {
+          if (!gateway.options.fallback) throw error
+          await this.withMemory((memory) => memory.appendTurn(request, { deferProcessing: true }))
+        }
+      } else await this.withMemory((memory) => memory.appendTurn(request, { deferProcessing: true }))
       appended += 1
     }
 

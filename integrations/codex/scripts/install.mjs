@@ -46,7 +46,7 @@ function ensureEngine() {
   const manifest = verifyEngineArtifacts(ENGINE_DIR, {
     expectedVersion: packageJson.version,
     expectedCoreVersion: corePackage.version,
-    files: ['server.cjs', 'hook.cjs', 'runtime.cjs'],
+    files: ['server.cjs', 'hook.cjs', 'runtime.cjs', 'gateway-client.cjs', 'outbox.cjs'],
   })
   log(`verified shared engine ${manifest.version} (core ${manifest.coreVersion ?? 'unknown'})`)
 }

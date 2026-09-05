@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 export const ENGINE_ARTIFACT_SCHEMA = 1
-export const ENGINE_ARTIFACT_FILES = ['server.cjs', 'hook.cjs', 'runtime.cjs']
+export const ENGINE_ARTIFACT_FILES = ['server.cjs', 'hook.cjs', 'runtime.cjs', 'gateway-client.cjs', 'outbox.cjs']
 
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')

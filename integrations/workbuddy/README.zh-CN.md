@@ -25,11 +25,42 @@ Hook 与 MCP 共用 `~/.stratagate/agent-memory/memory.db`。三个适配器默�
 `STRATAGATE_USER_ID` 后，不同 Agent 可以在同一用户/项目内共享记忆，同时仍按
 thread 保留原始对话边界。
 
+## Memory Gateway（统一读写入口）
+
+包同时提供独立的本地 HTTP Gateway，让 DSH、WorkBuddy、Codex、ZCode 和浏览器 Console 共用一个受控入口：
+
+```bash
+npm run build:workbuddy
+STRATAGATE_GATEWAY_PORT=43731 npm run gateway
+```
+
+Gateway 独占同一个 `memory.db`，插件和前端不直接访问 SQLite。默认监听
+`127.0.0.1:43731`；设置 `STRATAGATE_GATEWAY_SOCKET` 可改用 Unix Socket，设置
+`STRATAGATE_GATEWAY_TOKEN` 后所有请求需要 Bearer token。
+
+Hook 现在默认优先使用 Gateway；迁移期间若尚未启动 Gateway，可设置
+`STRATAGATE_GATEWAY_FALLBACK=1` 临时回退到本地兼容路径。设置为 `0`（或不设置）
+表示 Gateway-only：服务不可用时 Hook 会 fail-open 并记录错误，不会绕过 Gateway 写 SQLite。
+
+核心接口：
+
+- `POST /v1/ingest/turn`：按 `receiptId` 幂等保存 L5，并异步排队 Block 封存和派生；
+- `GET /v1/context?q=...`：返回带 evidence batch 的受控上下文；
+- `GET /v1/memory/events|elements|graph|raw|blocks|search`：统一检索；
+- `PATCH /v1/memory/blocks/expand?namespace=...&blockId=...&level=L5`：受控展开 Block；
+- `GET /v1/dashboard`：Console 使用的只读聚合数据；
+- `GET /v1/console/snapshot?namespace=...`：Console 使用的只读来源快照（仍经过 Gateway 认证和 JSON 脱敏）；
+- `GET /`：Memory Console，只通过 API 读取，不获得数据库文件或 SQL 权限。
+
+请求字段同时接受 camelCase 和 snake_case；建议至少提供 `user`、`assistant`、`userId`、
+`agentId`、`sourceAdapter`、`projectId`、`conversationId`、`threadId` 和稳定的 `receiptId`。
+
 ## 功能
 
 - `UserPromptSubmit` 自动检索已保存记忆，不依赖 Agent 主动想起要搜索；
 - `Stop` 只读取 transcript 新增尾部，并使用稳定 receipt 防止重复写入；
 - 先原子保存 L5，再由后台 worker 生成派生层，避免 Stop 等待模型；
+- Gateway 暂时不可用时，Turn 会脱敏后原子写入 `STRATAGATE_OUTBOX_DIR`（默认 dataDir/outbox），恢复后由 Gateway 自动重放；也可运行 `npx stratagate-memory-outbox status|replay` 查看或手动投递；
 - 检索批次和 Evidence Gate 使用显式、持久化的 `batchId`；
 - 只有通过 `memory_assess` 且真正调用 `memory_record_use` 的证据才会强化；
 - 累计 3 次有证据支持的实际采用后，只显示一次可关闭的 GitHub Star 邀请；

@@ -9,8 +9,12 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const npmCli = process.env.npm_execpath
 
 function run(args, cwd) {
+  const env = { ...process.env }
+  delete env.npm_config_allow_scripts
+  delete env.NPM_CONFIG_ALLOW_SCRIPTS
   const result = spawnSync(npmCli ? process.execPath : npm, npmCli ? [npmCli, ...args] : args, {
     cwd,
+    env,
     encoding: 'utf8',
     shell: process.platform === 'win32' && !npmCli,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -29,9 +33,14 @@ let tarball
 let installRoot
 try {
   const packOutput = run(['pack', '--json', '--ignore-scripts'], packageRoot)
-  const jsonStart = Math.max(packOutput.lastIndexOf('\n['), packOutput.startsWith('[') ? 0 : -1)
+  const jsonStart = Math.max(
+    packOutput.lastIndexOf('\n['),
+    packOutput.lastIndexOf('\n{'),
+    packOutput.startsWith('[') || packOutput.startsWith('{') ? 0 : -1,
+  )
   assert(jsonStart >= 0, `npm pack did not return JSON:\n${packOutput}`)
-  const packed = JSON.parse(packOutput.slice(jsonStart).trim())[0]
+  const parsedPack = JSON.parse(packOutput.slice(jsonStart).trim())
+  const packed = Array.isArray(parsedPack) ? parsedPack[0] : parsedPack['stratagate-dsh'] ?? parsedPack
   tarball = join(packageRoot, packed.filename)
   const files = new Set(packed.files.map(({ path }) => path.replaceAll('\\', '/')))
   const required = [

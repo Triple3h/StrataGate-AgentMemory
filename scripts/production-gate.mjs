@@ -16,6 +16,7 @@ const checks = [
   ['build', ['run', 'build']],
   ['workbuddy package', ['run', 'verify:workbuddy']],
   ['host protocol', ['run', 'verify:host']],
+  ['gateway lifecycle', ['run', 'verify:gateway']],
   ['frozen benchmark', ['run', 'evaluate']],
 ]
 for (const [name, args] of checks) {

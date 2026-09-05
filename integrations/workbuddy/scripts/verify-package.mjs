@@ -162,6 +162,8 @@ try {
     'dist/server.cjs',
     'dist/hook.cjs',
     'dist/runtime.cjs',
+    'dist/gateway-client.cjs',
+    'dist/outbox.cjs',
     'dist/manifest.json',
     'dist/star-widget-client.global.js',
   ]
@@ -202,6 +204,8 @@ try {
     STRATAGATE_PROJECT_DIR: projectDir,
     STRATAGATE_BLOCK_TURN_SIZE: '1',
     STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+    STRATAGATE_GATEWAY_FALLBACK: '1',
+    STRATAGATE_DISABLE_GATEWAY: '1',
   }
   const hook = join(installed, 'dist', 'hook.cjs')
   const submitted = runNode(hook, {

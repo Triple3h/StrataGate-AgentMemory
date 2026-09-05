@@ -72,6 +72,13 @@ DSH_HOME/stratagate/memory.db
 
 Removing the plugin does not delete that database.
 
+From phase two onward, the DSH runtime uses the local Memory Gateway as its
+primary read/write boundary. Start it with `npm run build:workbuddy && npm run
+gateway`; configure `STRATAGATE_GATEWAY_URL` or `STRATAGATE_GATEWAY_SOCKET` and
+optional `STRATAGATE_GATEWAY_TOKEN` as needed. `STRATAGATE_GATEWAY_FALLBACK=1`
+is an explicit migration-only escape hatch to the legacy in-process SQLite path;
+`STRATAGATE_DISABLE_GATEWAY=1` is intended for offline tests.
+
 ## What happens automatically
 
 - Completed human turns are folded from `turn/start`, human `user/message`, assistant messages, tool calls/results, and `turn/end`.

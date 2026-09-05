@@ -56,6 +56,13 @@ All three adapters default to the same namespace format:
 `STRATAGATE_USER_ID` consistently when multiple agents should share a user's
 memory; use `STRATAGATE_NAMESPACE` for an explicit isolated boundary.
 
+When the standalone Gateway is running, set `STRATAGATE_GATEWAY_URL` (or
+`STRATAGATE_GATEWAY_SOCKET`) and `STRATAGATE_GATEWAY_TOKEN` in the hook/MCP
+environment. Hooks then use the Gateway for context and ingest; set
+`STRATAGATE_GATEWAY_FALLBACK=1` only during migration to permit local fallback.
+If the Gateway is down, completed turns are retained in the shared local outbox and
+replayed automatically after recovery (`stratagate-memory-outbox status|replay`).
+
 **Hook trust:** Codex gates hooks behind per-hook trust. After installing, start
 a Codex session and approve/trust the new hooks when prompted. Until they are
 trusted they will not run. (Headless `codex exec` sessions do not run

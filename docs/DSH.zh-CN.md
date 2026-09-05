@@ -72,6 +72,22 @@ DSH_HOME/stratagate/memory.db
 
 卸载插件不会删除该数据库。
 
+### 统一 Memory Gateway
+
+阶段二起，DSH Runtime 默认通过本地 Memory Gateway 读写；Gateway 负责唯一的 SQLite
+写入口。先启动共享服务：
+
+```bash
+npm run build:workbuddy
+npm run gateway
+```
+
+默认连接 `http://127.0.0.1:43731`，也可用 `STRATAGATE_GATEWAY_URL` 或
+`STRATAGATE_GATEWAY_SOCKET` 指定地址，并用 `STRATAGATE_GATEWAY_TOKEN` 配置 Bearer
+认证。Gateway 不可用时默认 fail-open；仅在迁移期间显式设置
+`STRATAGATE_GATEWAY_FALLBACK=1` 才允许 DSH 回到本地兼容路径，设置
+`STRATAGATE_DISABLE_GATEWAY=1` 可用于离线测试。
+
 ## 自动执行的操作
 
 - 插件会根据 `turn/start`、人类发出的 `user/message`、助手消息、工具调用与结果以及 `turn/end`，汇总并保存已完成的人类对话轮次。
@@ -79,6 +95,8 @@ DSH_HOME/stratagate/memory.db
 - StrataGate 自身的 `memory_*` 调用和结果不会写入工具轨迹，避免找回的记忆被重新当作新证据保存。
 - 默认不保存子 Agent 的对话轮次；同一项目中的子 Agent 仍然可以读取项目记忆。
 - 每个 DSH 对话轮次都有持久化的写入回执，因此重放或重试不会导致重复保存。
+- Gateway 短暂不可用时，写入会脱敏后进入本地 Outbox，Gateway 恢复后自动重放；可用
+  `stratagate-memory-outbox status|replay` 查看队列。
 - StrataGate 会执行 Block 摘要、Event 提取、版本化 Knowledge Graph 投影、搜索、Evidence Gate（证据门控）以及仅在使用后触发的强化。
 - Block 到达边界时，StrataGate 先持久化真实的 L3–L5，不修改 DSH surface。只有 L0–L2 校验通过且 Event 处理完成、Block 进入可衰减状态后，插件才使用原生 surface `replace`；待处理或失败的 Block 始终保留原始会话消息。后续衰减、手动提升或 λ 调整也只更新已就绪 checkpoint。尚未封存的 open tail 与完整工具调用/结果链继续作为 DSH 原生消息保留。
 - 每次主模型调用前，动态系统上下文只注入最多 4 条项目级激活 Event 和 4 个 active Graph Node，不再序列化 Current conversation、open tail、已封 Block 或 tool calls。

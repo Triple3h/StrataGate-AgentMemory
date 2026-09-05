@@ -235,6 +235,8 @@ async function main() {
       STRATAGATE_PROJECT_DIR: projectDir,
       STRATAGATE_BLOCK_TURN_SIZE: '1',
       STRATAGATE_DISABLE_WORKBUDDY_MODEL: '1',
+      STRATAGATE_GATEWAY_FALLBACK: '1',
+      STRATAGATE_DISABLE_GATEWAY: '1',
       STRATAGATE_USER_ID: 'host-e2e-user',
     }
     await mkdir(projectDir, { recursive: true })

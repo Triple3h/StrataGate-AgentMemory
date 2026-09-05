@@ -92,6 +92,13 @@ All adapters use the same local database and default namespace identity:
 `shared:user:<user_id>:scope:project:<project_hash>`. Set
 `STRATAGATE_USER_ID` to share memory across agents for one user, or set an
 explicit `STRATAGATE_NAMESPACE` when a deployment needs a custom boundary.
+
+To route ZCode through the standalone Gateway, set `STRATAGATE_GATEWAY_URL` (or
+`STRATAGATE_GATEWAY_SOCKET`) and, when configured, `STRATAGATE_GATEWAY_TOKEN`.
+The hook uses Gateway context/ingest first; `STRATAGATE_GATEWAY_FALLBACK=1`
+temporarily enables the legacy local path during migration.
+When the Gateway is unavailable, the hook writes a redacted request to the shared
+outbox for automatic replay; inspect it with `stratagate-memory-outbox status|replay`.
 Memory processing uses the WorkBuddy `lite` model when available; otherwise
 configure an OpenAI-compatible endpoint below.
 

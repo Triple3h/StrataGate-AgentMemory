@@ -6,7 +6,9 @@
   "main": "./dist/server.cjs",
   "bin": {
     "stratagate-workbuddy-mcp": "./dist/server.cjs",
-    "stratagate-workbuddy-hook": "./dist/hook.cjs"
+    "stratagate-workbuddy-hook": "./dist/hook.cjs",
+    "stratagate-memory-gateway": "./dist/gateway.cjs",
+    "stratagate-memory-outbox": "./dist/outbox.cjs"
   },
   "files": [
     "dist",
@@ -21,9 +23,12 @@
   ],
   "scripts": {
     "build": "tsup && node scripts/write-engine-manifest.mjs",
+    "gateway": "node dist/gateway.cjs",
+    "outbox": "node dist/outbox.cjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "verify:host": "npm run build && node scripts/verify-host-e2e.mjs",
+    "verify:gateway": "npm run build && node scripts/verify-gateway.mjs",
     "verify:package": "npm run build && node scripts/verify-package.mjs",
     "prepare": "npm run build"
   },

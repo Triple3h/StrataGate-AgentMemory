@@ -1,0 +1,30 @@
+services:
+  stratagate-memory-gateway:
+    build:
+      context: ${STRATAGATE_BUILD_CONTEXT:-.}
+      dockerfile: Dockerfile
+    image: stratagate-memory-gateway:local
+    restart: unless-stopped
+    ports:
+      - "${STRATAGATE_GATEWAY_PORT:-43731}:43731"
+    environment:
+      STRATAGATE_GATEWAY_HOST: 0.0.0.0
+      STRATAGATE_GATEWAY_PORT: 43731
+      STRATAGATE_GATEWAY_TOKEN: ${STRATAGATE_GATEWAY_TOKEN:?set STRATAGATE_GATEWAY_TOKEN in .env}
+      STRATAGATE_USER_ID: ${STRATAGATE_USER_ID:-triple3h}
+      STRATAGATE_DATA_DIR: /var/lib/stratagate
+      STRATAGATE_DATABASE: /var/lib/stratagate/memory.db
+      STRATAGATE_GATEWAY_MAX_BODY_BYTES: ${STRATAGATE_GATEWAY_MAX_BODY_BYTES:-4194304}
+      STRATAGATE_GATEWAY_MAX_CONCURRENT_REQUESTS: ${STRATAGATE_GATEWAY_MAX_CONCURRENT_REQUESTS:-64}
+      STRATAGATE_GATEWAY_MAX_QUEUE_LENGTH: ${STRATAGATE_GATEWAY_MAX_QUEUE_LENGTH:-256}
+      STRATAGATE_GATEWAY_REQUEST_TIMEOUT_MS: ${STRATAGATE_GATEWAY_REQUEST_TIMEOUT_MS:-30000}
+      STRATAGATE_GATEWAY_RATE_LIMIT_PER_MINUTE: ${STRATAGATE_GATEWAY_RATE_LIMIT_PER_MINUTE:-600}
+      STRATAGATE_OBSERVABILITY_FILE: /var/lib/stratagate/observability.jsonl
+    volumes:
+      - ${STRATAGATE_DATA_DIR:-~/.stratagate/agent-memory}:/var/lib/stratagate
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    stop_grace_period: 30s

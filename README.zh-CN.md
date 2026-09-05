@@ -15,7 +15,7 @@ StrataGate 让长期运行的 AI Agent 跨会话记住信息，同时避免把�
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![欢迎贡献](https://img.shields.io/badge/%E6%AC%A2%E8%BF%8E%E8%B4%A1%E7%8C%AE-brightgreen.svg)](CONTRIBUTING.zh-CN.md)
 
-[English](README.md) · [DeepSeek Harness 插件说明](docs/DSH.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [优化总体计划](docs/OPTIMIZATION_PLAN.zh-CN.md) · [完整评测](docs/EVALUATION.md)
+[English](README.md) · [DeepSeek Harness 插件说明](docs/DSH.zh-CN.md) · [架构说明](docs/ARCHITECTURE.md) · [统一 Memory Gateway 计划](docs/MEMORY_GATEWAY_PLAN.zh-CN.md) · [优化总体计划](docs/OPTIMIZATION_PLAN.zh-CN.md) · [完整评测](docs/EVALUATION.md)
 
 <strong>当前公开结果：</strong>在 LoCoMo `conv-26` 上，StrataGate 经过 10 次独立评审的平均准确率为 <strong>80.46%</strong>，Mem0 base 为 <strong>63.22%</strong>。[查看测试范围与方法](#实验结果)。
 
@@ -32,6 +32,7 @@ StrataGate 让长期运行的 AI Agent 跨会话记住信息，同时避免把�
 - **回答前先检查证据是否够用。** 搜索结果相关，不代表足以回答；Agent 可能需要继续搜索、展开结果或回查原始消息。→ [证据门](#evidence-gate)
 - **搜索命中不会自动强化记忆。** 只有最终答案真正采用的证据，才会更新长期权重，避免越常搜到就越容易再次搜到。→ [只强化实际使用的记忆](#use-only-reinforcement)
 - **导入其他 AI 的记忆时保留原文。** 结构化记忆可以转换成可追溯的事件，原始导入内容仍会永久保存。→ [外部记忆导入](#external-memory-import)
+- **统一 Memory Gateway。** DSH、WorkBuddy、Codex、ZCode 和浏览器 Console 可以通过本地 HTTP/Unix Socket 共用一个受控写入口；SQLite 只作为存储层。
 
 ## 选择适合你的入口
 
