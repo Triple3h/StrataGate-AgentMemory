@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { effectiveConfidence, memoryNamespace, projectKey } from '../src/identity.js'
+import { effectiveConfidence, memoryNamespace, projectKey, projectNameFromDir } from '../src/identity.js'
 
 describe('shared memory identity', () => {
   it('uses the same project namespace regardless of adapter', () => {
     const base = { userId: 'alice', namespacePrefix: 'shared', memoryScope: 'project' as const, projectDir: '/tmp/demo' }
     expect(memoryNamespace(base)).toBe(memoryNamespace({ ...base }))
     expect(memoryNamespace(base)).toContain(`user:alice:scope:project:${projectKey('/tmp/demo')}`)
+  })
+
+  it('derives a readable workspace name without changing the routing key', () => {
+    expect(projectNameFromDir('/tmp/Example Workspace/')).toBe('Example Workspace')
+    expect(projectKey('/tmp/Example Workspace/')).toBe(projectKey('/tmp/Example Workspace'))
   })
 
   it('isolates sessions and users while sharing agents', () => {

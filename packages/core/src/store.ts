@@ -122,6 +122,7 @@ export interface TurnInput {
   userId?: string;
   agentId?: string;
   projectId?: string;
+  projectName?: string;
   conversationId?: string;
   sourceAdapter?: string;
   userToolCalls?: ToolTrace[];

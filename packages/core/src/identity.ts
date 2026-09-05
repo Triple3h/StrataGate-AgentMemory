@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 
 export type MemoryNamespaceScope = 'project' | 'session' | 'global'
 
@@ -9,6 +9,8 @@ export interface MemoryIdentity {
   agentId?: string
   /** Stable project identifier persisted independently from the namespace string. */
   projectId?: string
+  /** Human-readable workspace folder name; never used for namespace routing. */
+  projectName?: string
   /** Conversation/session identifier for per-turn provenance. */
   conversationId?: string
   /** Host adapter that produced the source (dsh, workbuddy, codex, zcode). */
@@ -18,6 +20,12 @@ export interface MemoryIdentity {
   sessionId?: string
   namespacePrefix?: string
   globalNamespace?: string
+}
+
+/** Return a safe, human-readable label for a workspace directory. */
+export function projectNameFromDir(cwd: string): string {
+  const canonical = resolve(cwd).replace(/[\\/]+$/u, '')
+  return basename(canonical) || '当前工作区'
 }
 
 function part(value: string, fallback: string): string {

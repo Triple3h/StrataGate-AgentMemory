@@ -58,6 +58,7 @@ interface SpaceRow {
   user_id: string;
   agent_id: string | null;
   project_id: string | null;
+  project_name: string | null;
   conversation_id: string | null;
   source_adapter: string | null;
   memory_scope: 'project' | 'session' | 'global';
@@ -250,6 +251,7 @@ CREATE TABLE IF NOT EXISTS memory_spaces (
   user_id TEXT NOT NULL DEFAULT 'default',
   agent_id TEXT,
   project_id TEXT,
+  project_name TEXT,
   conversation_id TEXT,
   source_adapter TEXT,
   memory_scope TEXT NOT NULL DEFAULT 'project',
@@ -540,7 +542,7 @@ export class SqliteStorage implements StorageAdapter {
     const key = nonEmptyNamespace(namespace);
     const space = this.database.prepare(`
       SELECT schema_version, revision, current_turn, block_turn_size, block_decay_lambda,
-             user_id, agent_id, project_id, conversation_id, source_adapter, memory_scope, namespace_prefix
+             user_id, agent_id, project_id, project_name, conversation_id, source_adapter, memory_scope, namespace_prefix
       FROM memory_spaces WHERE namespace = ?
     `).get(key) as SpaceRow | undefined;
     if (!space) return null;
@@ -815,6 +817,7 @@ export class SqliteStorage implements StorageAdapter {
       identity: {
         userId: space.user_id,
         ...(space.project_id ? { projectId: space.project_id } : {}),
+        ...(space.project_name ? { projectName: space.project_name } : {}),
         memoryScope: space.memory_scope,
         namespacePrefix: space.namespace_prefix,
       },
@@ -866,13 +869,14 @@ export class SqliteStorage implements StorageAdapter {
     const identity = snapshot.identity;
     const userId = identity?.userId?.trim() || 'default';
     const projectId = identity?.projectId?.trim() || null;
+    const projectName = identity?.projectName?.trim() || null;
     const memoryScope = identity?.memoryScope ?? 'project';
     const namespacePrefix = identity?.namespacePrefix?.trim() || 'shared';
     if (current) {
       this.database.prepare(`
         UPDATE memory_spaces
         SET schema_version = ?, revision = ?, current_turn = ?, block_turn_size = ?, block_decay_lambda = ?,
-            user_id = ?, agent_id = ?, project_id = ?, conversation_id = ?, source_adapter = ?,
+            user_id = ?, agent_id = ?, project_id = ?, project_name = ?, conversation_id = ?, source_adapter = ?,
             memory_scope = ?, namespace_prefix = ?, updated_at = ?
         WHERE namespace = ?
       `).run(
@@ -884,6 +888,7 @@ export class SqliteStorage implements StorageAdapter {
         userId,
         null,
         projectId,
+        projectName,
         null,
         null,
         memoryScope,
@@ -895,9 +900,9 @@ export class SqliteStorage implements StorageAdapter {
       this.database.prepare(`
         INSERT INTO memory_spaces (
           namespace, schema_version, revision, current_turn, block_turn_size, block_decay_lambda,
-          user_id, agent_id, project_id, conversation_id, source_adapter, memory_scope, namespace_prefix,
+          user_id, agent_id, project_id, project_name, conversation_id, source_adapter, memory_scope, namespace_prefix,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         namespace,
         snapshot.schemaVersion,
@@ -908,6 +913,7 @@ export class SqliteStorage implements StorageAdapter {
         userId,
         null,
         projectId,
+        projectName,
         null,
         null,
         memoryScope,
@@ -1319,6 +1325,7 @@ export class SqliteStorage implements StorageAdapter {
           ['user_id', "TEXT NOT NULL DEFAULT 'default'"],
           ['agent_id', 'TEXT'],
           ['project_id', 'TEXT'],
+          ['project_name', 'TEXT'],
           ['conversation_id', 'TEXT'],
           ['source_adapter', 'TEXT'],
           ['memory_scope', "TEXT NOT NULL DEFAULT 'project'"],
@@ -1381,6 +1388,10 @@ export class SqliteStorage implements StorageAdapter {
       });
     } else if (version === STRATAGATE_STORAGE_SCHEMA_VERSION) {
       this.database.exec(SCHEMA);
+      const spaceColumns = this.database.prepare("PRAGMA table_info('memory_spaces')").all() as unknown as Array<{ name: string }>;
+      if (!spaceColumns.some(({ name }) => name === 'project_name')) {
+        this.database.exec('ALTER TABLE memory_spaces ADD COLUMN project_name TEXT');
+      }
       this.database.exec(THREAD_INDEXES);
     }
     this.assertSchemaVersion();

@@ -12,3 +12,4 @@ export * from './time.js';
 export * from './identity.js';
 export * from './security.js';
 export * from './observability.js';
+export * from './outbox.js';
