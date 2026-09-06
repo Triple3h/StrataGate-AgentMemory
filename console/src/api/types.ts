@@ -95,6 +95,30 @@ export interface JobRow {
   [key: string]: unknown
 }
 
+/** Row of GET /v1/console/jobs — processing jobs across all namespaces. */
+export interface ProcessingJobRow {
+  namespace: string
+  projectName: string | null
+  kind: 'summary' | 'extraction' | 'elementProjection' | 'graphProjection'
+  id: string
+  status: string
+  attempts: number
+  lastError: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+/** Row of GET /v1/console/receipts — usage receipts across all namespaces. */
+export interface UsageReceiptRow {
+  namespace: string
+  projectName: string | null
+  id: string
+  eventIds: string[]
+  elementIds: string[]
+  audit?: unknown
+  createdAt: string
+}
+
 export interface UsageReceipt {
   id: string
   createdAt?: string

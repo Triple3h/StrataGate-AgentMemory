@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Activity, BookOpen, CheckCheck, Download, Layers, LayoutDashboard, MessageSquare, Moon, Settings, Sparkles, Sun } from 'lucide-vue-next'
 import { isDarkTheme, toggleTheme } from '../composables/theme.js'
@@ -34,6 +34,10 @@ const NAV_GROUPS = [
     ],
   },
 ] as const
+
+// 工作区页面按所选项目取数；运行/配置页是全局视图，自带页内筛选。
+const WORKSPACE_PATHS = new Set<string>(NAV_GROUPS[0].items.map(({ path }) => path))
+const showProjectBar = computed(() => WORKSPACE_PATHS.has(route.path))
 
 const dark = ref(isDarkTheme())
 
@@ -83,7 +87,7 @@ function onTheme() {
       </nav>
     </aside>
     <MainPane>
-      <ProjectBar />
+      <ProjectBar v-if="showProjectBar" />
       <RouterView />
     </MainPane>
   </div>
