@@ -4,15 +4,17 @@ import { Database } from 'lucide-vue-next'
 import { projectLabel } from '../lib/console-data.js'
 import { useQueryNav } from '../lib/query.js'
 import { selectedRow, workspace } from '../stores/workspace.js'
+import AppSelect from './AppSelect.vue'
 import SourceBadge from './SourceBadge.vue'
 
 const { pushQuery } = useQueryNav()
 
 const rows = computed(() => workspace.dashboard?.namespaces ?? [])
 const current = computed(() => selectedRow())
+const projectOptions = computed(() => rows.value.map((row) => ({ value: row.namespace, label: projectLabel(row) })))
+const placeholder = computed(() => (workspace.namespace ? '选择有效项目' : '暂无项目'))
 
-function onChange(event: Event) {
-  const value = (event.target as HTMLSelectElement).value
+function onProject(value: string) {
   pushQuery({ project: value || undefined, q: undefined, agent: undefined, source: undefined, session: undefined })
 }
 </script>
@@ -22,10 +24,16 @@ function onChange(event: Event) {
     <div class="path-field">
       <label class="sr-only" for="project-select">当前项目</label>
       <span class="path-scheme"><Database />stratagate://</span>
-      <select id="project-select" :disabled="!rows.length" :value="workspace.namespace" @change="onChange">
-        <option v-if="!current" value="">{{ workspace.namespace ? '选择有效项目' : '暂无项目' }}</option>
-        <option v-for="row in rows" :key="row.namespace" :value="row.namespace">{{ projectLabel(row) }}</option>
-      </select>
+      <AppSelect
+        id="project-select"
+        class="path-select"
+        :model-value="workspace.namespace"
+        :options="projectOptions"
+        :placeholder="placeholder"
+        :disabled="!rows.length"
+        label="当前项目"
+        @update:model-value="onProject"
+      />
     </div>
     <div class="scope-meta">
       <template v-if="current">

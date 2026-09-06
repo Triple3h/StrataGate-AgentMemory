@@ -1,18 +1,25 @@
 <script setup lang="ts">
-defineProps<{ title: string; modelValue: string; options: string[] }>()
+import { computed } from 'vue'
+import AppSelect from './AppSelect.vue'
+
+const props = defineProps<{ title: string; modelValue: string; options: string[] }>()
 const emit = defineEmits<{ update: [value: string] }>()
 
-function onChange(event: Event) {
-  emit('update', (event.target as HTMLSelectElement).value)
-}
+const selectOptions = computed(() => [
+  { value: '', label: `全部${props.title}` },
+  ...props.options.map((option) => ({ value: option, label: option })),
+])
 </script>
 
 <template>
   <label class="filter">
     <span>{{ title }}</span>
-    <select :value="modelValue" :aria-label="title + '筛选'" @change="onChange">
-      <option value="">全部{{ title }}</option>
-      <option v-for="option in options" :key="option" :value="option">{{ option }}</option>
-    </select>
+    <AppSelect
+      class="filter-select"
+      :model-value="modelValue"
+      :options="selectOptions"
+      :label="title + '筛选'"
+      @update:model-value="emit('update', $event)"
+    />
   </label>
 </template>
