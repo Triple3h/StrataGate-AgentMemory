@@ -205,6 +205,10 @@ export class MemoryGateway {
   private readonly runtimes = new Map<string, WorkBuddyRuntime>()
   private readonly processing = new Map<string, Promise<unknown>>()
   private readonly ingestLocks = new Map<string, Promise<unknown>>()
+  // Adapter worker ticks are throttled per namespace so a fleet of MCP server
+  // processes polling every few seconds cannot keep the gateway aggregating.
+  private readonly sweeps = new Map<string, number>()
+  private static readonly SWEEP_INTERVAL_MS = 60_000
   private readonly limits = gatewayLimits()
   private activeRequests = 0
   private totalRequests = 0
@@ -233,6 +237,27 @@ export class MemoryGateway {
     if (this.processing.has(namespace)) return
     const task = runtime.processPending().catch(() => undefined).finally(() => this.processing.delete(namespace))
     this.processing.set(namespace, task)
+  }
+
+  /**
+   * Cheap worker heartbeat: sweeps the caller's namespace for stranded
+   * derivation work (e.g. after a gateway restart) without the full
+   * /v1/status dashboard aggregation. At most one sweep per namespace per
+   * SWEEP_INTERVAL_MS; runs already in flight are never stacked.
+   */
+  async workerTick(url: URL): Promise<unknown> {
+    const identity = configFor(this.baseConfig, defined({
+      userId: queryText(url, 'userId'), agentId: queryText(url, 'agentId'), sourceAdapter: queryText(url, 'sourceAdapter'),
+      projectId: queryText(url, 'projectId'), projectDir: queryText(url, 'projectDir'), namespace: queryText(url, 'namespace'),
+      memoryScope: queryText(url, 'memoryScope') as GatewayTurnInput['memoryScope'], conversationId: queryText(url, 'conversationId', 'threadId', 'sessionId'),
+    }))
+    const namespace = identity.namespace
+    if (this.processing.has(namespace)) return { namespace, scheduled: false, reason: 'already-processing' }
+    const now = Date.now()
+    if (now < (this.sweeps.get(namespace) ?? 0)) return { namespace, scheduled: false, reason: 'throttled' }
+    this.sweeps.set(namespace, now + MemoryGateway.SWEEP_INTERVAL_MS)
+    this.schedule(this.runtimeFor(identity), namespace)
+    return { namespace, scheduled: true, reason: 'sweep' }
   }
 
   async modelProviderView(): Promise<unknown> {
@@ -620,6 +645,7 @@ export class MemoryGateway {
       if (req.method === 'GET' && url.pathname === '/v1/dashboard') return json(res, 200, await this.dashboard())
       if (req.method === 'GET' && url.pathname === '/v1/status') return json(res, 200, await this.dashboard())
       if (req.method === 'GET' && url.pathname === '/v1/context') return json(res, 200, await this.context(url))
+      if (req.method === 'GET' && url.pathname === '/v1/worker/tick') return json(res, 200, await this.workerTick(url))
       if (req.method === 'GET' && url.pathname === '/v1/console/snapshot') return json(res, 200, await this.consoleSnapshot(url))
       if (req.method === 'GET' && url.pathname === '/v1/memory/snapshot') return json(res, 200, await this.snapshot(url))
       if (req.method === 'PATCH' && url.pathname === '/v1/memory/blocks/expand') return json(res, 200, await this.expandBlock(url))

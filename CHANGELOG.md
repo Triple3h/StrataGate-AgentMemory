@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Give adapter worker ticks a lightweight `GET /v1/worker/tick` (per-namespace 60s throttle, in-flight dedup) that sweeps stranded derivation work; `GatewayRuntime.processPending` no longer hammers the full `/v1/status` dashboard aggregation every few seconds, which idled at ~80 expensive requests per minute with several MCP hosts open.
 - Decouple the ZCode adapter into a standalone package (`stratagate-zcode`): own TS sources, tsup build, manifest hash pinning, and tests; it no longer loads `integrations/workbuddy/dist` artifacts, so the plugin directory is self-contained and marketplace-distributable.
 - Replace the legacy six-event hook set with the four events ZCode actually fires: keep `UserPromptSubmit` (recall) and `Stop` (capture), add `SessionStart` (journal flush; post-compaction/clear memory recap) and `PostToolUse` (incremental capture of completed turns, crash-safe); remove the unsupported `SubagentStart`/`SubagentStop`/`PreCompact`/`Interrupt` declarations.
 - Label the ZCode MCP server as `sourceAdapter=zcode` (the shared workbuddy shim mislabeled assess/record-use provenance) and generalize the gateway provenance-repair endpoint to `POST /v1/admin/adapter-provenance` with `targetAgent`, so historical `workbuddy`-labeled ZCode data can be relabeled (`stratagate-zcode repair-sources --project … --apply`).

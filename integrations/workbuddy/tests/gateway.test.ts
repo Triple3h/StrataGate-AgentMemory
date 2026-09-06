@@ -140,6 +140,18 @@ describe('Memory Gateway API', () => {
     expect(forbidden.status).toBe(403)
   })
 
+  it('sweeps stranded derivation work through the throttled worker tick', async () => {
+    const base = await gateway()
+    const identity = 'userId=client-user&agentId=codex&sourceAdapter=codex&projectId=client-project'
+    const first = await (await fetch(`${base}/v1/worker/tick?${identity}`)).json() as { namespace: string; scheduled: boolean; reason: string }
+    expect(first.scheduled).toBe(true)
+    expect(first.reason).toBe('sweep')
+    expect(first.namespace).toContain('client-project')
+    const throttled = await (await fetch(`${base}/v1/worker/tick?${identity}`)).json() as { scheduled: boolean; reason: string }
+    expect(throttled.scheduled).toBe(false)
+    expect(throttled.reason).toBe('throttled')
+  })
+
   it('rejects oversized bodies and rate-limited requests', async () => {
     vi.stubEnv('STRATAGATE_GATEWAY_MAX_BODY_BYTES', '16384')
     const base = await gateway()

@@ -105,6 +105,7 @@ export class GatewayClient {
   }
 
   async status(): Promise<unknown> { return this.call('/v1/status') }
+  async workerTick(params: Record<string, string | undefined>): Promise<unknown> { return this.call(`/v1/worker/tick${query(params)}`) }
 
   async snapshot(namespace: string): Promise<unknown> { return this.call(`/v1/console/snapshot${query({ namespace })}`) }
   async repairCodex(body: unknown): Promise<unknown> { return this.call('/v1/admin/codex-provenance', { method: 'POST', body }) }
@@ -228,5 +229,5 @@ export class GatewayRuntime {
     return this.client.memoryPost('record-use', {}, { ...this.identity(), assessmentId }) as Promise<RecordUseResult>
   }
   async status(): Promise<unknown> { return this.client.status() }
-  async processPending(): Promise<unknown> { return this.status() }
+  async processPending(): Promise<unknown> { return this.client.workerTick(this.identity()) }
 }
