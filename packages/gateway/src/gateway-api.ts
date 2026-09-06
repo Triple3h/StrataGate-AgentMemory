@@ -492,6 +492,24 @@ export class MemoryGateway {
     }
   }
 
+  async allJobs(): Promise<unknown> {
+    const storage = new SqliteStorage({ filename: this.baseConfig.database })
+    try {
+      return { status: 'ok', generatedAt: new Date().toISOString(), jobs: storage.listAllProcessingJobs() }
+    } finally {
+      await storage.close?.()
+    }
+  }
+
+  async allReceipts(): Promise<unknown> {
+    const storage = new SqliteStorage({ filename: this.baseConfig.database })
+    try {
+      return { status: 'ok', generatedAt: new Date().toISOString(), receipts: storage.listAllUsageReceipts() }
+    } finally {
+      await storage.close?.()
+    }
+  }
+
   async snapshot(url: URL): Promise<StrataGateSnapshot> {
     const namespace = queryText(url, 'namespace')
     if (!namespace) throw new GatewayHttpError(400, 'namespace is required')
@@ -647,6 +665,8 @@ export class MemoryGateway {
       if (req.method === 'GET' && url.pathname === '/v1/context') return json(res, 200, await this.context(url))
       if (req.method === 'GET' && url.pathname === '/v1/worker/tick') return json(res, 200, await this.workerTick(url))
       if (req.method === 'GET' && url.pathname === '/v1/console/snapshot') return json(res, 200, await this.consoleSnapshot(url))
+      if (req.method === 'GET' && url.pathname === '/v1/console/jobs') return json(res, 200, await this.allJobs())
+      if (req.method === 'GET' && url.pathname === '/v1/console/receipts') return json(res, 200, await this.allReceipts())
       if (req.method === 'GET' && url.pathname === '/v1/memory/snapshot') return json(res, 200, await this.snapshot(url))
       if (req.method === 'PATCH' && url.pathname === '/v1/memory/blocks/expand') return json(res, 200, await this.expandBlock(url))
       if (req.method === 'GET' && url.pathname === '/v1/memory/events/expand') return json(res, 200, await this.expand(url, 'event'))

@@ -6,10 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   StorageConflictError,
   StrataGate,
+  memoryNamespace,
   type BlockSummarizer,
   type EventExtractor,
 } from '../src/index.js';
-import { SqliteStorage } from '../src/sqlite.js';
+import { SqliteStorage, type ProcessingJobRow } from '../src/sqlite.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -715,5 +716,104 @@ describe('SQLite persistence', () => {
     });
     expect(restored.listElementProjectionJobs()[0]?.status).toBe('completed');
     await restored.close();
+  });
+
+  it('lists processing jobs across namespaces with their project names', async () => {
+    const filename = await databasePath();
+    const boom = new Error('model unavailable');
+    const identityFor = (dir: string, projectName: string) => ({
+      userId: 'tester',
+      memoryScope: 'project' as const,
+      projectDir: `/tmp/${dir}`,
+      projectName,
+    });
+    const namespaceFor = (dir: string): string =>
+      memoryNamespace({ userId: 'tester', memoryScope: 'project', projectDir: `/tmp/${dir}` });
+
+    const summarizerFails = await StrataGate.open({
+      database: filename,
+      namespace: namespaceFor('proj-a'),
+      identity: identityFor('proj-a', '项目A'),
+      blockTurnSize: 1,
+      summarizer: async () => {
+        throw boom;
+      },
+    });
+    await summarizerFails.appendTurn({ user: '触发摘要', assistant: '好的' });
+    await summarizerFails.close();
+
+    const extractorFails = await StrataGate.open({
+      database: filename,
+      namespace: namespaceFor('proj-b'),
+      identity: identityFor('proj-b', '项目B'),
+      blockTurnSize: 1,
+      summarizer: async (messages) => ({
+        l0Title: 'block', l0Tags: [], l1Summary: messages[0]?.content ?? '', l2Keypoints: [], shouldExtract: true,
+      }),
+      extractor: async () => {
+        throw boom;
+      },
+    });
+    await extractorFails.appendTurn({ user: '触发提取', assistant: '好的' });
+    await extractorFails.close();
+
+    const projectorsFail = await StrataGate.open({
+      database: filename,
+      namespace: namespaceFor('proj-c'),
+      identity: identityFor('proj-c', '项目C'),
+      blockTurnSize: 1,
+      summarizer: async (messages) => ({
+        l0Title: 'block', l0Tags: [], l1Summary: messages[0]?.content ?? '', l2Keypoints: [], shouldExtract: true,
+      }),
+      extractor: async ({ target }) => ({
+        shouldExtract: true,
+        reason: 'durable event',
+        events: [{
+          title: '事件', summary: '投影失败事件', sourceMessageIds: [target.l5Raw[0]?.id ?? 'missing'], sourceBlockId: target.id,
+        }],
+      }),
+      // A failing element projector rethrows out of appendTurn, so this path
+      // uses a succeeding projector and a failing graph projector instead.
+      elementProjector: async ({ events }) => ({
+        reason: 'project current state',
+        changes: [{
+          element: { name: 'StrataGate', type: 'project' },
+          operation: 'set_state',
+          key: 'storage',
+          mode: 'state',
+          value: 'SQLite',
+          sourceEventIds: [events[0]?.id ?? 'missing'],
+        }],
+      }),
+      graphProjector: async () => {
+        throw boom;
+      },
+    });
+    await projectorsFail.appendTurn({ user: '触发投影', assistant: '好的' });
+    const projected = projectorsFail.listElements();
+    expect(projected.length).toBeGreaterThan(0);
+    await projectorsFail.recordMemoryUse({ elementIds: [projected[0]!.id] }, { receiptId: 'answer:test:1' });
+    await projectorsFail.close();
+
+    const storage = new SqliteStorage({ filename });
+    const jobs = storage.listAllProcessingJobs();
+    const receipts = storage.listAllUsageReceipts();
+    await storage.close();
+
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ projectName: '项目C', elementIds: [projected[0]!.id] });
+
+    const forProject = (kind: ProcessingJobRow['kind'], projectName: string): ProcessingJobRow => {
+      const rows = jobs.filter((job) => job.kind === kind && job.projectName === projectName);
+      expect(rows).toHaveLength(1);
+      return rows[0]!;
+    };
+    expect(forProject('summary', '项目A')).toMatchObject({ lastError: 'model unavailable' });
+    expect(forProject('summary', '项目A').namespace).toBe(namespaceFor('proj-a'));
+    expect(forProject('summary', '项目B')).toMatchObject({ status: 'succeeded', lastError: null });
+    expect(forProject('extraction', '项目B')).toMatchObject({ lastError: 'model unavailable' });
+    expect(forProject('extraction', '项目C')).toMatchObject({ status: 'succeeded' });
+    expect(forProject('elementProjection', '项目C')).toMatchObject({ status: 'completed' });
+    expect(forProject('graphProjection', '项目C')).toMatchObject({ status: 'failed', lastError: 'model unavailable' });
   });
 });

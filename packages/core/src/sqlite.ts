@@ -49,6 +49,30 @@ export interface NamespaceRevision {
   revision: number;
 }
 
+/** One processing job across all namespaces, for the console's global processing view. */
+export interface ProcessingJobRow {
+  namespace: string;
+  projectName: string | null;
+  kind: 'summary' | 'extraction' | 'elementProjection' | 'graphProjection';
+  id: string;
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** One usage receipt across all namespaces, for the console's global audit view. */
+export interface GlobalUsageReceiptRow {
+  namespace: string;
+  projectName: string | null;
+  id: string;
+  eventIds: string[];
+  elementIds: string[];
+  audit: unknown;
+  createdAt: string;
+}
+
 interface SpaceRow {
   schema_version: number;
   revision: number;
@@ -1439,5 +1463,81 @@ export class SqliteStorage implements StorageAdapter {
     this.assertOpen();
     return this.database.prepare('SELECT namespace, revision FROM memory_spaces ORDER BY namespace')
       .all() as unknown as NamespaceRevision[];
+  }
+
+  /**
+   * Flat cross-namespace view of every processing job, each row annotated with
+   * its namespace and project name. Graph-projection jobs live inside
+   * graph_state.jobs_json rather than a dedicated table. Per-kind results are
+   * capped at the newest `limitPerKind` rows by updated_at.
+   */
+  listAllProcessingJobs(limitPerKind = 500): ProcessingJobRow[] {
+    this.assertOpen();
+    type JobTableRow = { namespace: string; project_name: string | null; id: string; status: string; attempts: number; last_error: string | null; created_at: string | null; updated_at: string };
+    const jobs: ProcessingJobRow[] = [];
+    const jobTables = [
+      { kind: 'summary', table: 'block_summary_jobs', idColumn: 'block_id', createdAt: 'NULL' },
+      { kind: 'extraction', table: 'extraction_jobs', idColumn: 'block_id', createdAt: 'NULL' },
+      { kind: 'elementProjection', table: 'element_projection_jobs', idColumn: 'id', createdAt: 'j.created_at' },
+    ] as const;
+    for (const { kind, table, idColumn, createdAt } of jobTables) {
+      const rows = this.database.prepare(`
+        SELECT j.namespace, m.project_name, j.${idColumn} AS id, j.status, j.attempts, j.last_error, ${createdAt} AS created_at, j.updated_at
+        FROM ${table} j LEFT JOIN memory_spaces m ON m.namespace = j.namespace
+        ORDER BY j.updated_at DESC LIMIT ?
+      `).all(limitPerKind) as unknown as JobTableRow[];
+      for (const row of rows) {
+        jobs.push({
+          namespace: row.namespace,
+          projectName: row.project_name,
+          kind,
+          id: row.id,
+          status: row.status,
+          attempts: row.attempts,
+          lastError: row.last_error,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        });
+      }
+    }
+    const graphRows = this.database.prepare(`
+      SELECT s.namespace, m.project_name, s.jobs_json
+      FROM graph_state s LEFT JOIN memory_spaces m ON m.namespace = s.namespace
+    `).all() as unknown as Array<{ namespace: string; project_name: string | null; jobs_json: string }>;
+    for (const row of graphRows) {
+      for (const job of parseJson<GraphProjectionJob[]>(row.jobs_json, 'graph_state.jobs_json')) {
+        jobs.push({
+          namespace: row.namespace,
+          projectName: row.project_name,
+          kind: 'graphProjection',
+          id: job.id,
+          status: job.status,
+          attempts: job.attempts,
+          lastError: job.lastError,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+        });
+      }
+    }
+    return jobs;
+  }
+
+  /** Flat cross-namespace view of usage receipts, for the console's audit page. */
+  listAllUsageReceipts(limit = 1000): GlobalUsageReceiptRow[] {
+    this.assertOpen();
+    const rows = this.database.prepare(`
+      SELECT r.namespace, m.project_name, r.receipt_id, r.event_ids_json, r.element_ids_json, r.audit_json, r.created_at
+      FROM usage_receipts r LEFT JOIN memory_spaces m ON m.namespace = r.namespace
+      ORDER BY r.created_at DESC LIMIT ?
+    `).all(limit) as unknown as Array<{ namespace: string; project_name: string | null; receipt_id: string; event_ids_json: string; element_ids_json: string; audit_json: string; created_at: string }>;
+    return rows.map((row) => ({
+      namespace: row.namespace,
+      projectName: row.project_name,
+      id: row.receipt_id,
+      eventIds: parseJson<string[]>(row.event_ids_json, 'usage_receipts.event_ids_json'),
+      elementIds: parseJson<string[]>(row.element_ids_json, 'usage_receipts.element_ids_json'),
+      audit: parseJson<unknown>(row.audit_json, 'usage_receipts.audit_json'),
+      createdAt: row.created_at,
+    }));
   }
 }
