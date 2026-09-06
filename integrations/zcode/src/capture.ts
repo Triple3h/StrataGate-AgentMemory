@@ -66,10 +66,6 @@ export async function capture(input: ZcodeCaptureInput, options: { dryRun?: bool
   const env = zcodeEnv(options.env)
   const config = zcodeConfig(input.cwd, { ...env, ...(input.sessionId ? { STRATAGATE_SESSION_ID: input.sessionId } : {}) })
   const agent = input.agentId?.trim() || 'zcode'
-  // threadId keeps the legacy derivation (it groups messages in the store);
-  // the cursor key is stable per session+agent — the legacy key included the
-  // per-event temp transcript_path, so the cursor never actually advanced.
-  const transcriptKey = input.transcriptPath?.trim() || `${input.sessionId}:${agent}`
   const statePath = join(config.dataDir, 'state', 'zcode', `${safeKey(`${input.sessionId}:${agent}`)}.json`)
   const state = await readJson(statePath)
   const rolloutPath = input.rolloutPath ?? defaultRolloutPath(input.sessionId)
@@ -87,7 +83,7 @@ export async function capture(input: ZcodeCaptureInput, options: { dryRun?: bool
       assistant: turn.assistant || '',
       ...(toolCalls.length > 0 ? { assistantToolCalls: toolCalls } : {}),
       ...(turn.createdAt ? { createdAt: turn.createdAt } : {}),
-      threadId: `${input.sessionId}:agent:${safeKey(`${agent}:${transcriptKey}`).slice(0, 16)}`,
+      threadId: `${input.sessionId}:agent:${agent}`,
       userId: config.userId,
       agentId: agent,
       projectId: config.projectId!,
