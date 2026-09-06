@@ -25,6 +25,7 @@ services:
       STRATAGATE_MODEL_BASE_URL: ${STRATAGATE_MODEL_BASE_URL:-}
       STRATAGATE_MODEL: ${STRATAGATE_MODEL:-}
       STRATAGATE_MODEL_API_KEY: ${STRATAGATE_MODEL_API_KEY:-}
+      STRATAGATE_MODEL_TIMEOUT_MS: ${STRATAGATE_MODEL_TIMEOUT_MS:-}
     volumes:
       - ${STRATAGATE_DATA_DIR:-~/.stratagate/agent-memory}:/var/lib/stratagate
     security_opt:

@@ -105,6 +105,35 @@ function completionUrl(baseUrl: string): string {
   return normalized.endsWith('/chat/completions') ? normalized : `${normalized}/chat/completions`
 }
 
+function modelTimeoutMs(): number {
+  const parsed = Number.parseInt(process.env.STRATAGATE_MODEL_TIMEOUT_MS ?? '', 10)
+  return Number.isFinite(parsed) ? Math.min(600_000, Math.max(10_000, parsed)) : 90_000
+}
+
+/** Serialized derivation payloads stay clear of upstream context-input limits. */
+const MODEL_PAYLOAD_CHAR_LIMIT = 600_000
+
+function truncateStrings(value: unknown, perStringLimit: number): unknown {
+  if (typeof value === 'string') {
+    return value.length > perStringLimit ? `${value.slice(0, perStringLimit)}…[truncated ${value.length - perStringLimit} chars]` : value
+  }
+  if (Array.isArray(value)) return value.map((item) => truncateStrings(item, perStringLimit))
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, truncateStrings(item, perStringLimit)]))
+  }
+  return value
+}
+
+function boundedPayloadJson(payload: unknown): string {
+  const json = JSON.stringify(payload)
+  if (json.length <= MODEL_PAYLOAD_CHAR_LIMIT) return json
+  let bounded = json
+  for (let perString = 20_000; bounded.length > MODEL_PAYLOAD_CHAR_LIMIT && perString >= 500; perString = Math.floor(perString / 4)) {
+    bounded = JSON.stringify(truncateStrings(payload, perString))
+  }
+  return bounded.slice(0, MODEL_PAYLOAD_CHAR_LIMIT)
+}
+
 export function fallbackSummarizer(messages: readonly RawMessage[]): Awaited<ReturnType<BlockSummarizer>> {
   const natural = messages.filter((message) => message.role === 'user' || message.role === 'assistant')
   const firstUser = natural.find((message) => message.role === 'user')
@@ -229,13 +258,13 @@ export class OpenAICompatibleModelBridge extends StructuredModelBridge {
         model: this.config.model,
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: JSON.stringify(payload) },
+          { role: 'user', content: boundedPayloadJson(payload) },
         ],
         temperature: 0,
         max_tokens: this.config.maxOutputTokens,
         response_format: { type: 'json_object' },
       }),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(modelTimeoutMs()),
     })
     if (!response.ok) {
       const detail = (await response.text()).replace(/(?:sk-|Bearer\s+)[A-Za-z0-9._-]{8,}/gu, '[REDACTED]').slice(0, 500)
