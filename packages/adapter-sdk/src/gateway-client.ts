@@ -108,6 +108,7 @@ export class GatewayClient {
 
   async snapshot(namespace: string): Promise<unknown> { return this.call(`/v1/console/snapshot${query({ namespace })}`) }
   async repairCodex(body: unknown): Promise<unknown> { return this.call('/v1/admin/codex-provenance', { method: 'POST', body }) }
+  async repairAdapter(body: unknown): Promise<unknown> { return this.call('/v1/admin/adapter-provenance', { method: 'POST', body }) }
 
   async expandBlock(params: Record<string, string | undefined>): Promise<unknown> {
     return this.call(`/v1/memory/blocks/expand${query(params)}`, { method: 'PATCH' })

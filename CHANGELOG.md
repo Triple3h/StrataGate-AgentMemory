@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Decouple the ZCode adapter into a standalone package (`stratagate-zcode`): own TS sources, tsup build, manifest hash pinning, and tests; it no longer loads `integrations/workbuddy/dist` artifacts, so the plugin directory is self-contained and marketplace-distributable.
+- Replace the legacy six-event hook set with the four events ZCode actually fires: keep `UserPromptSubmit` (recall) and `Stop` (capture), add `SessionStart` (journal flush; post-compaction/clear memory recap) and `PostToolUse` (incremental capture of completed turns, crash-safe); remove the unsupported `SubagentStart`/`SubagentStop`/`PreCompact`/`Interrupt` declarations.
+- Label the ZCode MCP server as `sourceAdapter=zcode` (the shared workbuddy shim mislabeled assess/record-use provenance) and generalize the gateway provenance-repair endpoint to `POST /v1/admin/adapter-provenance` with `targetAgent`, so historical `workbuddy`-labeled ZCode data can be relabeled (`stratagate-zcode repair-sources --project … --apply`).
+- Migrate the ZCode installer to the shared `~/.stratagate/connection.json` (carrying model-provider settings over), self-verify its own dist manifest, and drop legacy hook entries during migration.
+- Stabilize the ZCode capture cursor key per session+agent (the legacy key included the per-event temp transcript path, so the cursor never advanced).
+
 ## 0.2.47 - 2026-09-02
 
 - Package the ordered, per-tool retrieval visualization as a new installable DSH release.

@@ -3,11 +3,7 @@
     "stratagate": {
       "type": "stdio",
       "command": "node",
-      "args": ["${ZCODE_PLUGIN_ROOT}/../workbuddy/dist/server.cjs"],
-      "env": {
-        "STRATAGATE_DATA_DIR": "${ZCODE_PLUGIN_DATA}",
-        "STRATAGATE_NAMESPACE_PREFIX": "shared"
-      }
+      "args": ["${ZCODE_PLUGIN_ROOT}/dist/server.cjs"]
     }
   }
 }

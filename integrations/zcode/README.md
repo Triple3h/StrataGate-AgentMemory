@@ -1,128 +1,127 @@
 # StrataGate for ZCode
 
-Local-first, source-traceable cross-session memory for ZCode, backed by the same
-StrataGate engine as the WorkBuddy plugin.
-
-- **Auto-recall on prompt** — a `UserPromptSubmit` hook searches saved memory and
-  injects relevant evidence into the turn via `additionalContext`.
-- **Auto-capture on stop** — a `Stop` hook reads the ZCode rollout
-  (`~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`), folds the unseen turns
-  (user prompt, assistant replies, tool calls), and saves them to local SQLite
-  (L5 source) with a turnId cursor so replays never duplicate.
-- **Evidence-gated MCP tools** — search events / elements / raw memory, expand
-  cards and blocks, assess evidence sufficiency, and record adopted evidence.
+Local-first, source-traceable cross-session memory for ZCode, shipped as a
+standalone adapter package (`stratagate-zcode`). Like the Codex adapter, it
+owns its build artifacts and loads nothing from `integrations/workbuddy/dist`.
 
 ## Layout
 
 ```text
 .zcode-plugin/plugin.json   ZCode plugin manifest (name: stratagate-memory)
-.mcp.json                   MCP server declaration (uses the shared engine)
-hooks/hooks.json            UserPromptSubmit + Stop hooks (ZCode-native adapter)
+.mcp.json                   MCP server declaration → dist/server.cjs (own build)
+hooks/hooks.json            UserPromptSubmit + Stop + SessionStart + PostToolUse
 skills/memory/SKILL.md      Agent skill describing the memory protocol
-lib/zcode-turns.mjs         ZCode rollout parser (model_io format → TurnInput)
-scripts/zcode-hook.mjs      ZCode-native hook: recall on prompt, capture on stop
-scripts/install.mjs         Idempotent installer that writes ~/.zcode/cli/config.json
+src/config.ts               zcodeEnv/zcodeConfig over the shared adapter-sdk
+src/transcript.ts           ZCode rollout parser (model_io format → turns)
+src/capture.ts              cursor state + DeliveryJournal + Gateway delivery
+src/hook.ts                 hook entrypoint: recall / capture / recap
+src/server.ts               MCP shim: sourceAdapter=zcode → gateway MCP tools
+src/cli.ts                  doctor / replay / repair-sources
+scripts/lib.mjs             installer config-mutation logic (unit tested)
+scripts/install.mjs         idempotent installer for ~/.zcode/cli/config.json
+scripts/manifest.mjs        pins dist artifact hashes into dist/manifest.json
+scripts/verify-install.mjs  release gate (npm run verify:zcode)
 ```
 
-The MCP server is the shared engine built in `../workbuddy/dist/server.cjs`; the
-ZCode hook also consumes the sibling `dist/runtime.cjs` bridge for shared batch
-state. `dist/manifest.json` pins the engine/Core versions and hashes for all shared
-runtime files. The hook is **ZCode-native** (`scripts/zcode-hook.mjs`) — the generic
-`../workbuddy/dist/hook.cjs` reads Codex/Anthropic-style transcripts and cannot
-parse ZCode's `model_io` rollout, so it would silently write nothing. Build the
-engine once with:
+Build it with:
 
 ```bash
-npm run build:workbuddy
+npm run build:zcode
 ```
 
-The installer verifies this manifest before changing ZCode config and migrates a
-stale StrataGate MCP or hook path to the verified shared artifact.
+## Hook events (ZCode supports exactly seven)
+
+The adapter registers four of the seven events ZCode actually fires —
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`. Earlier releases
+also declared `SubagentStart`, `SubagentStop`, `PreCompact`, and `Interrupt`;
+those names are not supported by ZCode and never fired. The installer removes
+them.
+
+- **UserPromptSubmit** — flushes the delivery journal, then recalls saved
+  memory through the Gateway (`GET /v1/context`) and injects it as
+  `additionalContext`.
+- **Stop** — reads the ZCode rollout
+  (`~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`), folds unseen turns
+  (user prompt, assistant replies, tool calls correlated by `call_id`), and
+  queues them for the Gateway with a stable cursor and receipt idempotency.
+- **PostToolUse** — incremental capture: folds every *completed* turn after
+  the cursor and leaves the active turn for Stop, so a crash or interrupt
+  cannot lose closed turns. Runs inline on every tool call; with no complete
+  turn pending it is a single rollout read.
+- **SessionStart** — flushes the delivery journal (crash recovery). When the
+  trigger reason is `compact` or `clear`, it also injects a short recap
+  pointer (plus recent event titles when the Gateway has them), replacing the
+  old PreCompact intent: ZCode has no PreCompact, but post-compaction
+  SessionStart is where durable memory must be re-surfaced.
 
 ## Install
 
 ### Via the installer (recommended)
 
 ```bash
+npm run build:zcode
 node integrations/zcode/scripts/install.mjs
 ```
 
-This ensures `~/.zcode/cli/config.json` has:
+This verifies `dist/manifest.json` hashes, then:
 
-- an enabled `stratagate` MCP server (stdio, absolute path to the shared engine);
-- `UserPromptSubmit`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, and
-  `Interrupt` hooks calling the ZCode-native `zcode-hook.mjs`,
-  each with `matcher: ".*"` — ZCode's `config.json` hook schema **requires** a
-  non-empty `matcher` per group (omitting it makes the whole config fail to load);
-- a `memory` skill contribution when the plugin is loaded.
+- merges connection settings into the owner-readable shared
+  `~/.stratagate/connection.json` (also used by the Codex adapter; previous
+  MCP env values — including model-provider settings — are carried over);
+- points `mcp.servers.stratagate` at this package's `dist/server.cjs`;
+- registers the four supported hooks calling `dist/hook.cjs` and removes
+  legacy `zcode-hook.mjs` entries, including the four unsupported events;
+- backs up `config.json` and never touches unrelated settings.
 
-It never removes unrelated config; an existing StrataGate entry is migrated to
-the shared project namespace (hard-coded project paths are removed). Then
-restart ZCode (or run `/reload-plugins`).
+Restart ZCode (or run `/reload-plugins`) afterwards.
 
 ### Via marketplace (ZCode GUI)
 
-Add this repository as a marketplace in **Settings → Plugin Management → Discover**
-(pointing at the repo root, whose `.codebuddy-plugin/marketplace.json` lists the
-plugin), install `stratagate-memory`, and enable it.
+Add this repository as a marketplace in **Settings → Plugin Management →
+Discover** (pointing at the repo root, whose `.codebuddy-plugin/marketplace.json`
+lists the plugin), install `stratagate-memory`, and enable it. The plugin
+manifest is self-contained: hooks and MCP servers reference `${ZCODE_PLUGIN_ROOT}/dist/...`.
 
 ## What gets recorded (and how)
 
-Only two hooks are needed. ZCode already writes the *complete* conversation —
-user prompts, assistant replies, **tool calls and their results** — into the
-per-session rollout file `~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`:
+ZCode writes the complete conversation — user prompts, assistant replies,
+tool calls and their results — into the per-session rollout file
+`~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`:
 
 - an assistant tool call appears as `response.toolCalls[].{id, name, input}`;
 - its result appears in a later line as `request.body.input[].function_call_output`
   `{call_id, output}`.
 
-`zcode-hook.mjs` correlates the two by `call_id` and stores them as
+`src/transcript.ts` correlates the two by `call_id` and stores them as
 `assistantToolCalls` (a `ToolTrace` with `name`, `arguments`, `result`), so the
-L5 source and every `summarizeToolTrace` summary know what a `Bash`/`Edit`/…
-call did — e.g. the Maven `-dg` invocation and its output.
+engine can reason about *how* an answer was produced. Every turn carries a
+stable receipt (`zcode:<session>:<agent>:turn:<turnId>`), and the Gateway is
+the idempotency boundary: replays and hook re-runs never duplicate.
 
-Because the rollout already carries tool results, we deliberately do **not**
-register `PreToolUse`/`PostToolUse` hooks: they would run inline on *every*
-tool call, blocking the session, just to record data the Stop hook already gets
-for free. Tool calls/results are captured exactly once at `Stop`.
+Delivery is durable: turns land in a file-per-receipt journal
+(`~/.stratagate/agent-memory/adapters/zcode/deliveries`) and are replayed by
+every hook start, the MCP server (every 30s), and `npm run replay` until the
+Gateway acknowledges them. With `STRATAGATE_DISABLE_GATEWAY=1` the adapter
+steps aside entirely — the rollout file remains the source of truth.
 
-## Model for memory processing
+## Provenance
 
-All adapters use the same local database and default namespace identity:
-`shared:user:<user_id>:scope:project:<project_hash>`. Set
-`STRATAGATE_USER_ID` to share memory across agents for one user, or set an
-explicit `STRATAGATE_NAMESPACE` when a deployment needs a custom boundary.
+The MCP shim sets `sourceAdapter=zcode`, so assess/record-use provenance is
+labeled correctly (the legacy workbuddy shim mislabeled it). To relabel
+historical messages that were mislabeled `workbuddy` while ZCode used the
+shared shim:
 
-To route ZCode through the standalone Gateway, set `STRATAGATE_GATEWAY_URL` (or
-`STRATAGATE_GATEWAY_SOCKET`) and, when configured, `STRATAGATE_GATEWAY_TOKEN`.
-The hook uses Gateway context/ingest first; `STRATAGATE_GATEWAY_FALLBACK=1`
-temporarily enables the legacy local path during migration.
-When the Gateway is unavailable, the hook writes a redacted request to the shared
-outbox for automatic replay; inspect it with `stratagate-memory-outbox status|replay`.
-Memory processing uses the WorkBuddy `lite` model when available; otherwise
-configure an OpenAI-compatible endpoint below.
-
-To enable full event/graph extraction with an OpenAI-compatible endpoint, add
-these to the `stratagate` MCP server env in `~/.zcode/cli/config.json`:
-
-```jsonc
-// mcp.servers.stratagate.env
-"STRATAGATE_MODEL_BASE_URL": "https://.../v1",
-"STRATAGATE_MODEL": "your-model",
-"STRATAGATE_MODEL_API_KEY": "your-key"
+```bash
+node integrations/zcode/dist/cli.cjs repair-sources --project /path/to/project --apply
 ```
 
-## Tools
+Omit `--apply` for a dry run; the matching is content-hash verified by the
+Gateway (`POST /v1/admin/adapter-provenance`) and audited under
+`<dataDir>/audit/`.
 
-All tools are exposed as `mcp__stratagate__*` in ZCode:
+## Diagnostics
 
-```text
-memory_search_events   memory_expand_event
-memory_search_elements memory_expand_element
-memory_search_graph    memory_expand_graph_node
-memory_search_raw      memory_get_blocks
-memory_expand_block    memory_assess
-memory_record_use      memory_status
+```bash
+node integrations/zcode/dist/cli.cjs doctor    # installation, gateway auth, journal, identity
+npm run replay --workspace stratagate-zcode    # flush the delivery journal
 ```
-
-See `skills/memory/SKILL.md` for the usage protocol.

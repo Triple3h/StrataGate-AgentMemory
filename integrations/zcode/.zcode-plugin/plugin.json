@@ -1,7 +1,7 @@
 {
   "name": "stratagate-memory",
-  "version": "0.1.0",
-  "description": "Zero-config local-first ZCode memory powered by the shared StrataGate engine: auto-recall on UserPromptSubmit, incremental L5 capture on Stop, and evidence-gated MCP retrieval tools.",
+  "version": "0.2.0",
+  "description": "Local-first ZCode memory powered by the shared StrataGate engine as a standalone adapter: auto-recall on UserPromptSubmit, durable journal delivery, incremental L5 capture on Stop and PostToolUse, a post-compaction recap on SessionStart, and evidence-gated MCP retrieval tools.",
   "author": {
     "name": "diqier"
   },

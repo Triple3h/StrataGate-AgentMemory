@@ -546,8 +546,10 @@ export class MemoryGateway {
     }
   }
 
-  async repairCodex(body: Record<string, unknown>): Promise<unknown> {
+  async repairProvenance(body: Record<string, unknown>): Promise<unknown> {
     const identity = configFor(this.baseConfig, { namespace: text(body.namespace, 'namespace', true, 300) })
+    const targetAgent = typeof body.targetAgent === 'string' && body.targetAgent ? body.targetAgent : 'codex'
+    if (!['codex', 'zcode'].includes(targetAgent)) throw new GatewayHttpError(400, `Unsupported targetAgent: ${targetAgent}`)
     if (!Array.isArray(body.updates) || body.updates.length > 10_000) throw new GatewayHttpError(400, 'updates must be an array of at most 10000 items')
     const storage = new SqliteStorage({ filename: this.baseConfig.database })
     try {
@@ -560,15 +562,15 @@ export class MemoryGateway {
         if (!message) throw new GatewayHttpError(409, 'Source message is missing')
         const hash = createHash('sha256').update(redactSensitiveText(message.content)).digest('hex')
         if (hash !== update.contentHash) throw new GatewayHttpError(409, 'Source message changed; regenerate the report')
-        if (message.sourceAdapter === 'codex' && message.agentId === 'codex') continue
+        if (message.sourceAdapter === targetAgent && message.agentId === targetAgent) continue
         if (message.agentId !== 'workbuddy' || !['workbuddy', 'gateway'].includes(message.sourceAdapter ?? '')) throw new GatewayHttpError(409, 'Source provenance changed; regenerate the report')
         changes.push({ id: message.id, agentId: message.agentId, sourceAdapter: message.sourceAdapter, contentHash: hash })
-        message.agentId = 'codex'
-        message.sourceAdapter = 'codex'
+        message.agentId = targetAgent
+        message.sourceAdapter = targetAgent
       }
       if (body.apply === true && changes.length) {
-        await atomicJson(resolve(this.baseConfig.dataDir, 'audit', `codex-provenance-${Date.now()}-${loaded.revision}.json`), {
-          namespace: identity.namespace, revision: loaded.revision, changes, createdAt: new Date().toISOString(),
+        await atomicJson(resolve(this.baseConfig.dataDir, 'audit', `adapter-provenance-${targetAgent}-${Date.now()}-${loaded.revision}.json`), {
+          namespace: identity.namespace, revision: loaded.revision, targetAgent, changes, createdAt: new Date().toISOString(),
         })
         await storage.save(identity.namespace, loaded.snapshot, loaded.revision)
       }
@@ -603,7 +605,7 @@ export class MemoryGateway {
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (req.method === 'GET' && isConsolePath(url.pathname)) return html(res)
       auth(req, this.token)
-      if (req.method === 'POST' && url.pathname === '/v1/admin/codex-provenance') return json(res, 200, await this.repairCodex(await readJson(req, this.limits.maxBodyBytes)))
+      if (req.method === 'POST' && (url.pathname === '/v1/admin/codex-provenance' || url.pathname === '/v1/admin/adapter-provenance')) return json(res, 200, await this.repairProvenance(await readJson(req, this.limits.maxBodyBytes)))
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, service: 'stratagate-memory-gateway', ...this.metrics() })
       if (req.method === 'GET' && url.pathname === '/ready') {
         try {
