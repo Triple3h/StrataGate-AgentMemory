@@ -37,6 +37,10 @@ export function selectedRow(): NamespaceRow | undefined {
   return workspace.dashboard?.namespaces.find((row) => row.namespace === workspace.namespace)
 }
 
+function byActivityDesc(a: NamespaceRow, b: NamespaceRow): number {
+  return (Date.parse(b.lastActivityAt ?? '') || 0) - (Date.parse(a.lastActivityAt ?? '') || 0)
+}
+
 /**
  * Loads the namespace list and the snapshot of the resolved namespace. With
  * `refreshDashboard = false` only the snapshot is refetched — this is the
@@ -56,6 +60,7 @@ export async function loadWorkspace(refreshDashboard = true, explicit = ''): Pro
     if (refreshDashboard || !workspace.dashboard) {
       const dashboard = await api<Dashboard>('/v1/dashboard', controller.signal)
       if (current !== generation) return
+      dashboard.namespaces.sort(byActivityDesc)
       workspace.dashboard = dashboard
     }
     const rows = workspace.dashboard?.namespaces ?? []
@@ -63,10 +68,7 @@ export async function loadWorkspace(refreshDashboard = true, explicit = ''): Pro
     const exists = rows.some((row) => row.namespace === namespace)
     if (!exists) {
       if (explicit && namespace) throw new Error('链接中的项目不存在或已移除，请重新选择项目。')
-      namespace =
-        [...rows]
-          .sort((a, b) => (Date.parse(b.lastActivityAt ?? '') || 0) - (Date.parse(a.lastActivityAt ?? '') || 0))
-          [0]?.namespace ?? ''
+      namespace = rows[0]?.namespace ?? ''
     }
     workspace.namespace = namespace
     if (namespace) {
